@@ -131,7 +131,7 @@ def parse_rew_lms(ses_settings):
     print(f'non-rewarded odours: {non_rew_odour}, non-rewarded textures: {non_rew_texture}')
     return rew_odour, rew_texture, non_rew_odour, non_rew_texture
 
-def plot_ethogram(sess_dataframe):
+def plot_ethogram(sess_dataframe,ses_settings):
     lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
     lick_times = sess_dataframe.index[sess_dataframe['Licks'].values > 0]
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
@@ -140,6 +140,7 @@ def plot_ethogram(sess_dataframe):
     release_events = release_events[release_events['Position'].notna()]
     release_times = release_events.index
     release_positions = release_events['Position'].values
+    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
 
     plt.figure(figsize=(12, 6))
     plt.plot(sess_dataframe.index, sess_dataframe['Treadmill']/np.max(sess_dataframe['Treadmill']), label='Treadmill Speed', color='purple')
@@ -148,6 +149,7 @@ def plot_ethogram(sess_dataframe):
     plt.plot(release_times, release_positions/np.max(sess_dataframe['Position']), marker='o', linestyle='', label='Releases', color='red')
     plt.plot(reward_times, reward_positions/np.max(sess_dataframe['Position']), marker='o', linestyle='', label='Rewards', color='green')
     plt.plot(sess_dataframe.index, sess_dataframe['Buffer']/np.max(sess_dataframe['Buffer']), label='Analog Buffer', color='black')
+    plt.plot(sess_dataframe.index, sess_dataframe['Lap']/num_laps, label='Laps', color='brown')
 
     plt.xlabel('Time (s)')
     plt.ylabel('Value')
@@ -252,14 +254,14 @@ def plot_full_corr(sess_dataframe,ses_settings):
         was_target = np.pad(was_target, (0, 10 - (was_target.shape[0] % 10)), 'constant')
     was_target_reshaped = was_target.reshape(np.round(was_target.shape[0] / 10).astype(int), 10)
 
-    plt.figure(figsize=(10,2))
+    plt.figure(figsize=(10,4))
     plt.subplot(2, 1, 1)
-    plt.imshow(was_target_reshaped, aspect='auto', cmap='viridis')
+    plt.imshow(was_target_reshaped, aspect='auto', cmap='viridis', interpolation='none')
     plt.clim(0, 1)
     plt.title('Was Target (Full Corridor)')
     plt.colorbar()
     plt.subplot(2, 1, 2)
-    plt.imshow(licked_all_reshaped, aspect='auto', cmap='viridis')
+    plt.imshow(licked_all_reshaped, aspect='auto', cmap='viridis', interpolation='none')
     plt.clim(0, 1)
     plt.title('Licked All (Full Corridor)')
     plt.colorbar()
@@ -287,14 +289,27 @@ def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
     plt.title('Sliding window Hit and False Alarm rates')
     plt.show()
 
+def calculate_corr_length(ses_settings):
+    landmarks = ses_settings['trial']['landmarks']
+    if len(ses_settings['trial']['offsets']) == 1:
+        offset = ses_settings['trial']['offsets'][0]
+    else:
+        print("Cannot compute corridor lengths when offsets are randomised")
+
+    sum_length = 0
+    for lm in landmarks:
+        sum_length += lm[0]['size']
+        sum_length += offset
+    return sum_length
+
 def divide_laps(sess_dataframe, ses_settings):
 
-    # Divide the session dataframe into laps based on the lap duration
-    lap_duration = ses_settings['lap_duration']
-    lap_start = 0
-    laps = []
-    while lap_start < len(sess_dataframe):
-        lap_end = lap_start + lap_duration
-        laps.append(sess_dataframe.iloc[lap_start:lap_end])
-        lap_start = lap_end
-    return laps
+    # Divide the session dataframe into laps based on the position and corridor length
+
+    corridor_length = calculate_corr_length(ses_settings)
+    num_laps = int(np.ceil(sess_dataframe['Position'].max() / corridor_length))
+
+    #for each position, determine which lap it belongs to
+    sess_dataframe['Lap'] = (sess_dataframe['Position'] // corridor_length).astype(int)
+
+    return num_laps, sess_dataframe
