@@ -195,22 +195,34 @@ def calc_hit_fa(sess_dataframe,ses_settings):
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
     fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
-    return hit_rate, fa_rate,licked_target, licked_distractor, licked_all, was_target
+    #adjust hit rate and fa rate to avoid infinity in d-prime calculation
+    if hit_rate == 1:
+        hit_rate = 0.99
+    if hit_rate == 0:
+        hit_rate = 0.01
+    if fa_rate == 1:
+        fa_rate = 0.99
+    if fa_rate == 0:
+        fa_rate = 0.01
+
+    d_prime = np.log10(hit_rate/(1-hit_rate)) - np.log10(fa_rate/(1-fa_rate))
+
+    return hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all, was_target
 
 def print_sess_summary(sess_dataframe,ses_settings):
 
-    hit_rate, fa_rate, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
 
     print(f'Session Summary:')
     print(f"Total Licks: {sess_dataframe['Licks'].sum()}")
     print(f"Total Landmarks: {licked_all.shape[0]}")
     print(f"Total Rewards: {sess_dataframe['Rewards'].notna().sum()}")
-    print(f'Hit Rate: {hit_rate*100:.2f}%, False Alarm Rate: {fa_rate*100:.2f}%')
+    print(f'Hit Rate: {hit_rate*100:.2f}%, False Alarm Rate: {fa_rate*100:.2f}%, D-prime: {d_prime:.2f}')
     print(f'Targets Licked: {np.sum(licked_target).astype(int)} of {len(licked_target)}, Distractors Licked: {np.sum(licked_distractor).astype(int)} of {len(licked_distractor)}')
 
 def plot_lick_lm(sess_dataframe,ses_settings):
 
-    hit_rate, fa_rate, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
 
     was_target = was_target[:,np.newaxis]
     licked_all = licked_all[:,np.newaxis]
@@ -228,7 +240,7 @@ def plot_lick_lm(sess_dataframe,ses_settings):
 
 def plot_full_corr(sess_dataframe,ses_settings):
 
-    hit_rate, fa_rate, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
 
     #reshape licked_all into 10 columns and the appropriate number of rows
     if licked_all.shape[0] % 10 != 0:
@@ -240,7 +252,7 @@ def plot_full_corr(sess_dataframe,ses_settings):
         was_target = np.pad(was_target, (0, 10 - (was_target.shape[0] % 10)), 'constant')
     was_target_reshaped = was_target.reshape(np.round(was_target.shape[0] / 10).astype(int), 10)
 
-    plt.figure(figsize=(10,4))
+    plt.figure(figsize=(10,2))
     plt.subplot(2, 1, 1)
     plt.imshow(was_target_reshaped, aspect='auto', cmap='viridis')
     plt.clim(0, 1)
@@ -252,6 +264,27 @@ def plot_full_corr(sess_dataframe,ses_settings):
     plt.title('Licked All (Full Corridor)')
     plt.colorbar()
     plt.tight_layout()
+    plt.show()
+
+def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
+
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
+
+    hit_rate_window = np.zeros(len(licked_all)-window)
+    false_alarm_rate_window = np.zeros(len(licked_all)-window)
+    for i in range(len(licked_all)-window):
+        all_window_goals = sum(was_target[i:i+window])
+        all_window_distractors = window - all_window_goals
+        hit_rate_window[i] = np.sum(licked_all[i:i+window][was_target[i:i+window]==1])/all_window_goals
+        false_alarm_rate_window[i] = np.sum(licked_all[i:i+window][was_target[i:i+window]==0])/all_window_distractors
+
+    plt.figure(figsize=(10,2))
+    plt.plot(hit_rate_window, label='Hit Rate', color='g')
+    plt.plot(false_alarm_rate_window, label='False Alarm Rate', color='r')
+    plt.xlabel('Landmark')
+    plt.ylabel('Rate')
+    plt.legend()
+    plt.title('Sliding window Hit and False Alarm rates')
     plt.show()
 
 def divide_laps(sess_dataframe, ses_settings):
