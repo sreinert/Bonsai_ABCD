@@ -24,10 +24,10 @@ python -m pip install -r requirements.txt
 
 ## Use
 
-The main output script is the jupyter notebook [Cohort3_daily_summary.ipynb]. 
+The main output script is the jupyter notebook Cohort3_daily_summary.ipynb. 
 To analyse the behaviour of one session, change [mouse_id] and [date] to the session you want, then run the cells. 
 
-To keep the script tidy, it imports the central functions from [parse_bonsai_functions.py], which is a collection of all parsing and plotting operations. 
+To keep the script tidy, it imports the central functions from parse_bonsai_functions.py, which is a collection of all parsing and plotting operations. 
 To add new functionality, write a function in that script and call it in the notebook. 
 
 There will be some analyses/plots that only make sense under certain task conditions (e.g. stable world vs. random world). 
