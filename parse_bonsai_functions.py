@@ -18,8 +18,7 @@ class AnalogData(Reader):
         data = np.reshape(data, (-1, self.channels))
         return pd.DataFrame(data, columns=self.columns)
 
-def find_base_path(mouse,date):
-    root = "/Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata/"
+def find_base_path(mouse,date,root):
     mouse_path = Path(root) / f"sub-{mouse}" 
 
     for folder in mouse_path.iterdir():
