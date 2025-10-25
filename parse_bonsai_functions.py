@@ -127,9 +127,8 @@ def parse_rew_lms(ses_settings):
     non_rew_texture = np.unique(non_rew_texture)
     non_rew_odour = non_rew_odour[non_rew_odour != 'odour0']
     non_rew_texture = non_rew_texture[non_rew_texture != 'grey']
-    print(f'rewarded odours: {rew_odour}, rewarded textures: {rew_texture}')
-    print(f'non-rewarded odours: {non_rew_odour}, non-rewarded textures: {non_rew_texture}')
     return rew_odour, rew_texture, non_rew_odour, non_rew_texture
+
 
 def plot_ethogram(sess_dataframe,ses_settings):
     lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
@@ -163,18 +162,7 @@ def calc_hit_fa(sess_dataframe,ses_settings):
 
     rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
 
-    target_releases = pd.DataFrame()
-    for i in range(len(rew_odour)):
-        test_str = 'release: '+rew_odour[i]
-        target_releases = pd.concat([target_releases, release_events[release_events['Events'].str.fullmatch(test_str, na=False)]])
-        target_positions = target_releases['Position'].values
-        target_positions = target_positions[~np.isnan(target_positions)]
-    distractor_releases = pd.DataFrame()
-    for i in range(len(non_rew_odour)):
-        test_str = 'release: '+non_rew_odour[i]
-        distractor_releases = pd.concat([distractor_releases, release_events[release_events['Events'].str.fullmatch(test_str, na=False)]])
-        distractor_positions = distractor_releases['Position'].values
-        distractor_positions = distractor_positions[~np.isnan(distractor_positions)]
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
 
     licked_target = np.zeros(len(target_positions))
     for idx, pos in enumerate(target_positions):
@@ -187,12 +175,12 @@ def calc_hit_fa(sess_dataframe,ses_settings):
             licked_distractor[idx] = 1
 
     licked_all = np.zeros(len(release_positions))
-    was_target = np.zeros(len(release_positions))
+    rewarded_all = np.zeros(len(release_positions))
     for idx, pos in enumerate(release_positions):
         if np.any((lick_position > pos) & (lick_position < (pos + 3))):
            licked_all[idx] = 1
-        if pos in target_positions:
-            was_target[idx] = 1
+        if np.any((reward_positions > pos) & (reward_positions < (pos + 3))):
+           rewarded_all[idx] = 1
 
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
@@ -209,11 +197,164 @@ def calc_hit_fa(sess_dataframe,ses_settings):
 
     d_prime = np.log10(hit_rate/(1-hit_rate)) - np.log10(fa_rate/(1-fa_rate))
 
-    return hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all, was_target
+    return hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all
+
+def find_targets_distractors(sess_dataframe,ses_settings):
+    
+    lick_position, lick_times, reward_times, reward_positions, release_events, release_times, release_positions = get_event_parsed(sess_dataframe)
+    rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
+
+    target_releases = pd.DataFrame()
+    target_id = []
+    for i in range(len(rew_odour)):
+        test_str = 'release: '+rew_odour[i]
+        new_events = release_events[release_events['Events'].str.fullmatch(test_str, na=False)]
+        target_releases = pd.concat([target_releases, new_events])
+        target_id.extend([i] * len(new_events))
+        target_positions = target_releases['Position'].values
+        target_positions = target_positions[~np.isnan(target_positions)]
+
+    distractor_releases = pd.DataFrame()
+    distractor_id = []
+    for i in range(len(non_rew_odour)):
+        test_str = 'release: '+non_rew_odour[i]
+        new_events = release_events[release_events['Events'].str.fullmatch(test_str, na=False)]
+        distractor_releases = pd.concat([distractor_releases, new_events])
+        distractor_id.extend([i] * len(new_events))
+        distractor_positions = distractor_releases['Position'].values
+        distractor_positions = distractor_positions[~np.isnan(distractor_positions)]
+    
+    was_target = np.zeros(len(release_positions))
+    lm_id = np.zeros(len(release_positions))
+    for idx, pos in enumerate(release_positions):
+        if pos in target_positions:
+            was_target[idx] = 1
+            lm_id[idx] = target_id[np.where(target_positions == pos)[0][0]]
+        else:
+            was_target[idx] = 0
+            lm_id[idx] = distractor_id[np.where(distractor_positions == pos)[0][0]] + len(rew_odour)  #offset distractor IDs
+
+    return target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id
+
+def calc_transition_matrix(sess_dataframe,ses_settings):
+    
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+
+    lick_sequence = lm_id[licked_all==1]
+    num_landmarks = int(np.max(lm_id)) + 1
+
+    transition_matrix = np.zeros((num_landmarks, num_landmarks))
+    lick_tm = np.zeros((num_landmarks, num_landmarks))
+    for i in range(len(lick_sequence)-1):
+        current_lm = int(lick_sequence[i])
+        next_lm = int(lick_sequence[i+1])
+        lick_tm[current_lm, next_lm] += 1
+    for i in range(len(lm_id)-1):
+        current_lm = int(lm_id[i])
+        next_lm = int(lm_id[i+1])
+        transition_matrix[current_lm, next_lm] += 1
+
+    return transition_matrix, lick_tm
+
+def calc_conditional_matrix(sess_dataframe,ses_settings):
+
+
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+
+    transition_prob = np.zeros((np.unique(target_id).shape[0], np.unique(lm_id).shape[0]))
+    control_prob = np.zeros((np.unique(target_id).shape[0], np.unique(lm_id).shape[0])) 
+    licked_lm_ix = np.where(licked_all == 1)[0]
+    controlled_lm_ix = np.where(was_target == 1)[0]
+
+    for g in range(np.unique(target_id).shape[0]):
+        rewards = np.intersect1d(np.where(rewarded_all == 1)[0],np.where(lm_id == g)[0])
+        for i,reward in enumerate(rewards):
+            if i == len(rewards)-1:
+                break
+            next_lick_index = licked_lm_ix[licked_lm_ix>reward][0]
+            next_control_index = controlled_lm_ix[controlled_lm_ix>reward][0]
+            next_lm = lm_id[next_lick_index].astype(int)
+            next_control_lm = lm_id[next_control_index].astype(int)
+            transition_prob[g,next_lm] += 1
+            control_prob[g,next_control_lm] += 1
+    return transition_prob, control_prob
+
+def plot_transition_matrix(sess_dataframe,ses_settings):
+
+    transition_matrix, lick_tm = calc_transition_matrix(sess_dataframe,ses_settings)
+
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.imshow(transition_matrix, cmap='viridis', interpolation='none')
+    plt.colorbar()
+    plt.clim(0, np.max(transition_matrix))
+    plt.title('Stimulus Transition Matrix')
+    plt.xlabel('Next Landmark ID')
+    plt.ylabel('Current Landmark ID')
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(lick_tm, cmap='viridis', interpolation='none')
+    plt.colorbar()
+    plt.clim(0, np.max(lick_tm))
+    plt.title('Lick Transition Matrix')
+    plt.xlabel('Next Landmark ID')
+    plt.ylabel('Current Landmark ID')
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_conditional_matrix(sess_dataframe,ses_settings):
+
+    transition_prob, control_prob = calc_conditional_matrix(sess_dataframe,ses_settings)
+
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 2, 1)
+    plt.imshow(transition_prob, cmap='viridis', interpolation='none')
+    plt.colorbar()
+    plt.clim(0, np.max(transition_prob))
+    plt.title('Transition Probability Matrix (Licked)')
+    plt.xlabel('Next Landmark ID')
+    plt.ylabel('Goal ID')
+
+    plt.subplot(1, 2, 2)
+    plt.imshow(control_prob, cmap='viridis', interpolation='none')
+    plt.colorbar()
+    plt.clim(0, np.max(control_prob))
+    plt.title('Control Probability Matrix (All Targets)')
+    plt.xlabel('Next Landmark ID')
+    plt.ylabel('Goal ID')
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_switch_stay(sess_dataframe,ses_settings):
+
+    transition_prob, control_prob = calc_conditional_matrix(sess_dataframe,ses_settings)
+    switch_prob = [transition_prob[i,i+1] for i in range(transition_prob.shape[0]-1)]
+    stay_prob = [transition_prob[i,i] for i in range(transition_prob.shape[0]-1)]
+
+    control_switch_prob = [control_prob[i,i+1] for i in range(control_prob.shape[0]-1)]
+    control_stay_prob = [control_prob[i,i] for i in range(control_prob.shape[0]-1)]
+
+    plt.figure(figsize=(8, 4))
+    plt.subplot(1, 2, 1)
+    plt.bar([0, 1], [np.mean(control_switch_prob), np.mean(control_stay_prob)], color=['blue', 'orange'])
+    plt.xticks([0, 1], ['Switch', 'Stay'])
+    plt.ylabel('Probability')
+    plt.title('Control Switch vs Stay Probability')
+    plt.subplot(1, 2, 2)
+    plt.bar([0, 1], [np.mean(switch_prob), np.mean(stay_prob)], color=['blue', 'orange'])
+    plt.xticks([0, 1], ['Switch', 'Stay'])
+    plt.ylabel('Probability')
+    plt.title('Switch vs Stay Probability')
+    plt.show()
 
 def print_sess_summary(sess_dataframe,ses_settings):
 
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
+    rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
 
     print(f'Session Summary:')
     print(f"Total Licks: {sess_dataframe['Licks'].sum()}")
@@ -221,19 +362,28 @@ def print_sess_summary(sess_dataframe,ses_settings):
     print(f"Total Rewards: {sess_dataframe['Rewards'].notna().sum()}")
     print(f'Hit Rate: {hit_rate*100:.2f}%, False Alarm Rate: {fa_rate*100:.2f}%, D-prime: {d_prime:.2f}')
     print(f'Targets Licked: {np.sum(licked_target).astype(int)} of {len(licked_target)}, Distractors Licked: {np.sum(licked_distractor).astype(int)} of {len(licked_distractor)}')
+    print(f'rewarded odours: {rew_odour}, rewarded textures: {rew_texture}')
+    print(f'non-rewarded odours: {non_rew_odour}, non-rewarded textures: {non_rew_texture}')
 
 def plot_lick_lm(sess_dataframe,ses_settings):
 
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
 
     was_target = was_target[:,np.newaxis]
     licked_all = licked_all[:,np.newaxis]
-    plt.figure(figsize=(10,2))
-    plt.subplot(2, 1, 1)
+    lm_id = lm_id[:,np.newaxis]
+    plt.figure(figsize=(10,4))
+    plt.subplot(3, 1, 1)
     plt.imshow(was_target.T, aspect='auto', cmap='viridis')
     plt.clim(0, 1)
     plt.title('Was Target')
-    plt.subplot(2, 1, 2)
+    #invert color map for better visibility
+    plt.subplot(3, 1, 2)
+    plt.imshow(lm_id.T, aspect='auto', cmap='viridis_r')
+    plt.clim(0, np.max(lm_id))
+    plt.title('Landmark ID')
+    plt.subplot(3, 1, 3)
     plt.imshow(licked_all.T, aspect='auto', cmap='viridis')
     plt.clim(0, 1)
     plt.title('Licked All')
@@ -242,7 +392,8 @@ def plot_lick_lm(sess_dataframe,ses_settings):
 
 def plot_full_corr(sess_dataframe,ses_settings):
 
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
 
     #reshape licked_all into 10 columns and the appropriate number of rows
     if licked_all.shape[0] % 10 != 0:
@@ -253,12 +404,16 @@ def plot_full_corr(sess_dataframe,ses_settings):
         #extend the array to make it divisible by 10
         was_target = np.pad(was_target, (0, 10 - (was_target.shape[0] % 10)), 'constant')
     was_target_reshaped = was_target.reshape(np.round(was_target.shape[0] / 10).astype(int), 10)
+    if lm_id.shape[0] % 10 != 0:
+        #extend the array to make it divisible by 10
+        lm_id = np.pad(lm_id, (0, 10 - (lm_id.shape[0] % 10)), 'constant')
+    lm_id_reshaped = lm_id.reshape(np.round(lm_id.shape[0] / 10).astype(int), 10)
 
     plt.figure(figsize=(10,4))
     plt.subplot(2, 1, 1)
-    plt.imshow(was_target_reshaped, aspect='auto', cmap='viridis', interpolation='none')
+    plt.imshow(lm_id_reshaped, aspect='auto', cmap='viridis', interpolation='none')
     plt.clim(0, 1)
-    plt.title('Was Target (Full Corridor)')
+    plt.title('Landmark ID (Full Corridor)')
     plt.colorbar()
     plt.subplot(2, 1, 2)
     plt.imshow(licked_all_reshaped, aspect='auto', cmap='viridis', interpolation='none')
@@ -270,7 +425,8 @@ def plot_full_corr(sess_dataframe,ses_settings):
 
 def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
 
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, was_target = calc_hit_fa(sess_dataframe,ses_settings)
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
 
     hit_rate_window = np.zeros(len(licked_all)-window)
     false_alarm_rate_window = np.zeros(len(licked_all)-window)
