@@ -411,7 +411,7 @@ def plot_full_corr(sess_dataframe,ses_settings):
 
     plt.figure(figsize=(10,4))
     plt.subplot(2, 1, 1)
-    plt.imshow(lm_id_reshaped, aspect='auto', cmap='viridis', interpolation='none')
+    plt.imshow(was_target_reshaped, aspect='auto', cmap='viridis', interpolation='none')
     plt.clim(0, 1)
     plt.title('Landmark ID (Full Corridor)')
     plt.colorbar()
