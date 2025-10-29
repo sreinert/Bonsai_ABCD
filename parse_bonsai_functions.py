@@ -129,6 +129,22 @@ def parse_rew_lms(ses_settings):
     non_rew_texture = non_rew_texture[non_rew_texture != 'grey']
     return rew_odour, rew_texture, non_rew_odour, non_rew_texture
 
+def parse_stable_goal_ids(ses_settings):
+    num_lms = len(ses_settings['trial']['landmarks'])
+    num_goals = ses_settings['availableRewardPositions']
+    lm_ids = np.arange(num_lms)
+    goal_counter = 0
+    goals = []
+    while goal_counter < num_goals:
+        for i in range(num_lms):
+            for j in ses_settings['trial']['landmarks'][i]:
+                if j['rewardSequencePosition'] == goal_counter:
+                    goals.append(i)
+                    goal_counter += 1
+                    if goal_counter >= num_goals:
+                        break
+    return goals, lm_ids
+
 
 def plot_ethogram(sess_dataframe,ses_settings):
     lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
@@ -317,6 +333,42 @@ def calc_conditional_matrix(sess_dataframe,ses_settings):
             ideal_prob[g,next_ideal_lm] += 1
     return transition_prob, control_prob, ideal_prob
 
+def calc_stable_conditional_matrix(sess_dataframe,ses_settings):
+
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+
+    transition_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+    control_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+    ideal_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+    licked_lm_ix = np.where(licked_all == 1)[0]
+    all_lms = np.concatenate([lm_ids]* (licked_all.shape[0] // lm_ids.shape[0] + 1))[:licked_all.shape[0]]
+    controlled_lm_ix = np.where(np.isin(all_lms, goals))[0]
+    was_target = np.zeros_like(all_lms)
+    for i in range(all_lms.shape[0]):
+        if all_lms[i] in goals:
+            match_id = goals.index(all_lms[i])
+            was_target[i] = match_id + 1  #start from 1
+
+    for g in range(np.unique(goals).shape[0]):
+        goal = goals[g]
+        rewards = np.intersect1d(np.where(rewarded_all == 1)[0],np.where(all_lms == goal)[0])
+        for i,reward in enumerate(rewards):
+            if i == len(rewards)-1:
+                break
+            next_lick_index = licked_lm_ix[licked_lm_ix>reward][0]
+            next_control_index = controlled_lm_ix[controlled_lm_ix>reward][0]
+            next_lm = all_lms[next_lick_index].astype(int)
+            next_control_lm = all_lms[next_control_index].astype(int)
+            transition_prob[g,next_lm] += 1
+            control_prob[g,next_control_lm] += 1
+
+    for g in range(np.unique(goals).shape[0]):
+        next_goal = goals[g+1] if g+1 < len(goals) else goals[0]
+        ideal_prob[g,next_goal] += 1
+
+    return transition_prob, control_prob, ideal_prob
+
 def plot_transition_matrix(sess_dataframe,ses_settings):
 
     transition_matrix, lick_tm, ideal_tm = calc_transition_matrix(sess_dataframe,ses_settings)
@@ -406,6 +458,54 @@ def plot_conditional_matrix(sess_dataframe,ses_settings):
     plt.tight_layout()
     plt.show()
 
+def plot_stable_conditional_matrix(sess_dataframe,ses_settings):
+
+    transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe,ses_settings)
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    max_val = max(np.max(transition_prob), np.max(control_prob), np.max(ideal_prob))
+    n_goals = transition_prob.shape[0]
+    n_lms = transition_prob.shape[1]
+    if n_goals == 3:
+        y_labels = ['A', 'B', 'C']
+    elif n_goals == 4:
+        y_labels = goals
+    else:
+        y_labels = [str(i) for i in range(n_goals)]
+
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 3, 1)
+    im = plt.imshow(transition_prob, cmap='viridis', interpolation='none')
+    plt.colorbar(im,fraction=0.02, pad=0.04)
+    plt.clim(0, max_val)
+    plt.title('Transition Probability Matrix (Licked)')
+    plt.xlabel('Next Landmark ID')
+    plt.xticks([i for i in range(n_lms)])
+    plt.yticks([i for i in range(n_goals)], y_labels)
+    plt.ylabel('Goal ID')
+
+    plt.subplot(1, 3, 2)
+    im = plt.imshow(control_prob, cmap='viridis', interpolation='none')
+    plt.colorbar(im,fraction=0.02, pad=0.04)
+    plt.clim(0, max_val)
+    plt.title('Control Probability Matrix (All Targets)')
+    plt.xlabel('Next Landmark ID')
+    plt.xticks([i for i in range(n_lms)])
+    plt.yticks([i for i in range(n_goals)], y_labels)
+    plt.ylabel('Goal ID')
+
+    plt.subplot(1, 3, 3)
+    im = plt.imshow(ideal_prob, cmap='viridis', interpolation='none')
+    plt.colorbar(im,fraction=0.02, pad=0.04)
+    plt.clim(0, 1)
+    plt.title('Ideal Probability Matrix')
+    plt.xlabel('Next Landmark ID')
+    plt.xticks([i for i in range(n_lms)])
+    plt.yticks([i for i in range(n_goals)], y_labels)
+    plt.ylabel('Goal ID')
+
+    plt.tight_layout()
+    plt.show()
+
 def calc_seq_fraction(sess_dataframe,ses_settings,test='transition'):
     
     transition_prob, control_prob, ideal_prob = calc_conditional_matrix(sess_dataframe,ses_settings)
@@ -432,8 +532,77 @@ def calc_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
     performance = np.mean([perf_a, perf_b, perf_c])
 
+    return performance, perf_a, perf_b, perf_c
+
+def plot_seq_fraction(sess_dataframe,ses_settings,test='transition'):
+
+    performance, perf_a, perf_b, perf_c = calc_seq_fraction(sess_dataframe,ses_settings,test='transition')
+    perf_ctrl, perf_a_ctrl, perf_b_ctrl, perf_c_ctrl = calc_seq_fraction(sess_dataframe,ses_settings,test='control')
+
     plt.figure(figsize=(6, 4))
     plt.bar(['A->B', 'B->C', 'C->A'], [perf_a, perf_b, perf_c], color=['blue', 'orange', 'green'])
+    #add a dashed bar plot for control
+    plt.bar(['A->B', 'B->C', 'C->A'], [perf_a_ctrl, perf_b_ctrl, perf_c_ctrl], color=['blue', 'orange', 'green'], alpha=0.3, hatch='//')
+    plt.ylim(0, 1)
+    plt.ylabel('Fraction of Correct Transitions')
+    plt.title('Sequencing Performance per Transition')
+    plt.show()
+
+    print(f'Sequencing Performance: {performance*100:.2f}%')
+    print(f'Control Performance: {perf_ctrl*100:.2f}%')
+
+    return performance
+
+def calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
+
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe,ses_settings)
+
+    if len(goals) != 4:
+        raise ValueError("Stable sequencing performance calculation is only implemented for 4 goals.")
+    
+    a = goals[0]
+    b = goals[1]
+    c = goals[2]
+    d = goals[3]
+
+    if test == 'transition':
+        test_prob = transition_prob
+    elif test == 'control':
+        test_prob = control_prob
+    elif test == 'ideal':
+        test_prob = ideal_prob
+    else:
+        raise ValueError("Invalid test type. Choose from 'transition', 'control', or 'ideal'.")
+
+    ab_prob = test_prob[0,b]
+    ac_prob = test_prob[0,c]
+    ad_prob = test_prob[0,d]
+    bc_prob = test_prob[1,c]
+    ba_prob = test_prob[1,a]
+    bd_prob = test_prob[1,d]
+    ca_prob = test_prob[2,a]
+    cb_prob = test_prob[2,b]
+    cd_prob = test_prob[2,d]
+    dc_prob = test_prob[3,c]
+    db_prob = test_prob[3,b]
+    da_prob = test_prob[3,a]
+
+    #one performance metric is just comparing correct to incorrect (but relevant)
+    # perf_a = ab_prob / (ab_prob + ac_prob + ad_prob)
+    # perf_b = bc_prob / (bc_prob + ba_prob + bd_prob)
+    # perf_c = cd_prob / (ca_prob + cb_prob + cd_prob)
+    # perf_d = da_prob / (dc_prob + db_prob + da_prob)
+    #the other is comparing correct to all other transitions
+    perf_a = ab_prob / np.sum(test_prob[0,:])
+    perf_b = bc_prob / np.sum(test_prob[1,:])
+    perf_c = cd_prob / np.sum(test_prob[2,:])
+    perf_d = da_prob / np.sum(test_prob[3,:])
+
+    performance = np.mean([perf_a, perf_b, perf_c, perf_d])
+
+    plt.figure(figsize=(6, 4))
+    plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a, perf_b, perf_c, perf_d], color=['blue', 'orange', 'green', 'purple'])
     plt.ylim(0, 1)
     plt.ylabel('Fraction of Correct Transitions')
     plt.title('Sequencing Performance per Transition')
@@ -441,7 +610,7 @@ def calc_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
     print(f'Sequencing Performance: {performance*100:.2f}%')
 
-    return performance
+    return performance, perf_a, perf_b, perf_c, perf_d
 
 def plot_switch_stay_AB(sess_dataframe,ses_settings):
 
@@ -553,8 +722,15 @@ def plot_lick_lm(sess_dataframe,ses_settings):
 
 def plot_full_corr(sess_dataframe,ses_settings):
 
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
     hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    #for the length of licked_all, repeat the lm_ids to fill the array
+    all_lms = np.concatenate([lm_ids]* (licked_all.shape[0] // lm_ids.shape[0] + 1))[:licked_all.shape[0]]
+    was_target = np.zeros_like(all_lms)
+    for i in range(all_lms.shape[0]):
+        if all_lms[i] in goals:
+            match_id = goals.index(all_lms[i])
+            was_target[i] = match_id + 1  #start from 1
 
     #reshape licked_all into 10 columns and the appropriate number of rows
     if licked_all.shape[0] % 10 != 0:
@@ -565,15 +741,15 @@ def plot_full_corr(sess_dataframe,ses_settings):
         #extend the array to make it divisible by 10
         was_target = np.pad(was_target, (0, 10 - (was_target.shape[0] % 10)), 'constant')
     was_target_reshaped = was_target.reshape(np.round(was_target.shape[0] / 10).astype(int), 10)
-    if lm_id.shape[0] % 10 != 0:
+    if all_lms.shape[0] % 10 != 0:
         #extend the array to make it divisible by 10
-        lm_id = np.pad(lm_id, (0, 10 - (lm_id.shape[0] % 10)), 'constant')
-    lm_id_reshaped = lm_id.reshape(np.round(lm_id.shape[0] / 10).astype(int), 10)
+        all_lms = np.pad(all_lms, (0, 10 - (all_lms.shape[0] % 10)), 'constant')
+    all_lms_reshaped = all_lms.reshape(np.round(all_lms.shape[0] / 10).astype(int), 10)
 
     plt.figure(figsize=(10,4))
     plt.subplot(2, 1, 1)
     plt.imshow(was_target_reshaped, aspect='auto', cmap='viridis', interpolation='none')
-    plt.clim(0, 1)
+    plt.clim(0, len(goals))
     plt.title('Landmark ID (Full Corridor)')
     plt.colorbar()
     plt.subplot(2, 1, 2)
@@ -630,3 +806,5 @@ def divide_laps(sess_dataframe, ses_settings):
     sess_dataframe['Lap'] = (sess_dataframe['Position'] // corridor_length).astype(int)
 
     return num_laps, sess_dataframe
+
+
