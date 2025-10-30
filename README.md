@@ -2,24 +2,30 @@
 
 Small repo for parsing and plotting Bonsai VR behavioural sessions in the style of ABCD tasks.
 
-## Installation
+## Installation in Windows
 
-I recommend using the environment.yml file to create a new conda environment that directly copies mine. 
+My preferred option would be to first create a blank environment and install python 3.12 (ideally using miniforge):
 
 ```console
-conda env create -f environment.yml
+conda create --name bonsai_abcd python=3.12
 ```
 
-to activate the environment, run
+then activate it:
 
 ```console
 conda activate bonsai_abcd
 ```
 
-Alternatively, use the requirements.txt file to pip install the necessary packages.
+Pip install necessary packages via requirements.txt file:
 
 ```console
-python -m pip install -r requirements.txt
+pip install -r requirements.text
+```
+
+Alternatively, you can use the edited yaml file to create a new conda environment (I'd recommend keeping conda-forge as an exclusive channel given the issues I encountered with binary incompatibilites)
+
+```console
+conda create -f environment.yml
 ```
 
 ## Use
