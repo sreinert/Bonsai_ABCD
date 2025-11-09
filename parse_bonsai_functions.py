@@ -807,4 +807,11 @@ def divide_laps(sess_dataframe, ses_settings):
 
     return num_laps, sess_dataframe
 
-
+## Barcode I/O
+def find_barcode_info(ses_rig_settings):
+    for i, ch in enumerate(ses_rig_settings['analogInputChannels']):
+        if ch.get('alias') == 'barcode':
+            print(f"Barcode found at index {i}, channel {ch}")
+            return i, ch.get('physicalChannel')
+    print(f"Barcode not found")
+    return None, None  # if not found
