@@ -86,4 +86,6 @@ dependencies:
       - threadpoolctl==3.6.0
       - tzdata==2025.2
       - wrapt==1.17.2
+      - pynapple
+      - pynwb
 prefix: /opt/anaconda3/envs/vr_abcd
