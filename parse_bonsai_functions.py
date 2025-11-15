@@ -97,7 +97,7 @@ def get_event_parsed(sess_dataframe):
     release_times = release_events.index
     release_positions = release_events['Position'].values
 
-    #some times the mouse rocks back and forth triggering multiple release events at similar positions, so we filter these out by only keeping releases that are at least 3 units apart in position
+    #sometimes the mouse rocks back and forth triggering multiple release events at similar positions, so we filter these out by only keeping releases that are at least 3 units apart in position
     diff_ix = np.where(np.diff(release_positions)<3)[0]+1
     release_events = release_events.drop(release_events.index[diff_ix])
     release_times = release_events.index
@@ -110,19 +110,20 @@ def parse_rew_lms(ses_settings):
     rew_texture = []
     non_rew_odour = []
     non_rew_texture = []
+    index = []
 
     for i in ses_settings['trial']['landmarks']:
         for j in i:
             if j['rewardSequencePosition'] > -1:
                 rew_odour.append(j['odour'])
                 rew_texture.append(j['texture'])
+                index.append(j['rewardSequencePosition'])
             else:
-                
                 non_rew_odour.append(j['odour'])
                 non_rew_texture.append(j['texture'])
 
-    rew_odour = np.unique(rew_odour)
-    rew_texture = np.unique(rew_texture)
+    rew_odour = np.array(rew_odour)[np.argsort(index)]
+    rew_texture = np.array(rew_texture)[np.argsort(index)]
     non_rew_odour = np.unique(non_rew_odour)
     non_rew_texture = np.unique(non_rew_texture)
     non_rew_odour = non_rew_odour[non_rew_odour != 'odour0']
@@ -197,7 +198,12 @@ def calc_hit_fa(sess_dataframe,ses_settings):
            licked_all[idx] = 1
         if np.any((reward_positions > pos) & (reward_positions < (pos + 3))):
            rewarded_all[idx] = 1
-
+    
+    #sometimes the VR drops the first release event, check for that and add a 0 as a first element if needed
+    first_release = ses_settings['trial']['landmarks'][0][0]['odour']
+    if not first_release in release_events['Events'].values[0]:
+        licked_all = np.insert(licked_all, 0, 0)
+        rewarded_all = np.insert(rewarded_all, 0, 0)
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
     fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
@@ -601,16 +607,24 @@ def calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
     performance = np.mean([perf_a, perf_b, perf_c, perf_d])
 
+    return performance, perf_a, perf_b, perf_c, perf_d
+
+def plot_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
+
+    performance, perf_a, perf_b, perf_c, perf_d = calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition')
+    perf_ctrl, perf_a_ctrl, perf_b_ctrl, perf_c_ctrl, perf_d_ctrl = calc_stable_seq_fraction(sess_dataframe,ses_settings,test='control')
+
     plt.figure(figsize=(6, 4))
     plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a, perf_b, perf_c, perf_d], color=['blue', 'orange', 'green', 'purple'])
+    #add a dashed bar plot for control
+    plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a_ctrl, perf_b_ctrl, perf_c_ctrl, perf_d_ctrl], color=['blue', 'orange', 'green', 'purple'], alpha=0.3, hatch='//')
     plt.ylim(0, 1)
     plt.ylabel('Fraction of Correct Transitions')
     plt.title('Sequencing Performance per Transition')
     plt.show()
 
-    print(f'Sequencing Performance: {performance*100:.2f}%')
-
-    return performance, perf_a, perf_b, perf_c, perf_d
+    print(f'Sequencing Performance: {performance*100:.2f}%, ({perf_a*100:.2f}%, {perf_b*100:.2f}%, {perf_c*100:.2f}%, {perf_d*100:.2f}%)')
+    print(f'Control Performance: {perf_ctrl*100:.2f}%, ({perf_a_ctrl*100:.2f}%, {perf_b_ctrl*100:.2f}%, {perf_c_ctrl*100:.2f}%, {perf_d_ctrl*100:.2f}%)')
 
 def plot_switch_stay_AB(sess_dataframe,ses_settings):
 
@@ -807,4 +821,249 @@ def divide_laps(sess_dataframe, ses_settings):
 
     return num_laps, sess_dataframe
 
+def calc_laps_needed(ses_settings):
 
+    goals,lm_ids = parse_stable_goal_ids(ses_settings)
+    laps_needed = 1
+
+    for i in range(len(goals)-1):
+        if goals[i+1] - goals[i] < 0:
+            laps_needed += 1
+    if goals[0] - goals[-1] > 0:
+        laps_needed -= 1
+
+    return laps_needed
+
+def give_state_id(sess_dataframe,ses_settings):
+
+    goals,lm_ids = parse_stable_goal_ids(ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    if rewarded_all.shape[0] % 10 != 0:
+        #extend the array to make it divisible by 10
+        rewarded_all = np.pad(rewarded_all, (0, 10 - (rewarded_all.shape[0] % 10)), 'constant')
+    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / 10).astype(int), 10)
+
+    num_lms = len(lm_ids)
+
+    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
+
+    state_id = np.zeros(len(rewarded_all_reshaped), dtype=int)
+    state_id[0] = 0
+
+    if laps_needed == 2:
+        flips = np.where(np.diff(goals) < 0)[0]
+        if len(flips) == 2:
+            defining_goal_1 = goals[flips[0]]
+            defining_goal_2 = goals[flips[1]]
+        else:
+            defining_goal_1 = goals[flips[0]]
+            if goals[-1] - goals[0] > 0:
+                defining_goal_2 = goals[-1]
+            else:
+                defining_goal_2 = goals[2]
+
+    for i in range(0,num_laps-1):
+        if rewarded_all_reshaped[i,defining_goal_1] == 1:
+            state_id[i+1] = 1
+
+        if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
+            state_id[i+1] = 0
+        elif state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 0:
+            state_id[i+1] = state_id[i]
+
+    return state_id
+
+
+def plot_licks_per_state(sess_dataframe, ses_settings):
+    state_id = give_state_id(sess_dataframe,ses_settings)
+
+    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    if licked_all.shape[0] % 10 != 0:
+        #extend the array to make it divisible by 10
+        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
+
+    if laps_needed == 2:
+        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
+        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
+
+        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+
+    elif laps_needed == 3:
+        state1_laps = licked_all[np.where(state_id == 0)[0],:]
+        state2_laps = licked_all[np.where(state_id == 1)[0],:]
+        state3_laps = licked_all[np.where(state_id == 2)[0],:]
+
+        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+        state3_hist = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
+
+    plt.figure(figsize=(10,2))
+    plt.plot(state1_hist, label='Lap1', color='g')
+    plt.plot(state2_hist, label='Lap2', color='r')
+    if laps_needed == 3:
+        plt.plot(state3_hist, label='Lap3', color='y')
+    plt.xlabel('Landmark')
+    plt.ylabel('Fraction of Licks')
+    plt.legend()
+    plt.title('Licks per State/Lap')
+    plt.show()
+
+def calc_speed_per_lap(sess_dataframe, ses_settings):
+    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    #max position is the max of all positions where lap id is 0
+    max_position = sess_dataframe['Position'][sess_dataframe['Lap'] == 0].max()
+    max_position = np.round(max_position).astype(int)
+
+    bins = 50
+    bin_edges = np.linspace(0, max_position, bins+1)
+    speed_per_bin = np.zeros((num_laps, bins))
+    for i in range(num_laps):
+        lap_idx = np.where(sess_dataframe['Lap'] == i)[0]
+        speed_per_lap = sess_dataframe['Treadmill'][lap_idx]
+        lap_positions = sess_dataframe['Position'][lap_idx] - sess_dataframe['Position'][lap_idx].min()
+        bin_ix = np.digitize(lap_positions, bin_edges)
+        for j in range(bins):
+            speed_per_bin[i,j] = np.mean(speed_per_lap[bin_ix == j])
+    speed_per_bin = speed_per_bin[:,1:]
+    av_speed_per_bin = np.nanmean(speed_per_bin, axis=0)
+    std_speed_per_bin = np.nanstd(speed_per_bin, axis=0)
+    sem_speed_per_bin = std_speed_per_bin/np.sqrt(num_laps)
+
+    return speed_per_bin
+
+def plot_speed_per_state(sess_dataframe, ses_settings):
+
+    speed_per_bin = calc_speed_per_lap(sess_dataframe, ses_settings)
+    state_id = give_state_id(sess_dataframe,ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+
+    if laps_needed == 2:
+        state1_laps = speed_per_bin[np.where(state_id == 0)[0]]
+        state2_laps = speed_per_bin[np.where(state_id == 1)[0]]
+    elif laps_needed == 3:
+        state1_laps = speed_per_bin[np.where(state_id == 0)[0]]
+        state2_laps = speed_per_bin[np.where(state_id == 1)[0]]
+        state3_laps = speed_per_bin[np.where(state_id == 2)[0]]
+
+    state1_speed = np.nanmean(state1_laps, axis=0)
+    state1_speed_sem = np.nanstd(state1_laps, axis=0)/np.sqrt(state1_laps.shape[0])
+    state2_speed = np.nanmean(state2_laps, axis=0)
+    state2_speed_sem = np.nanstd(state2_laps, axis=0)/np.sqrt(state2_laps.shape[0])
+    if laps_needed == 3:
+        state3_speed = np.nanmean(state3_laps, axis=0)
+        state3_speed_sem = np.nanstd(state3_laps, axis=0)/np.sqrt(state3_laps.shape[0])
+    
+    plt.figure(figsize=(10,4))
+    plt.plot(state1_speed, label='Lap1', color='g')
+    plt.fill_between(range(state1_speed.shape[0]), state1_speed - state1_speed_sem, state1_speed + state1_speed_sem, color='g', alpha=0.3)
+    plt.plot(state2_speed, label='Lap2', color='r')
+    plt.fill_between(range(state2_speed.shape[0]), state2_speed - state2_speed_sem, state2_speed + state2_speed_sem, color='r', alpha=0.3)
+    if laps_needed == 3:
+        plt.plot(state3_speed, label='Lap3', color='y')
+        plt.fill_between(range(state3_speed.shape[0]), state3_speed - state3_speed_sem, state3_speed + state3_speed_sem, color='y', alpha=0.3)
+    plt.xlabel('Position Bin')
+    plt.ylabel('Treadmill Speed')
+    plt.legend()
+    plt.title('Treadmill Speed per State/Lap')
+    plt.show()
+
+
+def calc_sw_state_ratio(sess_dataframe, ses_settings):
+    state_id = give_state_id(sess_dataframe,ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
+    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    if licked_all.shape[0] % 10 != 0:
+        #extend the array to make it divisible by 10
+        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+
+
+
+    if laps_needed == 2:
+        window = 10
+        state1_sw = np.zeros([num_laps,10])
+        state2_sw = np.zeros([num_laps,10])
+        state_diff_1 = np.zeros([num_laps,10])
+        state_dprime = np.zeros([num_laps,10])
+        for i in range(num_laps):
+            if i < window:
+                state1_sw[i] = np.nan
+                state2_sw[i] = np.nan
+
+            else:
+                lap_range = range(i-window, i)
+                laps = licked_all_reshaped[lap_range]
+                state1_laps = laps[np.where(state_id[lap_range] == 0)[0],:]
+                state2_laps = laps[np.where(state_id[lap_range] == 1)[0],:]
+
+                state1_sw[i] = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+                state2_sw[i] = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+                state_diff_1[i] = abs(state1_sw[i]-state2_sw[i])
+
+        sw_state_ratio_a = state_diff_1[:,goals[0]]
+        sw_state_ratio_b = state_diff_1[:,goals[1]]
+        sw_state_ratio_c = state_diff_1[:,goals[2]]
+        sw_state_ratio_d = state_diff_1[:,goals[3]]
+
+    elif laps_needed == 3:
+        window = 10
+        state1_sw = np.zeros([num_laps,10])
+        state2_sw = np.zeros([num_laps,10])
+        state3_sw = np.zeros([num_laps,10])
+        state_diff_1 = np.zeros([num_laps,10])
+        state_diff_2 = np.zeros([num_laps,10])
+        state_diff_3 = np.zeros([num_laps,10])
+        for i in range(num_laps):
+            if i < window:
+                state1_sw[i] = np.nan
+                state2_sw[i] = np.nan
+                state3_sw[i] = np.nan
+
+            else:
+                lap_range = range(i-window, i)
+                laps = licked_all_reshaped[lap_range]
+                state1_laps = laps[np.where(state_id[lap_range] == 0)[0],:]
+                state2_laps = laps[np.where(state_id[lap_range] == 1)[0],:]
+                state3_laps = laps[np.where(state_id[lap_range] == 2)[0],:]
+
+                state1_sw[i] = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+                state2_sw[i] = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+                state3_sw[i] = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
+                state_diff_1[i] = abs(state1_sw[i]-state2_sw[i])
+                state_diff_2[i] = abs(state2_sw[i]-state3_sw[i])
+                state_diff_3[i] = abs(state1_sw[i]-state3_sw[i])
+
+        sw_state_ratio_a = (state_diff_1[:,goals[0]]+state_diff_3[:,goals[0]])/2
+        sw_state_ratio_b = (state_diff_1[:,goals[1]]+state_diff_3[:,goals[1]])/2
+        sw_state_ratio_c = (state_diff_1[:,goals[2]]+state_diff_2[:,goals[2]])/2
+        sw_state_ratio_d = (state_diff_2[:,goals[3]]+state_diff_3[:,goals[3]])/2
+
+    sw_state_ratio = np.nanmean([sw_state_ratio_a,sw_state_ratio_b,sw_state_ratio_c,sw_state_ratio_d],axis=0)
+
+    return sw_state_ratio, sw_state_ratio_a, sw_state_ratio_b, sw_state_ratio_c, sw_state_ratio_d
+
+def plot_sw_state_ratio(sess_dataframe, ses_settings):
+
+    sw_state_ratio, sw_state_ratio_a, sw_state_ratio_b, sw_state_ratio_c, sw_state_ratio_d = calc_sw_state_ratio(sess_dataframe, ses_settings)
+    print(f'Average Switch-Stay Ratio: {np.nanmean(sw_state_ratio):.2f}')
+
+    plt.figure(figsize=(10,4))
+    plt.plot(sw_state_ratio, label='Average', color='k')
+    plt.plot(sw_state_ratio_a, label='A', color='b')
+    plt.plot(sw_state_ratio_b, label='B', color='g')
+    plt.plot(sw_state_ratio_c, label='C', color='r')
+    plt.plot(sw_state_ratio_d, label='D', color='m')
+    plt.hlines(np.nanmean(sw_state_ratio),0,len(sw_state_ratio),colors='k',linestyles='dashed',label='Mean')
+    plt.ylim(0, 1)
+    plt.xlabel('Lap')
+    plt.ylabel('Switch-Stay Ratio')
+    plt.legend()
+    plt.title('Switch-Stay Ratio per State/Lap')
+    plt.show()
