@@ -88,6 +88,9 @@ def load_data(base_path):
     sess_dataframe = pd.DataFrame(sess_data, index=all_ix)
     sess_dataframe['Position'] = sess_dataframe['Position'].interpolate()
     sess_dataframe['Treadmill'] = sess_dataframe['Treadmill'].interpolate()
+    with pd.option_context("future.no_silent_downcasting", True):
+        sess_dataframe['Licks'] = sess_dataframe['Licks'].fillna(False).astype(bool) 
+        # make it true or false by making nan to false
 
     return sess_dataframe
 
