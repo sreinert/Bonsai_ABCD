@@ -29,11 +29,14 @@ def find_base_path(mouse,date,root):
 
 def load_settings(base_path):
     settings_path = Path(base_path) / "behav/session-settings/"
-    # json_files = [f for f in settings_path.glob("*.json") if not f.name.startswith("._")] # deal with mac os hidden files
-    # if not json_files:
-    #     raise FileNotFoundError(f"No valid JSON found in {settings_path}")
-    # settings_file = json_files[0]
-    settings_file = list(settings_path.glob("*.json"))[0]
+    json_files = [f for f in settings_path.glob("*.json") if not f.name.endsith(".json")] # deal with first few sessions where config was saved as json
+    if json_files:
+        settings_file = json_files[0]
+    else:
+        try:
+            settings_file = list(settings_path.glob("*.csv"))[0] # This still can be loaded with json.load() wow.
+        except:
+            raise FileNotFoundError(f"No valid JSON found in {settings_path}")
     with open(settings_file, 'r') as file:
         settings = json.load(file)
     ses_settings = settings["value"]
