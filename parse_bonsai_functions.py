@@ -88,6 +88,9 @@ def load_data(base_path):
     sess_dataframe = pd.DataFrame(sess_data, index=all_ix)
     sess_dataframe['Position'] = sess_dataframe['Position'].interpolate()
     sess_dataframe['Treadmill'] = sess_dataframe['Treadmill'].interpolate()
+    with pd.option_context("future.no_silent_downcasting", True):
+        sess_dataframe['Licks'] = sess_dataframe['Licks'].fillna(False).astype(bool) 
+        # make it true or false by making nan to false
 
     return sess_dataframe
 
@@ -563,6 +566,14 @@ def plot_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
     return performance
 
+def safe_divide(a, b):
+    if np.isnan(a) or b == 0:
+        perf = np.nan
+    else:
+        perf = a / b
+
+    return perf
+
 def calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
@@ -604,12 +615,12 @@ def calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
     # perf_c = cd_prob / (ca_prob + cb_prob + cd_prob)
     # perf_d = da_prob / (dc_prob + db_prob + da_prob)
     #the other is comparing correct to all other transitions
-    perf_a = ab_prob / np.sum(test_prob[0,:])
-    perf_b = bc_prob / np.sum(test_prob[1,:])
-    perf_c = cd_prob / np.sum(test_prob[2,:])
-    perf_d = da_prob / np.sum(test_prob[3,:])
+    perf_a = safe_divide(ab_prob, np.sum(test_prob[0,:]))
+    perf_b = safe_divide(bc_prob, np.sum(test_prob[1,:]))
+    perf_c = safe_divide(cd_prob, np.sum(test_prob[2,:]))
+    perf_d = safe_divide(da_prob, np.sum(test_prob[3,:]))
 
-    performance = np.mean([perf_a, perf_b, perf_c, perf_d])
+    performance = np.nanmean([perf_a, perf_b, perf_c, perf_d])
 
     return performance, perf_a, perf_b, perf_c, perf_d
 
@@ -1007,8 +1018,8 @@ def calc_sw_state_ratio(sess_dataframe, ses_settings):
                 state1_laps = laps[np.where(state_id[lap_range] == 0)[0],:]
                 state2_laps = laps[np.where(state_id[lap_range] == 1)[0],:]
 
-                state1_sw[i] = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
-                state2_sw[i] = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+                state1_sw[i] = safe_divide(np.sum(state1_laps,axis=0), state1_laps.shape[0])
+                state2_sw[i] = safe_divide(np.sum(state2_laps,axis=0), state2_laps.shape[0])
                 state_diff_1[i] = abs(state1_sw[i]-state2_sw[i])
 
         sw_state_ratio_a = state_diff_1[:,goals[0]]
