@@ -4,11 +4,12 @@ from pynwb import NWBHDF5IO
 from typing import Literal
 from pynwb import NWBHDF5IO
 
-def find_base_path(mouse,date,root):
+def find_base_path(mouse,session,root):
+    base_path = None
     mouse_path = Path(root) / f"sub-{mouse}" 
 
     for folder in mouse_path.iterdir():
-        if folder.is_dir() and date in folder.name:
+        if folder.is_dir() and session in folder.name:
             print(f"Found folder: {folder}")
             base_path = folder
     return base_path
