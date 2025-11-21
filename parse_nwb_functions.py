@@ -3,6 +3,9 @@ import yaml
 from pynwb import NWBHDF5IO
 from typing import Literal
 from pynwb import NWBHDF5IO
+import numpy as np
+import pynapple as nap
+import parse_bonsai_functions as parse_bonsai_functions
 
 def find_base_path(mouse,session,root):
     base_path = None
@@ -13,6 +16,9 @@ def find_base_path(mouse,session,root):
             print(f"Found folder: {folder}")
             base_path = folder
     return base_path
+
+def find_roicat_path(mouse,root):
+    return Path(root) / f"sub-{mouse}" / 'funcimg_tracked'
 
 def load_settings(base_path):
     settings_path = Path(base_path) / "behav"
@@ -35,17 +41,19 @@ def find_nwbfile(session_path: Path, format: Literal["merged", "behav", "funcimg
 
     return fname
 
-def get_ttl_onsets(nwb_path, event_name=None):
+def get_ttl_onsets(nwb_path, event_name=None, print_table=False):
 
     io = NWBHDF5IO(nwb_path, mode='r')
     nwb = io.read()
 
     NIDAQ_TTLTypesTable = nwb.acquisition['NIDAQ_TTLTypesTable'][:]
-    print('TTL onsets recorded by NIDAQ:')
-    print(NIDAQ_TTLTypesTable)
+    if print_table:
+        print('TTL onsets recorded by NIDAQ:')
+        print(NIDAQ_TTLTypesTable)
 
     if event_name is not None:
-        print(f'Retrieve {event_name}')
+        if print_table:
+            print(f'Retrieve {event_name}')
         matches = NIDAQ_TTLTypesTable[NIDAQ_TTLTypesTable["event_name"] == event_name].index.tolist()
         if len(matches) == 1:
             NIDAQ_TTLsTable = nwb.acquisition['NIDAQ_TTLsTable'][:]
@@ -53,6 +61,12 @@ def get_ttl_onsets(nwb_path, event_name=None):
             return NIDAQ_TTLsTable.loc[mask, "timestamp"].values
         else:
             raise ValueError('Check event_name')
+
+def retrieve_lm_timestamps(nwb_path):
+    modd1 = get_ttl_onsets(nwb_path, 'MODD1ONTTL')
+    modd2 = get_ttl_onsets(nwb_path, 'MODD2ONTTL')
+    modds = np.concatenate((modd1, modd2))
+    return nap.Ts(t=np.sort(modds))
 
 def get_s2pstat_nwb(nwb_path):
     io = NWBHDF5IO(nwb_path, mode='r')
