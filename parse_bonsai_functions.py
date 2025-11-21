@@ -758,12 +758,16 @@ def plot_seq_fraction(sess_dataframe,ses_settings,test='transition'):
     return performance
 
 def safe_divide(a, b):
-    if np.isnan(a) or b == 0:
-        perf = np.nan
-    else:
-        perf = a / b
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
 
-    return perf
+    # result has same shape as a
+    out = np.full_like(a, np.nan, dtype=float)
+
+    # numpy handles broadcasting for where= and division
+    np.divide(a, b, out=out, where=(b != 0))
+
+    return out
 
 def calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
