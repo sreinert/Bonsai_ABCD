@@ -281,7 +281,7 @@ def calc_hit_fa_v1(sess_dataframe,ses_settings):
 
     rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
 
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors_v1(sess_dataframe,ses_settings)
 
     licked_target = np.zeros(len(target_positions))
     for idx, pos in enumerate(target_positions):
@@ -486,10 +486,13 @@ def calc_conditional_matrix(sess_dataframe,ses_settings):
             ideal_prob[g,next_ideal_lm] += 1
     return transition_prob, control_prob, ideal_prob
 
-def calc_stable_conditional_matrix(sess_dataframe,ses_settings):
+def calc_stable_conditional_matrix(sess_dataframe,ses_settings,release_event_criteria='v2'):
 
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    if release_event_criteria=='v1':
+        hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa_v1(sess_dataframe,ses_settings)
+    else:
+        hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
 
     transition_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
     control_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
@@ -605,6 +608,54 @@ def plot_conditional_matrix(sess_dataframe,ses_settings):
     plt.title('Ideal Probability Matrix')
     plt.xlabel('Next Landmark ID')
     plt.xticks([i for i in range(n_lms)], x_labels)
+    plt.yticks([i for i in range(n_goals)], y_labels)
+    plt.ylabel('Goal ID')
+
+    plt.tight_layout()
+    plt.show()
+
+def plot_stable_conditional_matrix_v1(sess_dataframe,ses_settings):
+
+    transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe,ses_settings,release_event_criteria='v1')
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    max_val = max(np.max(transition_prob), np.max(control_prob), np.max(ideal_prob))
+    n_goals = transition_prob.shape[0]
+    n_lms = transition_prob.shape[1]
+    if n_goals == 3:
+        y_labels = ['A', 'B', 'C']
+    elif n_goals == 4:
+        y_labels = goals
+    else:
+        y_labels = [str(i) for i in range(n_goals)]
+
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 3, 1)
+    im = plt.imshow(transition_prob, cmap='viridis', interpolation='none')
+    plt.colorbar(im,fraction=0.02, pad=0.04)
+    plt.clim(0, max_val)
+    plt.title('Transition Probability Matrix (Licked)')
+    plt.xlabel('Next Landmark ID')
+    plt.xticks([i for i in range(n_lms)])
+    plt.yticks([i for i in range(n_goals)], y_labels)
+    plt.ylabel('Goal ID')
+
+    plt.subplot(1, 3, 2)
+    im = plt.imshow(control_prob, cmap='viridis', interpolation='none')
+    plt.colorbar(im,fraction=0.02, pad=0.04)
+    plt.clim(0, max_val)
+    plt.title('Control Probability Matrix (All Targets)')
+    plt.xlabel('Next Landmark ID')
+    plt.xticks([i for i in range(n_lms)])
+    plt.yticks([i for i in range(n_goals)], y_labels)
+    plt.ylabel('Goal ID')
+
+    plt.subplot(1, 3, 3)
+    im = plt.imshow(ideal_prob, cmap='viridis', interpolation='none')
+    plt.colorbar(im,fraction=0.02, pad=0.04)
+    plt.clim(0, 1)
+    plt.title('Ideal Probability Matrix')
+    plt.xlabel('Next Landmark ID')
+    plt.xticks([i for i in range(n_lms)])
     plt.yticks([i for i in range(n_goals)], y_labels)
     plt.ylabel('Goal ID')
 
