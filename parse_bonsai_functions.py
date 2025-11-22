@@ -1283,13 +1283,14 @@ def plot_sw_state_ratio(sess_dataframe, ses_settings):
 class OdourReleaseWarning(UserWarning):
     pass
 
-def estimate_release_events(sess_dataframe, min_lm_gap=2.5, verbose=False):
+def estimate_release_events(sess_dataframe, min_lm_gap=3, verbose=False):
 
     tmp = sess_dataframe[['Events', 'Position']].reset_index(drop=False)
-    event_loc = tmp.dropna().index
-    event_odour = tmp['Events'].dropna().str.extract(r'(\d+)$')[0].astype(int).to_numpy()
+    tmp  = tmp.dropna(subset='Events', how='all')
+    event_loc = tmp.index
+    event_odour = tmp['Events'].str.extract(r'(\d+)$')[0].astype(int).to_numpy()
     # extract last int from event string: e.g. release: odour6 or flush: odour11
-    event_pos = tmp['Position'].dropna().to_numpy()
+    event_pos = tmp['Position'].to_numpy()
     # extract pos from the event
     assert len(event_loc) == len(event_odour), 'The number of event occurance and odour type extraction does not match!'
 
@@ -1349,10 +1350,16 @@ def find_positive_groups(arr, positions, min_pos_gap):
             # continue group
             last_idx = i
         else:
-            # close previous & start new
-            groups.append((start_idx, last_idx, current_val))
-            current_val = x
-            start_idx = last_idx = i
+            # NEW: only start a new group if there is at least one zero between
+            # in ideal scenario there should be three zeros, but there are some edge cases with only one zero between
+            if np.any(arr[last_idx + 1:i] == 0):
+                # close previous & start new
+                groups.append((start_idx, last_idx, current_val))
+                current_val = x
+                start_idx = last_idx = i
+            else:
+                # no zero between -> keep extending current group
+                last_idx = i
     # close last group
     if current_val != 0:
         groups.append((start_idx, last_idx, current_val))
