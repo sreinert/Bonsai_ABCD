@@ -8,6 +8,7 @@ import datetime
 import json
 from scipy.signal import find_peaks
 import re
+import warnings
 
 class AnalogData(Reader):
     def __init__(self, pattern, columns, channels, extension="bin"):
@@ -1278,15 +1279,20 @@ def plot_sw_state_ratio(sess_dataframe, ses_settings):
     plt.title('Switch-Stay Ratio per State/Lap')
     plt.show()
 
-def estimate_release_events(sess_dataframe):
+class OdourReleaseWarning(UserWarning):
+    pass
 
-    tmp = sess_dataframe.reset_index(drop=False)
-    event_loc = tmp['Events'].dropna().index
+def estimate_release_events(sess_dataframe, min_lm_gap=2.5, verbose=False):
+
+    tmp = sess_dataframe[['Events', 'Position']].reset_index(drop=False)
+    event_loc = tmp.dropna().index
     event_odour = tmp['Events'].dropna().str.extract(r'(\d+)$')[0].astype(int).to_numpy()
     # extract last int from event string: e.g. release: odour6 or flush: odour11
+    event_pos = tmp['Position'].dropna().to_numpy()
+    # extract pos from the event
     assert len(event_loc) == len(event_odour), 'The number of event occurance and odour type extraction does not match!'
 
-    odour_groups = find_positive_groups(event_odour)
+    odour_groups = find_positive_groups(event_odour, event_pos, min_lm_gap)
     averaged_idx = [((s + e) // 2, v) for (s, e, v) in odour_groups] # We calculate averages of the indices here
 
     event_loc = np.asarray(event_loc)
@@ -1298,31 +1304,55 @@ def estimate_release_events(sess_dataframe):
         time = sess_dataframe.index[i_keepnan]
         result.append([time, pos, i_keepnan, odour])
 
+    # Sanity check
+    _release_events = sess_dataframe[sess_dataframe['Events'].str.contains('release', na=False) & ~sess_dataframe['Events'].str.contains('odour0', na=False)]
+    #sometimes the mouse rocks back and forth triggering multiple release events at similar positions, so we filter these out by only keeping releases that are at least 3 units apart in position
+    _release_positions = _release_events['Position'].values
+    diff_ix = np.where(np.diff(_release_positions)<3)[0]+1
+    _release_events = _release_events.drop(_release_events.index[diff_ix])
+
+    if verbose:
+        if len(_release_events) != len(result):
+            warnings.warn(
+                f"Odour release mismatch detected! \n# Release events: {len(_release_events)} \n# Estimated release events: {len(result)} \nUsing estimates...",
+                OdourReleaseWarning
+            )
+
     return result # each element is [time, pos, i_keepnan, odour]
 
-def find_positive_groups(arr):
-    # How to detect the occurance of odours from array like this
-    # [0 1 1 1 0 0 0 0 2 2 2 0 0 0 3 3 0 3 0 0 0 4 0 4 0 4 0 0 0 2 2 2 0 0 0 6 0 6 0 0 7 7 7 0 0 ]
+def find_positive_groups(arr, positions, min_pos_gap):
+    """
+    Groups positive arr values based on both:
+    - same odour identity in arr
+    - position continuity (split if gap in position > min_pos_gap)
+    Returns list of (start_idx, end_idx, odour_value)
+    """
     arr = np.asarray(arr)
+    positions = np.asarray(positions)
     groups = []
-    
     current_val = 0
     start_idx = None
-    last_positive_idx = None
-
+    last_idx = None
     for i, x in enumerate(arr):
-        if x > 0:
-            # New group begins
-            if x != current_val:
-                if current_val != 0:
-                    groups.append((start_idx, last_positive_idx, current_val))
-                current_val = x
-                start_idx = i
-            # Update last positive index for the current group
-            last_positive_idx = i
-
-    # Close final group
+        if x <= 0:
+            continue
+        if current_val == 0:
+            # start first group
+            current_val = x
+            start_idx = last_idx = i
+            continue
+        # check if we stay in same group
+        same_val = (x == current_val)
+        pos_gap = positions[i] - positions[last_idx]
+        if same_val and abs(pos_gap) <= min_pos_gap:
+            # continue group
+            last_idx = i
+        else:
+            # close previous & start new
+            groups.append((start_idx, last_idx, current_val))
+            current_val = x
+            start_idx = last_idx = i
+    # close last group
     if current_val != 0:
-        groups.append((start_idx, last_positive_idx, current_val))
-    
+        groups.append((start_idx, last_idx, current_val))
     return groups
