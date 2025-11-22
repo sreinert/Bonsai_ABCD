@@ -142,9 +142,10 @@ def parse_rew_lms(ses_settings):
     for i in ses_settings['trial']['landmarks']:
         for j in i:
             if j['rewardSequencePosition'] > -1:
-                rew_odour.append(j['odour'])
-                rew_texture.append(j['texture'])
-                index.append(j['rewardSequencePosition'])
+                if not np.isin(j['rewardSequencePosition'], index): # avoid double counting of odours
+                    rew_odour.append(j['odour'])
+                    rew_texture.append(j['texture'])
+                    index.append(j['rewardSequencePosition'])
             else:
                 non_rew_odour.append(j['odour'])
                 non_rew_texture.append(j['texture'])
@@ -255,10 +256,10 @@ def calc_hit_fa(sess_dataframe,ses_settings):
     
     # TODO: should we discard this with updated release time estimation?
     #sometimes the VR drops the first release event, check for that and add a 0 as a first element if needed
-    first_release = ses_settings['trial']['landmarks'][0][0]['odour']
-    if not first_release in release_df['Events'].values[0]:
-        licked_all = np.insert(licked_all, 0, 0)
-        rewarded_all = np.insert(rewarded_all, 0, 0)
+    # first_release = ses_settings['trial']['landmarks'][0][0]['odour']
+    # if not first_release in release_df['Events'].values[0]:
+    #     licked_all = np.insert(licked_all, 0, 0)
+    #     rewarded_all = np.insert(rewarded_all, 0, 0)
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
     fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
@@ -995,8 +996,8 @@ def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
     for i in range(len(licked_all)-window):
         all_window_goals = sum(was_target[i:i+window])
         all_window_distractors = window - all_window_goals
-        hit_rate_window[i] = np.sum(licked_all[i:i+window][was_target[i:i+window]==1])/all_window_goals
-        false_alarm_rate_window[i] = np.sum(licked_all[i:i+window][was_target[i:i+window]==0])/all_window_distractors
+        hit_rate_window[i] = safe_divide(np.sum(licked_all[i:i+window][was_target[i:i+window]==1]), all_window_goals)
+        false_alarm_rate_window[i] = safe_divide(np.sum(licked_all[i:i+window][was_target[i:i+window]==0]), all_window_distractors)
 
     plt.figure(figsize=(10,2))
     plt.plot(hit_rate_window, label='Hit Rate', color='g')
