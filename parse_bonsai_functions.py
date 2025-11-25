@@ -99,14 +99,14 @@ def load_data(base_path):
 
     return sess_dataframe
 
-def get_event_parsed(sess_dataframe):
+def get_event_parsed(sess_dataframe, ses_settings):
 
     lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
     lick_times = sess_dataframe.index[sess_dataframe['Licks'].values > 0]
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
 
-    release_events = estimate_release_events(sess_dataframe)
+    release_events = estimate_release_events(sess_dataframe, ses_settings)
 
     # we keep this for backward-compatibility
     release_df = sess_dataframe[sess_dataframe['Events'].str.contains('release', na=False) & ~sess_dataframe['Events'].str.contains('odour0', na=False)]
@@ -180,7 +180,7 @@ def plot_ethogram(sess_dataframe,ses_settings):
     lick_times = sess_dataframe.index[sess_dataframe['Licks'].values > 0]
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
-    release_events = estimate_release_events(sess_dataframe)
+    release_events = estimate_release_events(sess_dataframe, ses_settings)
     release_times = [sublist[0] for sublist in release_events]
     release_positions = [sublist[1] for sublist in release_events]
 
@@ -229,7 +229,7 @@ def plot_ethogram_v1(sess_dataframe,ses_settings):
 
 def calc_hit_fa(sess_dataframe,ses_settings):
 
-    lick_position, lick_times, reward_times, reward_positions, release_df, release_times, release_events = get_event_parsed(sess_dataframe)
+    lick_position, lick_times, reward_times, reward_positions, release_df, release_times, release_events = get_event_parsed(sess_dataframe, ses_settings)
 
     rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
 
@@ -256,8 +256,8 @@ def calc_hit_fa(sess_dataframe,ses_settings):
     
     # TODO: should we discard this with updated release time estimation?
     #sometimes the VR drops the first release event, check for that and add a 0 as a first element if needed
-    # first_release = ses_settings['trial']['landmarks'][0][0]['odour']
-    # if not first_release in release_df['Events'].values[0]:
+    # first_release = extract_int(ses_settings['trial']['landmarks'][0][0]['odour'])
+    # if first_release != release_events[0][3]:
     #     licked_all = np.insert(licked_all, 0, 0)
     #     rewarded_all = np.insert(rewarded_all, 0, 0)
 
@@ -334,7 +334,7 @@ def extract_int(s: str) -> int:
 
 def find_targets_distractors(sess_dataframe,ses_settings):
     
-    lick_position, lick_times, reward_times, reward_positions, release_df, release_times, release_events = get_event_parsed(sess_dataframe)
+    lick_position, lick_times, reward_times, reward_positions, release_df, release_times, release_events = get_event_parsed(sess_dataframe, ses_settings)
     rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
 
     target_id = []
@@ -363,10 +363,10 @@ def find_targets_distractors(sess_dataframe,ses_settings):
     for idx, pos in enumerate(all_release_positions):
         if pos in target_positions:
             was_target[idx] = 1
-            lm_id[idx] = target_id[np.where(target_positions == pos)[0][0]]
+            lm_id[idx] = target_id[np.where(np.isclose(target_positions, pos))[0][0]]
         else:
             was_target[idx] = 0
-            lm_id[idx] = distractor_id[np.where(distractor_positions == pos)[0][0]] + len(rew_odour)  #offset distractor IDs
+            lm_id[idx] = distractor_id[np.where(np.isclose(distractor_positions, pos))[0][0]] + len(rew_odour)  #offset distractor IDs
 
     return target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id
 
@@ -1280,10 +1280,94 @@ def plot_sw_state_ratio(sess_dataframe, ses_settings):
     plt.title('Switch-Stay Ratio per State/Lap')
     plt.show()
 
+def estimate_release_events(sess_dataframe, ses_settings, verbose=False):
+    lm_gap = 3 + ses_settings['trial']['offsets'][0]
+
+    tmp = sess_dataframe.reset_index(drop=False, inplace=False)
+    release_subset = tmp[tmp['Events'].str.contains('release', na=False) & ~tmp['Events'].str.contains('odour0', na=False)][['Events', 'Position']]
+    release_subset = release_subset.dropna(subset='Events', how='all')
+
+    release_subset_pos = release_subset['Position'].to_numpy()
+
+    # Step 1: Make empty df to store results
+    df = pd.DataFrame(np.nan, index=range(1000), columns=["pos", "idx", "released_odour"])
+    last_val = release_subset_pos[-1]
+    # Fill positions from the bottom upwards
+    # This because there are less drifts as sessions progress
+    for i in range(len(df)):
+        df.loc[len(df)-1 - i, "pos"] = last_val - lm_gap * i
+
+    # Step 2: Find release from idx match (strongest crteria, but it works!)
+    for i in reversed(df.index):
+        pos_val = df.at[i, "pos"]
+        if np.isnan(pos_val):
+            continue  # skip rows where pos is NaN
+
+        # find index of closest-position row in events_df
+        idx_closest = (tmp["Position"] - pos_val).abs().idxmin()
+        event_closest = tmp.loc[idx_closest, "Events"]
+        pos_closest = tmp.loc[idx_closest, "Position"]
+
+        # ONLY fill df if this event is a release event
+        if isinstance(event_closest, str) and event_closest.startswith("release"):
+            df.at[i, "idx"] = idx_closest
+            df.at[i, "released_odour"] = extract_int(event_closest)
+            df.at[i, "pos"] = pos_closest
+        else:
+            df.at[i, "idx"] = idx_closest # Only store possible candidates
+
+    # Step 3: Clean df by removing neagtive pos rows
+    last_negative_idx = df[df["pos"] < 0].index.max() -1 # keep the last one, just in case
+    df = df.loc[last_negative_idx+1:].reset_index(drop=True)
+
+    # Step 4: Find closest release events. If there are multiple release, use earliest
+    for i in reversed(df.index):
+        if ~np.isnan(df.at[i, "released_odour"]):
+            continue # we have already identified odour
+        else:
+            closed_idx = int(df.at[i, "idx"])
+            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, event_priority=["release"], choose = "earlist")
+            if odour is not None:
+                df.at[i, "idx"] = chosen_idx
+                df.at[i, "released_odour"] = odour
+                df.at[i, "pos"] = chosen_pos
+
+    # Step 5: Find closest prepare and flush events.
+    for i in reversed(df.index):
+        if ~np.isnan(df.at[i, "released_odour"]):
+            continue # we have already identified odour
+        else:
+            closed_idx = int(df.at[i, "idx"])
+            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, event_priority=["prepare", "flush"], choose = "average")
+            if odour is not None:
+                df.at[i, "idx"] = chosen_idx
+                df.at[i, "released_odour"] = odour
+                df.at[i, "pos"] = chosen_pos
+
+    # Step 6: Clean the output format
+    result = []
+    for i, row in df.iterrows():
+        idx = int(row["idx"])
+        if i == 0 and np.isnan(row["released_odour"]):
+            continue
+        # get timestamp from summary dataframe
+        ts = tmp.loc[int(idx), "time"]
+
+        entry = [ts, float(row["pos"]), int(idx), row["released_odour"]]
+        result.append(entry)
+
+    # Step 7: Add the first odour stimulus that VR ABCD forgot
+    first_release = extract_int(ses_settings['trial']['landmarks'][0][0]['odour'])
+    if first_release != result[0][3]:
+        result = [[result[0][0],result[0][1],0,first_release]] + result
+
+    return result
+
+
 class OdourReleaseWarning(UserWarning):
     pass
 
-def estimate_release_events(sess_dataframe, min_lm_gap=3, verbose=False):
+def estimate_release_events_v2(sess_dataframe, min_lm_gap=3, verbose=False):
 
     tmp = sess_dataframe[['Events', 'Position']].reset_index(drop=False)
     tmp  = tmp.dropna(subset='Events', how='all')
@@ -1364,3 +1448,101 @@ def find_positive_groups(arr, positions, min_pos_gap):
     if current_val != 0:
         groups.append((start_idx, last_idx, current_val))
     return groups
+
+def find_closest_events(
+    df: pd.DataFrame,
+    idx: int,
+    pos_window: float = 3.0,
+    event_priority=["release", "prepare", "flush"],
+    choose = 'earlist',
+    verbose = False,
+):
+    """
+    For each idx, find the nearest event based on Position.
+
+    For each event type in priority:
+        - Search in a zigzag pattern around the idx:
+          row, row-1, row+1, row-2, row+2, ...
+        - At each candidate row j:
+            * Require |Position(j) - pos0| <= pos_window
+            * Skip odour 0
+        - Stop searching in a direction once Position falls outside pos_window
+          or the index leaves the dataframe bounds.
+    
+    Choose decides which idx to pick from candidate_idx
+    """
+    events_col = df["Events"].astype("string")
+    n_rows = len(df)
+    pos0 = df.at[idx, "Position"]
+
+    candidate_idx = []
+    chosen_idx = None
+    chosen_event = None
+    odour = None
+    chosen_pos = None
+
+    for ev_type in event_priority:
+        # ---------- Zigzag search around idx ----------
+        offset = 0
+        up_active = True
+        down_active = True
+
+        while up_active or down_active:
+            # Check current / upward direction: idx - offset
+            if up_active:
+                j_up = idx - offset
+                if j_up < 0:
+                    up_active = False
+                else:
+                    if abs(df.at[j_up, "Position"] - pos0) > pos_window:
+                        # we assume Position is monotonic, so further up is outside window
+                        up_active = False
+                    else:
+                        ev = events_col.iat[j_up]
+                        if ev is not None and not pd.isna(ev) and "odour0" not in ev:
+                            if ev_type in ev:
+                                candidate_idx.append(j_up)
+
+            # Check downward direction only for offset > 0 to avoid double-checking idx
+            if offset > 0 and down_active:
+                j_down = idx + offset
+                if j_down >= n_rows:
+                    down_active = False
+                else:
+                    if abs(df.at[j_down, "Position"] - pos0) > pos_window:
+                        # we assume Position is monotonic, so further down is outside window
+                        down_active = False
+                    else:
+                        ev = events_col.iat[j_down]
+                        if ev is not None and not pd.isna(ev) and "odour0" not in ev:
+                            if ev_type in ev:
+                                candidate_idx.append(j_down)
+
+            # if not (up_active or down_active) or chosen_event_type is not None:
+            #     break
+
+            offset += 1  # expand zigzag radius
+
+    if len(candidate_idx) > 0:
+        if choose == 'earlist':
+            chosen_idx = min(candidate_idx)
+            chosen_event = events_col.iat[chosen_idx]
+            chosen_pos = df.at[chosen_idx, "Position"]
+            odour = extract_int(chosen_event)
+        elif choose == 'average':
+            avg = sum(candidate_idx) / len(candidate_idx)
+            chosen_idx = min(candidate_idx, key=lambda x: abs(x - avg))
+            chosen_event = events_col.iat[chosen_idx]
+            chosen_pos = df.at[chosen_idx, "Position"]
+            odour = extract_int(chosen_event)
+        else:
+            raise NotImplementedError
+
+        if verbose:
+            if chosen_event is None:
+                raise ValueError(
+                    f"No event of types {event_priority} found within ±{pos_window} "
+                    f"for expected release event around idx: {idx}."
+                )
+
+    return chosen_idx, chosen_event, odour, chosen_pos
