@@ -204,13 +204,6 @@ def calc_hit_fa(sess_dataframe,ses_settings):
            licked_all[idx] = 1
         if np.any((reward_positions > pos) & (reward_positions < (pos + lm_size))):
            rewarded_all[idx] = 1
-    
-    # TODO: should we discard this with updated release time estimation?
-    #sometimes the VR drops the first release event, check for that and add a 0 as a first element if needed
-    # first_release = extract_int(ses_settings['trial']['landmarks'][0][0]['odour'])
-    # if first_release != release_events[0][3]:
-    #     licked_all = np.insert(licked_all, 0, 0)
-    #     rewarded_all = np.insert(rewarded_all, 0, 0)
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
     fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
@@ -1173,6 +1166,7 @@ def estimate_release_events(sess_dataframe, ses_settings):
         result.append(entry)
 
     # Step 7: Add the first odour stimulus that VR ABCD forgot
+    # sometimes the VR drops the first release event, check for that and add first element if needed
     first_release = extract_int(ses_settings['trial']['landmarks'][0][0]['odour'])
     if first_release != result[0][3]:
         result = [[pd.NaT, np.nan, -1, first_release]] + result
