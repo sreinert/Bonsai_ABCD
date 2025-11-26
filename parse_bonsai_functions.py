@@ -6,9 +6,7 @@ import pandas as pd
 import numpy as np
 import datetime
 import json
-from scipy.signal import find_peaks
 import re
-import warnings
 
 class AnalogData(Reader):
     def __init__(self, pattern, columns, channels, extension="bin"):
@@ -36,7 +34,7 @@ def load_settings(base_path):
         settings_file = json_files[0]
     else:
         try:
-            settings_file = list(settings_path.glob("*.csv"))[0] # This still can be loaded with json.load() wow.
+            settings_file = list(settings_path.glob("*.csv"))[0] # This still can be loaded with json.load(). wow.
         except:
             raise FileNotFoundError(f"No valid JSON found in {settings_path}")
     with open(settings_file, 'r') as file:
@@ -99,38 +97,16 @@ def load_data(base_path):
 
     return sess_dataframe
 
-def get_event_parsed(sess_dataframe):
+def get_event_parsed(sess_dataframe, ses_settings):
 
     lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
     lick_times = sess_dataframe.index[sess_dataframe['Licks'].values > 0]
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
 
-    release_events = estimate_release_events(sess_dataframe)
+    release_df = estimate_release_events(sess_dataframe, ses_settings)
 
-    # we keep this for backward-compatibility
-    release_df = sess_dataframe[sess_dataframe['Events'].str.contains('release', na=False) & ~sess_dataframe['Events'].str.contains('odour0', na=False)]
-    release_times = None # deprecated
-
-    return lick_position, lick_times, reward_times, reward_positions, release_df, release_times, release_events
-
-def get_event_parsed_v1(sess_dataframe):
-
-    lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
-    lick_times = sess_dataframe.index[sess_dataframe['Licks'].values > 0]
-    reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
-    reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
-    release_events = sess_dataframe[sess_dataframe['Events'].str.contains('release', na=False) & ~sess_dataframe['Events'].str.contains('odour0', na=False)]
-    release_times = release_events.index
-    release_positions = release_events['Position'].values
-
-    #sometimes the mouse rocks back and forth triggering multiple release events at similar positions, so we filter these out by only keeping releases that are at least 3 units apart in position
-    diff_ix = np.where(np.diff(release_positions)<3)[0]+1
-    release_events = release_events.drop(release_events.index[diff_ix])
-    release_times = release_events.index
-    release_positions = release_events['Position'].values
-
-    return lick_position, lick_times, reward_times, reward_positions, release_events, release_times, release_positions
+    return lick_position, lick_times, reward_times, reward_positions, release_df
 
 def parse_rew_lms(ses_settings):
     rew_odour = []
@@ -180,36 +156,10 @@ def plot_ethogram(sess_dataframe,ses_settings):
     lick_times = sess_dataframe.index[sess_dataframe['Licks'].values > 0]
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
-    release_events = estimate_release_events(sess_dataframe)
-    release_times = [sublist[0] for sublist in release_events]
-    release_positions = [sublist[1] for sublist in release_events]
+    release_df = estimate_release_events(sess_dataframe, ses_settings)
+    release_times = release_df.index.tolist() # time
+    release_positions = release_df["Position"].tolist()
 
-    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
-
-    plt.figure(figsize=(12, 6))
-    plt.plot(sess_dataframe.index, sess_dataframe['Treadmill']/np.max(sess_dataframe['Treadmill']), label='Treadmill Speed', color='purple')
-    plt.plot(sess_dataframe.index, sess_dataframe['Position']/np.max(sess_dataframe['Position']), label='Position', color='blue')
-    plt.plot(lick_times, lick_position/np.max(sess_dataframe['Position']), marker='o', linestyle='', label='Licks', color='orange')
-    plt.plot(release_times, release_positions/np.max(sess_dataframe['Position']), marker='o', linestyle='', label='Releases', color='red')
-    plt.plot(reward_times, reward_positions/np.max(sess_dataframe['Position']), marker='o', linestyle='', label='Rewards', color='green')
-    plt.plot(sess_dataframe.index, sess_dataframe['Buffer']/np.max(sess_dataframe['Buffer']), label='Analog Buffer', color='black')
-    plt.plot(sess_dataframe.index, sess_dataframe['Lap']/num_laps, label='Laps', color='brown')
-
-    plt.xlabel('Time (s)')
-    plt.ylabel('Value')
-    plt.title('Session Data Overview')
-    plt.legend()
-    plt.show()
-
-def plot_ethogram_v1(sess_dataframe,ses_settings):
-    lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
-    lick_times = sess_dataframe.index[sess_dataframe['Licks'].values > 0]
-    reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
-    reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
-    release_events = sess_dataframe[sess_dataframe['Events'].str.contains('release', na=False) & ~sess_dataframe['Events'].str.contains('odour0', na=False)]
-    release_events = release_events[release_events['Position'].notna()]
-    release_times = release_events.index
-    release_positions = release_events['Position'].values
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
 
     plt.figure(figsize=(12, 6))
@@ -228,8 +178,9 @@ def plot_ethogram_v1(sess_dataframe,ses_settings):
     plt.show()
 
 def calc_hit_fa(sess_dataframe,ses_settings):
+    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
 
-    lick_position, lick_times, reward_times, reward_positions, release_df, release_times, release_events = get_event_parsed(sess_dataframe)
+    lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
 
     rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
 
@@ -237,70 +188,21 @@ def calc_hit_fa(sess_dataframe,ses_settings):
 
     licked_target = np.zeros(len(target_positions))
     for idx, pos in enumerate(target_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + 3))):
+        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
             licked_target[idx] = 1
 
     licked_distractor = np.zeros(len(distractor_positions))
     for idx, pos in enumerate(distractor_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + 3))):
+        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
             licked_distractor[idx] = 1
 
-    licked_all = np.zeros(len(release_events))
-    rewarded_all = np.zeros(len(release_events))
-    release_positions = [sublist[1] for sublist in release_events]
+    licked_all = np.zeros(len(release_df))
+    rewarded_all = np.zeros(len(release_df))
+    release_positions = release_df['Position'].to_numpy()
     for idx, pos in enumerate(release_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + 3))):
+        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
            licked_all[idx] = 1
-        if np.any((reward_positions > pos) & (reward_positions < (pos + 3))):
-           rewarded_all[idx] = 1
-    
-    # TODO: should we discard this with updated release time estimation?
-    #sometimes the VR drops the first release event, check for that and add a 0 as a first element if needed
-    # first_release = ses_settings['trial']['landmarks'][0][0]['odour']
-    # if not first_release in release_df['Events'].values[0]:
-    #     licked_all = np.insert(licked_all, 0, 0)
-    #     rewarded_all = np.insert(rewarded_all, 0, 0)
-
-    hit_rate = np.sum(licked_target) / len(licked_target) 
-    fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
-    #adjust hit rate and fa rate to avoid infinity in d-prime calculation
-    if hit_rate == 1:
-        hit_rate = 0.99
-    if hit_rate == 0:
-        hit_rate = 0.01
-    if fa_rate == 1:
-        fa_rate = 0.99
-    if fa_rate == 0:
-        fa_rate = 0.01
-
-    d_prime = np.log10(hit_rate/(1-hit_rate)) - np.log10(fa_rate/(1-fa_rate))
-
-    return hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all
-
-def calc_hit_fa_v1(sess_dataframe,ses_settings):
-
-    lick_position, lick_times, reward_times, reward_positions, release_events, release_times, release_positions = get_event_parsed_v1(sess_dataframe)
-
-    rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
-
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors_v1(sess_dataframe,ses_settings)
-
-    licked_target = np.zeros(len(target_positions))
-    for idx, pos in enumerate(target_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + 3))):
-            licked_target[idx] = 1
-
-    licked_distractor = np.zeros(len(distractor_positions))
-    for idx, pos in enumerate(distractor_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + 3))):
-            licked_distractor[idx] = 1
-
-    licked_all = np.zeros(len(release_positions))
-    rewarded_all = np.zeros(len(release_positions))
-    for idx, pos in enumerate(release_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + 3))):
-           licked_all[idx] = 1
-        if np.any((reward_positions > pos) & (reward_positions < (pos + 3))):
+        if np.any((reward_positions > pos) & (reward_positions < (pos + lm_size))):
            rewarded_all[idx] = 1
     
     #sometimes the VR drops the first release event, check for that and add a 0 as a first element if needed
@@ -334,76 +236,39 @@ def extract_int(s: str) -> int:
 
 def find_targets_distractors(sess_dataframe,ses_settings):
     
-    lick_position, lick_times, reward_times, reward_positions, release_df, release_times, release_events = get_event_parsed(sess_dataframe)
+    lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
     rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
 
     target_id = []
     target_positions = []
     for i in range(len(rew_odour)):
         test_int = extract_int(rew_odour[i])
-        idxs = [i for i, sub in enumerate(release_events) if sub[3] == test_int] # does released odour match with test_int
-        pos = [sub[1] for i, sub in enumerate(release_events) if sub[3] == test_int]
+        matches = release_df[release_df["Odour"] == test_int] # does released odour match with test_int
+        pos = matches["Position"].tolist()
 
-        target_id.extend([i] * len(idxs))
+        target_id.extend([i] * len(pos))
         target_positions.extend(pos)
 
     distractor_id = []
     distractor_positions = []
     for i in range(len(non_rew_odour)):
         test_int = extract_int(non_rew_odour[i])
-        idxs = [i for i, sub in enumerate(release_events) if sub[3] == test_int] # does released odour match with test_int
-        pos = [sub[1] for i, sub in enumerate(release_events) if sub[3] == test_int]
+        matches = release_df[release_df["Odour"] == test_int] # does released odour match with test_int
+        pos = matches["Position"].tolist()
 
-        distractor_id.extend([i] * len(idxs))
+        distractor_id.extend([i] * len(pos))
         distractor_positions.extend(pos)
     
-    all_release_positions = [sublist[1] for sublist in release_events]
+    all_release_positions = release_df["Position"].tolist()
     was_target = np.zeros(len(all_release_positions))
     lm_id = np.zeros(len(all_release_positions))
     for idx, pos in enumerate(all_release_positions):
         if pos in target_positions:
             was_target[idx] = 1
-            lm_id[idx] = target_id[np.where(target_positions == pos)[0][0]]
+            lm_id[idx] = target_id[np.where(np.isclose(target_positions, pos))[0][0]]
         else:
             was_target[idx] = 0
-            lm_id[idx] = distractor_id[np.where(distractor_positions == pos)[0][0]] + len(rew_odour)  #offset distractor IDs
-
-    return target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id
-
-def find_targets_distractors_v1(sess_dataframe,ses_settings):
-    
-    lick_position, lick_times, reward_times, reward_positions, release_events, release_times, release_positions = get_event_parsed_v1(sess_dataframe)
-    rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
-
-    target_releases = pd.DataFrame()
-    target_id = []
-    for i in range(len(rew_odour)):
-        test_str = 'release: '+rew_odour[i]
-        new_events = release_events[release_events['Events'].str.fullmatch(test_str, na=False)]
-        target_releases = pd.concat([target_releases, new_events])
-        target_id.extend([i] * len(new_events))
-        target_positions = target_releases['Position'].values
-        target_positions = target_positions[~np.isnan(target_positions)]
-
-    distractor_releases = pd.DataFrame()
-    distractor_id = []
-    for i in range(len(non_rew_odour)):
-        test_str = 'release: '+non_rew_odour[i]
-        new_events = release_events[release_events['Events'].str.fullmatch(test_str, na=False)]
-        distractor_releases = pd.concat([distractor_releases, new_events])
-        distractor_id.extend([i] * len(new_events))
-        distractor_positions = distractor_releases['Position'].values
-        distractor_positions = distractor_positions[~np.isnan(distractor_positions)]
-    
-    was_target = np.zeros(len(release_positions))
-    lm_id = np.zeros(len(release_positions))
-    for idx, pos in enumerate(release_positions):
-        if pos in target_positions:
-            was_target[idx] = 1
-            lm_id[idx] = target_id[np.where(target_positions == pos)[0][0]]
-        else:
-            was_target[idx] = 0
-            lm_id[idx] = distractor_id[np.where(distractor_positions == pos)[0][0]] + len(rew_odour)  #offset distractor IDs
+            lm_id[idx] = distractor_id[np.where(np.isclose(distractor_positions, pos))[0][0]] + len(rew_odour)  #offset distractor IDs
 
     return target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id
 
@@ -488,13 +353,10 @@ def calc_conditional_matrix(sess_dataframe,ses_settings):
             ideal_prob[g,next_ideal_lm] += 1
     return transition_prob, control_prob, ideal_prob
 
-def calc_stable_conditional_matrix(sess_dataframe,ses_settings,release_event_criteria='v2'):
+def calc_stable_conditional_matrix(sess_dataframe,ses_settings):
 
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
-    if release_event_criteria=='v1':
-        hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa_v1(sess_dataframe,ses_settings)
-    else:
-        hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
 
     transition_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
     control_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
@@ -610,54 +472,6 @@ def plot_conditional_matrix(sess_dataframe,ses_settings):
     plt.title('Ideal Probability Matrix')
     plt.xlabel('Next Landmark ID')
     plt.xticks([i for i in range(n_lms)], x_labels)
-    plt.yticks([i for i in range(n_goals)], y_labels)
-    plt.ylabel('Goal ID')
-
-    plt.tight_layout()
-    plt.show()
-
-def plot_stable_conditional_matrix_v1(sess_dataframe,ses_settings):
-
-    transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe,ses_settings,release_event_criteria='v1')
-    goals, lm_ids = parse_stable_goal_ids(ses_settings)
-    max_val = max(np.max(transition_prob), np.max(control_prob), np.max(ideal_prob))
-    n_goals = transition_prob.shape[0]
-    n_lms = transition_prob.shape[1]
-    if n_goals == 3:
-        y_labels = ['A', 'B', 'C']
-    elif n_goals == 4:
-        y_labels = goals
-    else:
-        y_labels = [str(i) for i in range(n_goals)]
-
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 3, 1)
-    im = plt.imshow(transition_prob, cmap='viridis', interpolation='none')
-    plt.colorbar(im,fraction=0.02, pad=0.04)
-    plt.clim(0, max_val)
-    plt.title('Transition Probability Matrix (Licked)')
-    plt.xlabel('Next Landmark ID')
-    plt.xticks([i for i in range(n_lms)])
-    plt.yticks([i for i in range(n_goals)], y_labels)
-    plt.ylabel('Goal ID')
-
-    plt.subplot(1, 3, 2)
-    im = plt.imshow(control_prob, cmap='viridis', interpolation='none')
-    plt.colorbar(im,fraction=0.02, pad=0.04)
-    plt.clim(0, max_val)
-    plt.title('Control Probability Matrix (All Targets)')
-    plt.xlabel('Next Landmark ID')
-    plt.xticks([i for i in range(n_lms)])
-    plt.yticks([i for i in range(n_goals)], y_labels)
-    plt.ylabel('Goal ID')
-
-    plt.subplot(1, 3, 3)
-    im = plt.imshow(ideal_prob, cmap='viridis', interpolation='none')
-    plt.colorbar(im,fraction=0.02, pad=0.04)
-    plt.clim(0, 1)
-    plt.title('Ideal Probability Matrix')
-    plt.xlabel('Next Landmark ID')
-    plt.xticks([i for i in range(n_lms)])
     plt.yticks([i for i in range(n_goals)], y_labels)
     plt.ylabel('Goal ID')
 
@@ -1280,87 +1094,206 @@ def plot_sw_state_ratio(sess_dataframe, ses_settings):
     plt.title('Switch-Stay Ratio per State/Lap')
     plt.show()
 
-class OdourReleaseWarning(UserWarning):
-    pass
+def estimate_release_events(sess_dataframe, ses_settings):
+    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    lm_gap = lm_size + ses_settings['trial']['offsets'][0]
 
-def estimate_release_events(sess_dataframe, min_lm_gap=3, verbose=False):
+    tmp = sess_dataframe.reset_index(drop=False, inplace=False)
+    release_subset = tmp[tmp['Events'].str.contains('release', na=False) & ~tmp['Events'].str.contains('odour0', na=False)][['Events', 'Position']]
+    release_subset = release_subset.dropna(subset='Events', how='all')
 
-    tmp = sess_dataframe[['Events', 'Position']].reset_index(drop=False)
-    tmp  = tmp.dropna(subset='Events', how='all')
-    event_loc = tmp.index
-    event_odour = tmp['Events'].str.extract(r'(\d+)$')[0].astype(int).to_numpy()
-    # extract last int from event string: e.g. release: odour6 or flush: odour11
-    event_pos = tmp['Position'].to_numpy()
-    # extract pos from the event
-    assert len(event_loc) == len(event_odour), 'The number of event occurance and odour type extraction does not match!'
+    release_subset_pos = release_subset['Position'].to_numpy()
 
-    odour_groups = find_positive_groups(event_odour, event_pos, min_lm_gap)
-    averaged_idx = [((s + e) // 2, v) for (s, e, v) in odour_groups] # We calculate averages of the indices here
+    # Step 1: Make empty df to store results
+    df = pd.DataFrame(np.nan, index=range(1000), columns=["pos", "idx", "released_odour"])
+    last_val = release_subset_pos[-1]
+    # Fill positions from the bottom upwards
+    # This because there are less drifts as sessions progress
+    for i in range(len(df)):
+        df.loc[len(df)-1 - i, "pos"] = last_val - lm_gap * i
 
-    event_loc = np.asarray(event_loc)
+    # Step 2: Find release from idx match (strongest crteria, but it works!)
+    for i in reversed(df.index):
+        pos_val = df.at[i, "pos"]
+        if np.isnan(pos_val):
+            continue  # skip rows where pos is NaN
 
-    result = []
-    for i, odour in averaged_idx:
-        i_keepnan = event_loc[i]
-        pos = sess_dataframe.iloc[i_keepnan]['Position']
-        time = sess_dataframe.index[i_keepnan]
-        result.append([time, pos, i_keepnan, odour])
+        # find index of closest-position row in events_df
+        idx_closest = (tmp["Position"] - pos_val).abs().idxmin()
+        event_closest = tmp.loc[idx_closest, "Events"]
+        pos_closest = tmp.loc[idx_closest, "Position"]
 
-    # Sanity check
-    _release_events = sess_dataframe[sess_dataframe['Events'].str.contains('release', na=False) & ~sess_dataframe['Events'].str.contains('odour0', na=False)]
-    #sometimes the mouse rocks back and forth triggering multiple release events at similar positions, so we filter these out by only keeping releases that are at least 3 units apart in position
-    _release_positions = _release_events['Position'].values
-    diff_ix = np.where(np.diff(_release_positions)<3)[0]+1
-    _release_events = _release_events.drop(_release_events.index[diff_ix])
-
-    if verbose:
-        if len(_release_events) != len(result):
-            warnings.warn(
-                f"Odour release mismatch detected! \n# Release events: {len(_release_events)} \n# Estimated release events: {len(result)} \nUsing estimates...",
-                OdourReleaseWarning
-            )
-
-    return result # each element is [time, pos, i_keepnan, odour]
-
-def find_positive_groups(arr, positions, min_pos_gap):
-    """
-    Groups positive arr values based on both:
-    - same odour identity in arr
-    - position continuity (split if gap in position > min_pos_gap)
-    Returns list of (start_idx, end_idx, odour_value)
-    """
-    arr = np.asarray(arr)
-    positions = np.asarray(positions)
-    groups = []
-    current_val = 0
-    start_idx = None
-    last_idx = None
-    for i, x in enumerate(arr):
-        if x <= 0:
-            continue
-        if current_val == 0:
-            # start first group
-            current_val = x
-            start_idx = last_idx = i
-            continue
-        # check if we stay in same group
-        same_val = (x == current_val)
-        pos_gap = positions[i] - positions[last_idx]
-        if same_val and abs(pos_gap) <= min_pos_gap:
-            # continue group
-            last_idx = i
+        # ONLY fill df if this event is a release event
+        if isinstance(event_closest, str) and event_closest.startswith("release"):
+            df.at[i, "idx"] = idx_closest
+            df.at[i, "released_odour"] = extract_int(event_closest)
+            df.at[i, "pos"] = pos_closest
         else:
-            # NEW: only start a new group if there is at least one zero between
-            # in ideal scenario there should be three zeros, but there are some edge cases with only one zero between
-            if np.any(arr[last_idx + 1:i] == 0):
-                # close previous & start new
-                groups.append((start_idx, last_idx, current_val))
-                current_val = x
-                start_idx = last_idx = i
-            else:
-                # no zero between -> keep extending current group
-                last_idx = i
-    # close last group
-    if current_val != 0:
-        groups.append((start_idx, last_idx, current_val))
-    return groups
+            df.at[i, "idx"] = idx_closest # Only store possible candidates
+
+    # Step 3: Clean df by removing neagtive pos rows
+    last_negative_idx = df[df["pos"] < 0].index.max() -1 # keep the last one, just in case
+    df = df.loc[last_negative_idx+1:].reset_index(drop=True)
+
+    # Step 4: Find closest release events. If there are multiple release, use earliest
+    for i in reversed(df.index):
+        if ~np.isnan(df.at[i, "released_odour"]):
+            continue # we have already identified odour
+        else:
+            closed_idx = int(df.at[i, "idx"])
+            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, pos_window = lm_size /2, event_priority=["release"], choose = "earlist")
+            if odour is not None:
+                df.at[i, "idx"] = chosen_idx
+                df.at[i, "released_odour"] = odour
+                df.at[i, "pos"] = chosen_pos
+
+    # Step 5: Find closest prepare and flush events.
+    for i in reversed(df.index):
+        if ~np.isnan(df.at[i, "released_odour"]):
+            continue # we have already identified odour
+        else:
+            closed_idx = int(df.at[i, "idx"])
+            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, pos_window = lm_size /2, event_priority=["prepare", "flush"], choose = "average")
+            if odour is not None:
+                df.at[i, "idx"] = chosen_idx
+                df.at[i, "released_odour"] = odour
+                df.at[i, "pos"] = chosen_pos
+
+    # Step 6: Clean the output format
+    result = []
+    for i, row in df.iterrows():
+        idx = int(row["idx"])
+        if i == 0 and np.isnan(row["released_odour"]):
+            continue # this means nothing was released. We check this at Step 7
+        # get timestamp from summary dataframe
+        ts = tmp.loc[int(idx), "time"]
+
+        entry = [ts, float(row["pos"]), int(idx), int(row["released_odour"])]
+        result.append(entry)
+
+    # Step 7: Add the first odour stimulus that VR ABCD forgot
+    # sometimes the VR drops the first release event, check for that and add first element if needed
+    first_release = extract_int(ses_settings['trial']['landmarks'][0][0]['odour'])
+    if first_release != result[0][3]:
+        result = [[pd.NaT, np.nan, -1, first_release]] + result
+
+    result_df = pd.DataFrame(result,
+                              columns=["time", "Position", "Index", "Odour"]
+                              ).set_index("time")
+
+    return result_df
+
+def find_closest_events(
+    df: pd.DataFrame,
+    idx: int,
+    pos_window: float = 3.0,
+    event_priority=["release", "prepare", "flush"],
+    choose = 'earlist',
+    verbose = False,
+):
+    """
+    For each idx, find the nearest event based on Position.
+
+    For each event type in priority:
+        - Search in a zigzag pattern around the idx:
+          row, row-1, row+1, row-2, row+2, ...
+        - At each candidate row j:
+            * Require |Position(j) - pos0| <= pos_window
+            * Skip odour 0
+        - Stop searching in a direction once Position falls outside pos_window
+        - Each candidate row is saved into a list candidate_idx
+    
+    Final steps choose representative idx from candidate_idx based on: choose
+    """
+    events_col = df["Events"].astype("string")
+    n_rows = len(df)
+    pos0 = df.at[idx, "Position"]
+
+    candidate_idx = []
+    chosen_idx = None
+    chosen_event = None
+    odour = None
+    chosen_pos = None
+
+    for ev_type in event_priority:
+        # ---------- Zigzag search around idx ----------
+        offset = 0
+        up_active = True
+        down_active = True
+
+        while up_active or down_active:
+            # Check current / upward direction: idx - offset
+            if up_active:
+                j_up = idx - offset
+                if j_up < 0:
+                    up_active = False
+                else:
+                    if abs(df.at[j_up, "Position"] - pos0) > pos_window:
+                        # we assume Position is monotonic, so further up is outside window
+                        up_active = False
+                    else:
+                        ev = events_col.iat[j_up]
+                        if ev is not None and not pd.isna(ev) and "odour0" not in ev:
+                            if ev_type in ev:
+                                candidate_idx.append(j_up)
+
+            # Check downward direction only for offset > 0 to avoid double-checking idx
+            if offset > 0 and down_active:
+                j_down = idx + offset
+                if j_down >= n_rows:
+                    down_active = False
+                else:
+                    if abs(df.at[j_down, "Position"] - pos0) > pos_window:
+                        # we assume Position is monotonic, so further down is outside window
+                        down_active = False
+                    else:
+                        ev = events_col.iat[j_down]
+                        if ev is not None and not pd.isna(ev) and "odour0" not in ev:
+                            if ev_type in ev:
+                                candidate_idx.append(j_down)
+
+            offset += 1  # expand zigzag radius
+
+    if len(candidate_idx) > 0:
+        if choose == 'earlist':
+            chosen_idx = min(candidate_idx)
+            chosen_event = events_col.iat[chosen_idx]
+            chosen_pos = df.at[chosen_idx, "Position"]
+            odour = extract_int(chosen_event)
+        elif choose == 'average':
+            center_idx = candidate_idx[0]
+            chosen_idx = int(np.average(candidate_idx))
+
+            chosen_pos = df.at[chosen_idx, "Position"]
+            odour = extract_int(events_col.iat[center_idx])
+            chosen_event = 'Estimated release: odour' + str(odour)
+        else:
+            raise NotImplementedError
+
+        if verbose:
+            if chosen_event is None:
+                raise ValueError(
+                    f"No event of types {event_priority} found within ±{pos_window} "
+                    f"for expected release event around idx: {idx}."
+                )
+
+    return chosen_idx, chosen_event, odour, chosen_pos
+
+def sanity_check_parsing(sess_dataframe, ses_settings):
+
+    lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
+    event_ids = release_df["Odour"].to_numpy(dtype=int)
+    n_ids = len(event_ids) - (len(event_ids) % 10)
+    event_ids = event_ids[:n_ids]
+    #reshape ids to have 10 columns (one for each target)
+    event_ids_reshaped = event_ids.reshape(-1, 10)
+    event_ids_reshaped
+
+    plt.figure(figsize=(10,4))
+    plt.imshow(event_ids_reshaped, aspect='auto', cmap='viridis_r', interpolation='none')
+    plt.clim(0, np.max(event_ids))
+    plt.colorbar()
+    plt.title('Released Odour IDs')
+    plt.xlabel('Landmark Index')
+    plt.ylabel('Lap')
+    plt.show()
