@@ -1530,11 +1530,17 @@ def find_closest_events(
             chosen_pos = df.at[chosen_idx, "Position"]
             odour = extract_int(chosen_event)
         elif choose == 'average':
-            avg = sum(candidate_idx) / len(candidate_idx)
-            chosen_idx = min(candidate_idx, key=lambda x: abs(x - avg))
-            chosen_event = events_col.iat[chosen_idx]
+            # avg = sum(candidate_idx) / len(candidate_idx)
+            # chosen_idx = min(candidate_idx, key=lambda x: abs(x - avg))
+            # chosen_event = events_col.iat[chosen_idx]
+            # chosen_pos = df.at[chosen_idx, "Position"]
+            # odour = extract_int(chosen_event)
+            center_idx = candidate_idx[0]
+            chosen_idx = int(np.average(candidate_idx))
+
             chosen_pos = df.at[chosen_idx, "Position"]
-            odour = extract_int(chosen_event)
+            odour = extract_int(events_col.iat[center_idx])
+            chosen_event = 'Estimated release: odour' + str(odour)
         else:
             raise NotImplementedError
 
