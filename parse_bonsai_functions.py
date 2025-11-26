@@ -1552,3 +1552,23 @@ def find_closest_events(
                 )
 
     return chosen_idx, chosen_event, odour, chosen_pos
+
+def sanity_check_parsing(sess_dataframe, ses_settings):
+
+    lick_position, lick_times, reward_times, reward_positions, release_df, release_times, release_events = get_event_parsed(sess_dataframe, ses_settings)
+    event_ids = np.array([], dtype=int)
+    event_ids = np.append(event_ids, [release_events[i][3] for i in range(len(release_events))])
+    n_ids = len(event_ids) - (len(event_ids) % 10)
+    event_ids = event_ids[:n_ids]
+    #reshape ids to have 10 columns (one for each target)
+    event_ids_reshaped = event_ids.reshape(-1, 10)
+    event_ids_reshaped
+
+    plt.figure(figsize=(10,4))
+    plt.imshow(event_ids_reshaped, aspect='auto', cmap='viridis_r', interpolation='none')
+    plt.clim(0, np.max(event_ids))
+    plt.colorbar()
+    plt.title('Released Odour IDs')
+    plt.xlabel('Landmark Index')
+    plt.ylabel('Lap')
+    plt.show()
