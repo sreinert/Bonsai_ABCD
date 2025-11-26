@@ -178,6 +178,7 @@ def plot_ethogram(sess_dataframe,ses_settings):
     plt.show()
 
 def calc_hit_fa(sess_dataframe,ses_settings):
+    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
 
     lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
 
@@ -187,21 +188,21 @@ def calc_hit_fa(sess_dataframe,ses_settings):
 
     licked_target = np.zeros(len(target_positions))
     for idx, pos in enumerate(target_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + 3))):
+        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
             licked_target[idx] = 1
 
     licked_distractor = np.zeros(len(distractor_positions))
     for idx, pos in enumerate(distractor_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + 3))):
+        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
             licked_distractor[idx] = 1
 
     licked_all = np.zeros(len(release_df))
     rewarded_all = np.zeros(len(release_df))
     release_positions = release_df['Position'].to_numpy()
     for idx, pos in enumerate(release_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + 3))):
+        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
            licked_all[idx] = 1
-        if np.any((reward_positions > pos) & (reward_positions < (pos + 3))):
+        if np.any((reward_positions > pos) & (reward_positions < (pos + lm_size))):
            rewarded_all[idx] = 1
     
     # TODO: should we discard this with updated release time estimation?
@@ -1095,7 +1096,8 @@ def plot_sw_state_ratio(sess_dataframe, ses_settings):
     plt.show()
 
 def estimate_release_events(sess_dataframe, ses_settings):
-    lm_gap = 3 + ses_settings['trial']['offsets'][0]
+    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    lm_gap = lm_size + ses_settings['trial']['offsets'][0]
 
     tmp = sess_dataframe.reset_index(drop=False, inplace=False)
     release_subset = tmp[tmp['Events'].str.contains('release', na=False) & ~tmp['Events'].str.contains('odour0', na=False)][['Events', 'Position']]
@@ -1140,7 +1142,7 @@ def estimate_release_events(sess_dataframe, ses_settings):
             continue # we have already identified odour
         else:
             closed_idx = int(df.at[i, "idx"])
-            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, event_priority=["release"], choose = "earlist")
+            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, pos_window = lm_size /2, event_priority=["release"], choose = "earlist")
             if odour is not None:
                 df.at[i, "idx"] = chosen_idx
                 df.at[i, "released_odour"] = odour
@@ -1152,7 +1154,7 @@ def estimate_release_events(sess_dataframe, ses_settings):
             continue # we have already identified odour
         else:
             closed_idx = int(df.at[i, "idx"])
-            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, event_priority=["prepare", "flush"], choose = "average")
+            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, pos_window = lm_size /2, event_priority=["prepare", "flush"], choose = "average")
             if odour is not None:
                 df.at[i, "idx"] = chosen_idx
                 df.at[i, "released_odour"] = odour
