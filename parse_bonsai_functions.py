@@ -204,6 +204,12 @@ def calc_hit_fa(sess_dataframe,ses_settings):
            licked_all[idx] = 1
         if np.any((reward_positions > pos) & (reward_positions < (pos + lm_size))):
            rewarded_all[idx] = 1
+    
+    #sometimes the VR drops the first release event, check for that and add a 0 as a first element if needed
+    # first_release = ses_settings['trial']['landmarks'][0][0]['odour']
+    # if not first_release in release_events['Events'].values[0]:
+    #     licked_all = np.insert(licked_all, 0, 0)
+    #     rewarded_all = np.insert(rewarded_all, 0, 0)
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
     fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
@@ -275,7 +281,7 @@ def calc_transition_matrix(sess_dataframe,ses_settings):
     lick_sequence = lm_id[licked_all==1]
     num_landmarks = int(np.max(lm_id)) + 1
     ideal_sequence = lm_id[ideal_licks==1]
-
+        
     transition_matrix = np.zeros((num_landmarks, num_landmarks))
     lick_tm = np.zeros((num_landmarks, num_landmarks))
     ideal_tm = np.zeros((num_landmarks, num_landmarks))
