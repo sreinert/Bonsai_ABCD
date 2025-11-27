@@ -158,7 +158,9 @@ def plot_ethogram(sess_dataframe,ses_settings):
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
     release_df = estimate_release_events(sess_dataframe, ses_settings)
     release_times = release_df.index.tolist() # time
+    release_times = release_times[1:]  # remove first release for plotting because sometimes the timestamp is NaN
     release_positions = release_df["Position"].tolist()
+    release_positions = release_positions[1:]  # remove first release for plotting because sometimes the timestamp is NaN   
 
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
 
@@ -1017,11 +1019,11 @@ def calc_sw_state_ratio(sess_dataframe, ses_settings):
         state1_sw = np.zeros([num_laps,10])
         state2_sw = np.zeros([num_laps,10])
         state_diff_1 = np.zeros([num_laps,10])
-        state_dprime = np.zeros([num_laps,10])
         for i in range(num_laps):
             if i < window:
                 state1_sw[i] = np.nan
                 state2_sw[i] = np.nan
+                state_diff_1[i] = np.nan
 
             else:
                 lap_range = range(i-window, i)
@@ -1051,6 +1053,9 @@ def calc_sw_state_ratio(sess_dataframe, ses_settings):
                 state1_sw[i] = np.nan
                 state2_sw[i] = np.nan
                 state3_sw[i] = np.nan
+                state_diff_1[i] = np.nan
+                state_diff_2[i] = np.nan
+                state_diff_3[i] = np.nan
 
             else:
                 lap_range = range(i-window, i)
@@ -1175,7 +1180,7 @@ def estimate_release_events(sess_dataframe, ses_settings):
     # sometimes the VR drops the first release event, check for that and add first element if needed
     first_release = extract_int(ses_settings['trial']['landmarks'][0][0]['odour'])
     if first_release != result[0][3]:
-        result = [[pd.NaT, np.nan, -1, first_release]] + result
+        result = [[pd.NaT, 0, -1, first_release]] + result
 
     result_df = pd.DataFrame(result,
                               columns=["time", "Position", "Index", "Odour"]
