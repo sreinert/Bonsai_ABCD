@@ -541,16 +541,19 @@ def calc_seq_fraction(sess_dataframe,ses_settings,test='transition'):
     else:
         raise ValueError("Invalid test type. Choose from 'transition', 'control', or 'ideal'.")
 
+    aa_prob = test_prob[0,0]
     ab_prob = test_prob[0,1]
     ac_prob = test_prob[0,2]
+    bb_prob = test_prob[1,1]
     bc_prob = test_prob[1,2]
     ba_prob = test_prob[1,0]
     ca_prob = test_prob[2,0]
     cb_prob = test_prob[2,1]
+    cc_prob = test_prob[2,2]
 
-    perf_a = ab_prob / (ab_prob + ac_prob)
-    perf_b = bc_prob / (bc_prob + ba_prob)
-    perf_c = ca_prob / (ca_prob + cb_prob)
+    perf_a = safe_divide(ab_prob, np.sum(test_prob[0,:3])) #ignore distractor column(s)
+    perf_b = safe_divide(bc_prob, np.sum(test_prob[1,:3]))
+    perf_c = safe_divide(ca_prob, np.sum(test_prob[2,:3]))
 
     performance = np.mean([perf_a, perf_b, perf_c])
 
