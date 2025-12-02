@@ -710,19 +710,30 @@ def plot_sequencing_ABC(sess_dataframe,ses_settings):
     ideal_correct_seq = np.mean([ideal_ab_prob, ideal_bc_prob, ideal_ca_prob])
     ideal_incorrect_seq = np.mean([ideal_ac_prob, ideal_ba_prob, ideal_cb_prob])
 
+    #Calculate the maximum value across all data to set consistent y-axis max
+    all_values = [correct_seq, incorrect_seq, ctrl_correct_seq, ctrl_incorrect_seq, 
+                  ideal_correct_seq, ideal_incorrect_seq]
+    y_max = max(all_values) * 1.1  #Add 10% padding at the top for space
+
     plt.figure(figsize=(8, 4))
     plt.subplot(1, 3, 1)
     plt.bar([0, 1], [correct_seq, incorrect_seq], color=['green', 'red'])
     plt.title('Lick Sequence')
     plt.xticks([0, 1], ['Correct', 'Incorrect'])
+    plt.ylim(0, y_max)  
+    
     plt.subplot(1, 3, 2)
     plt.bar([0, 1], [ctrl_correct_seq, ctrl_incorrect_seq], color=['green', 'red'])
     plt.title('Control Sequence')
     plt.xticks([0, 1], ['Correct', 'Incorrect'])
+    plt.ylim(0, y_max)  
+    
     plt.subplot(1, 3, 3)
     plt.bar([0, 1], [ideal_correct_seq, ideal_incorrect_seq], color=['green', 'red'])
     plt.title('Ideal Sequence')
     plt.xticks([0, 1], ['Correct', 'Incorrect'])
+    plt.ylim(0, y_max)  
+    
     plt.tight_layout()
     plt.show()
 
