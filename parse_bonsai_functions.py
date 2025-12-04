@@ -201,10 +201,11 @@ def calc_hit_fa(sess_dataframe,ses_settings):
     licked_all = np.zeros(len(release_df))
     rewarded_all = np.zeros(len(release_df))
     release_positions = release_df['Position'].to_numpy()
+    tolerance = 0.2
     for idx, pos in enumerate(release_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+        if np.any((lick_position > pos - tolerance) & (lick_position < (pos + lm_size + tolerance))):
            licked_all[idx] = 1
-        if np.any((reward_positions > pos) & (reward_positions < (pos + lm_size))):
+        if np.any((reward_positions > pos - tolerance) & (reward_positions < (pos + lm_size + tolerance))):
            rewarded_all[idx] = 1
     
     #sometimes the VR drops the first release event, check for that and add a 0 as a first element if needed
@@ -793,6 +794,10 @@ def plot_full_corr(sess_dataframe,ses_settings):
         #extend the array to make it divisible by 10
         licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
     licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
+    if rewarded_all.shape[0] % 10 != 0:
+        #extend the array to make it divisible by 10
+        rewarded_all = np.pad(rewarded_all, (0, 10 - (rewarded_all.shape[0] % 10)), 'constant')
+    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / 10).astype(int), 10)
     if was_target.shape[0] % 10 != 0:
         #extend the array to make it divisible by 10
         was_target = np.pad(was_target, (0, 10 - (was_target.shape[0] % 10)), 'constant')
@@ -802,16 +807,21 @@ def plot_full_corr(sess_dataframe,ses_settings):
         all_lms = np.pad(all_lms, (0, 10 - (all_lms.shape[0] % 10)), 'constant')
     all_lms_reshaped = all_lms.reshape(np.round(all_lms.shape[0] / 10).astype(int), 10)
 
-    plt.figure(figsize=(10,4))
-    plt.subplot(2, 1, 1)
+    plt.figure(figsize=(10,6))
+    plt.subplot(3, 1, 1)
     plt.imshow(was_target_reshaped, aspect='auto', cmap='viridis', interpolation='none')
     plt.clim(0, len(goals))
     plt.title('Landmark ID (Full Corridor)')
     plt.colorbar()
-    plt.subplot(2, 1, 2)
+    plt.subplot(3, 1, 2)
     plt.imshow(licked_all_reshaped, aspect='auto', cmap='viridis', interpolation='none')
     plt.clim(0, 1)
     plt.title('Licked All (Full Corridor)')
+    plt.colorbar()
+    plt.subplot(3, 1, 3)
+    plt.imshow(rewarded_all_reshaped, aspect='auto', cmap='viridis', interpolation='none')
+    plt.clim(0, 1)
+    plt.title('Rewarded All (Full Corridor)')
     plt.colorbar()
     plt.tight_layout()
     plt.show()
