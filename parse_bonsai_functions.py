@@ -1316,3 +1316,19 @@ def sanity_check_parsing(sess_dataframe, ses_settings):
     plt.xlabel('Landmark Index')
     plt.ylabel('Lap')
     plt.show()
+
+def threshold_lick_speed(sess_dataframe, speed_threshold=0.3):
+
+    treadmill_speed = sess_dataframe['Treadmill'].to_numpy()
+    lick_events = sess_dataframe['Licks'].to_numpy()
+
+    # Create a boolean mask where speed is below threshold
+    low_speed_mask = treadmill_speed < speed_threshold
+
+    # Apply the mask to lick events
+    filtered_licks = lick_events * low_speed_mask
+
+    # Update the session dataframe with filtered licks
+    sess_dataframe['Licks'] = filtered_licks
+
+    return sess_dataframe
