@@ -438,10 +438,10 @@ def plot_conditional_matrix(sess_dataframe,ses_settings):
     n_lms = transition_prob.shape[1]
     if n_goals == 3:
         y_labels = ['A', 'B', 'C']
-        x_labels = ['A', 'B', 'C', 'Dist']
+        x_labels = [str(i) for i in range(n_lms)]
     elif n_goals == 4:
         y_labels = ['A', 'B', 'C', 'D']
-        x_labels = ['A', 'B', 'C', 'D', 'Dist']
+        x_labels = [str(i) for i in range(n_lms)]
     else:
         y_labels = [str(i) for i in range(n_goals)]
         x_labels = [str(i) for i in range(n_lms)]
