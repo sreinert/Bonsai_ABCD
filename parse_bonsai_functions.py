@@ -986,14 +986,41 @@ def give_state_id(sess_dataframe,ses_settings):
             else:
                 defining_goal_2 = goals[2]
 
-    for i in range(0,num_laps-1):
-        if rewarded_all_reshaped[i,defining_goal_1] == 1:
-            state_id[i+1] = 1
+        for i in range(0,num_laps-1):
+            if rewarded_all_reshaped[i,defining_goal_1] == 1:
+                state_id[i+1] = 1
 
-        if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
-            state_id[i+1] = 0
-        elif state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 0:
-            state_id[i+1] = state_id[i]
+            if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
+                state_id[i+1] = 0
+            elif state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 0:
+                state_id[i+1] = state_id[i]
+
+    elif laps_needed == 3:
+        flips = np.where(np.diff(goals) < 0)[0]
+        if len(flips) == 3:
+            defining_goal_1 = goals[flips[0]]
+            defining_goal_2 = goals[flips[1]]
+            defining_goal_3 = goals[flips[2]]
+        else:
+            defining_goal_1 = goals[flips[0]]
+            defining_goal_2 = goals[flips[1]]
+            if goals[-1] - goals[0] > 0:
+                defining_goal_3 = goals[-1]
+            else:
+                defining_goal_3 = goals[2]
+
+        for i in range(0,num_laps-1):
+            if rewarded_all_reshaped[i,defining_goal_1] == 1:
+                state_id[i+1] = 1
+
+            if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
+                state_id[i+1] = 2
+            elif state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 0:
+                state_id[i+1] = state_id[i]
+            elif state_id[i]==2 and rewarded_all_reshaped[i,defining_goal_3] == 1:
+                state_id[i+1] = 0
+            elif state_id[i]==2 and rewarded_all_reshaped[i,defining_goal_3] == 0:
+                state_id[i+1] = state_id[i]
 
     return state_id
 
@@ -1016,9 +1043,9 @@ def plot_licks_per_state(sess_dataframe, ses_settings):
         state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
 
     elif laps_needed == 3:
-        state1_laps = licked_all[np.where(state_id == 0)[0],:]
-        state2_laps = licked_all[np.where(state_id == 1)[0],:]
-        state3_laps = licked_all[np.where(state_id == 2)[0],:]
+        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
+        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
+        state3_laps = licked_all_reshaped[np.where(state_id == 2)[0],:]
 
         state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
         state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
