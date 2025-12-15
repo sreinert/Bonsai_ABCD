@@ -641,10 +641,81 @@ def calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
     return performance, perf_a, perf_b, perf_c, perf_d
 
+def calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='transition'):
+
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe,ses_settings)
+
+    if len(goals) != 4:
+        raise ValueError("Stable sequencing performance calculation is only implemented for 4 goals.")
+    
+    if test == 'transition':
+        test_prob = transition_prob
+    elif test == 'control':
+        test_prob = transition_prob
+        sorted_goals = np.sort(goals)
+        goals_new = [sorted_goals[sorted_goals > g][0] if np.any(sorted_goals > g) else sorted_goals[0]
+                    for g in np.roll(goals,1)]
+        goals = goals_new.copy()
+    elif test == 'ideal':
+        test_prob = ideal_prob
+    else:
+        raise ValueError("Invalid test type. Choose from 'transition', 'control', or 'ideal'.")
+
+    a = goals[0]
+    b = goals[1]
+    c = goals[2]
+    d = goals[3]
+
+    ab_prob = test_prob[0,b]
+    ac_prob = test_prob[0,c]
+    ad_prob = test_prob[0,d]
+    bc_prob = test_prob[1,c]
+    ba_prob = test_prob[1,a]
+    bd_prob = test_prob[1,d]
+    ca_prob = test_prob[2,a]
+    cb_prob = test_prob[2,b]
+    cd_prob = test_prob[2,d]
+    dc_prob = test_prob[3,c]
+    db_prob = test_prob[3,b]
+    da_prob = test_prob[3,a]
+
+    #one performance metric is just comparing correct to incorrect (but relevant)
+    # perf_a = ab_prob / (ab_prob + ac_prob + ad_prob)
+    # perf_b = bc_prob / (bc_prob + ba_prob + bd_prob)
+    # perf_c = cd_prob / (ca_prob + cb_prob + cd_prob)
+    # perf_d = da_prob / (dc_prob + db_prob + da_prob)
+    #the other is comparing correct to all other transitions
+    perf_a = safe_divide(ab_prob, np.sum(test_prob[0,:]))
+    perf_b = safe_divide(bc_prob, np.sum(test_prob[1,:]))
+    perf_c = safe_divide(cd_prob, np.sum(test_prob[2,:]))
+    perf_d = safe_divide(da_prob, np.sum(test_prob[3,:]))
+
+    performance = np.nanmean([perf_a, perf_b, perf_c, perf_d])
+
+    return performance, perf_a, perf_b, perf_c, perf_d
+
 def plot_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
     performance, perf_a, perf_b, perf_c, perf_d = calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition')
     perf_ctrl, perf_a_ctrl, perf_b_ctrl, perf_c_ctrl, perf_d_ctrl = calc_stable_seq_fraction(sess_dataframe,ses_settings,test='control')
+
+    plt.figure(figsize=(6, 4))
+    plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a, perf_b, perf_c, perf_d], color=['blue', 'orange', 'green', 'purple'])
+    #add a dashed bar plot for control
+    plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a_ctrl, perf_b_ctrl, perf_c_ctrl, perf_d_ctrl], color=['blue', 'orange', 'green', 'purple'], alpha=0.3, hatch='//')
+    plt.ylim(0, 1)
+    plt.ylabel('Fraction of Correct Transitions')
+    plt.title('Sequencing Performance per Transition')
+    plt.show()
+
+    print(f'Sequencing Performance: {performance*100:.2f}%, ({perf_a*100:.2f}%, {perf_b*100:.2f}%, {perf_c*100:.2f}%, {perf_d*100:.2f}%)')
+    print(f'Control Performance: {perf_ctrl*100:.2f}%, ({perf_a_ctrl*100:.2f}%, {perf_b_ctrl*100:.2f}%, {perf_c_ctrl*100:.2f}%, {perf_d_ctrl*100:.2f}%)')
+
+def plot_stable_seq_fraction_new(sess_dataframe,ses_settings):
+
+    performance, perf_a, perf_b, perf_c, perf_d = calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='transition')
+    perf_ctrl, perf_a_ctrl, perf_b_ctrl, perf_c_ctrl, perf_d_ctrl = calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='control')
 
     plt.figure(figsize=(6, 4))
     plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a, perf_b, perf_c, perf_d], color=['blue', 'orange', 'green', 'purple'])

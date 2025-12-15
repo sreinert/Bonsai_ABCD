@@ -2,15 +2,11 @@ import os
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
-import h5py
+import pandas as pd
+from skimage.segmentation import find_boundaries
 from scipy.signal import find_peaks
 from sklearn.preprocessing import normalize
-
-from barcode import barcode_util
-from barcode import extract_barcodes
-import pickle
-import parse_session_functions
-from suite2p.extraction import dcnv
+# from suite2p.extraction import dcnv
 import scipy.stats as stats
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.patches as patches
@@ -19,6 +15,9 @@ import pandas as pd
 #suppress the warnings
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+## New version
+
 
 ## Loading functions 
 
@@ -56,6 +55,8 @@ def get_dff(f,fneu, frame_ix, ops):
     """
     Calculate the dF/F for the imaging data (suite2p default method).
     """
+    from suite2p.extraction import dcnv
+
     all_f = f[:, frame_ix['valid_frames']]
     all_fneu = fneu[:, frame_ix['valid_frames']]
     all_cells_f_corr = all_f - all_fneu*0.7
@@ -86,6 +87,16 @@ def show_fov(ops, seg):
     plt.tight_layout()
     plt.show()
 
+def concat_masks(image_mask: pd.Series):
+    masks = np.zeros(image_mask.loc[0].shape)
+    for n in range(len(image_mask)):
+        tmp = image_mask.loc[n]
+
+        mask_bool = find_boundaries((tmp > 0).astype(int), mode='inner').astype(bool)
+        write_here = mask_bool & (masks == 0)
+        masks[write_here] = n + 1
+    return masks
+
 def show_cell_fov(cell,ops,seg):
     """
     Show the cell's field of view, as a zoom in and the full field of view.
@@ -114,6 +125,37 @@ def show_cell_fov(cell,ops,seg):
 
     ax[1].imshow(meanImg, cmap='gray')
     ax[1].imshow(cell_mask,alpha=bool,cmap='jet')
+    ax[1].set_title(f'Cell {cell} in full field of view')
+    plt.tight_layout()
+    plt.show()
+
+# new version 
+def show_cell_fov_new(cell:int, meanImg: np.array, mask: np.array):
+    """
+    Show the cell's field of view, as a zoom in and the full field of view.
+    This is similar to show_cell_fov, but uses different input formats.
+    """
+    mask_br = np.where(
+        mask == cell, 1.0,          # exact match
+        np.where(mask != 0, -1, 0) # nonzero but not match → 0.5, else 0
+    )
+    mask_bool = (mask_br != 0).astype(float)
+
+    #create a crop box around the cell
+    x, y = np.where(mask == cell)
+    x_min = max(0, x.min() - 10)
+    x_max = min(mask.shape[0], x.max() + 10)
+    y_min = max(0, y.min() - 10)
+    y_max = min(mask.shape[1], y.max() + 10)
+    crop_mask = meanImg[x_min:x_max, y_min:y_max]
+
+    fig, ax = plt.subplots(1,2, figsize=(10,5))
+    ax[0].imshow(crop_mask, cmap='gray')
+    ax[0].imshow(mask_br[x_min:x_max, y_min:y_max], alpha=mask_bool[x_min:x_max, y_min:y_max], cmap='bwr')
+    ax[0].set_title(f'Cell {cell} zoomed in')
+
+    ax[1].imshow(meanImg, cmap='gray')
+    ax[1].imshow(mask_br,alpha=mask_bool,cmap='bwr')
     ax[1].set_title(f'Cell {cell} in full field of view')
     plt.tight_layout()
     plt.show()
@@ -255,8 +297,6 @@ def extract_position_tuning(dF, cell, stage, session, frame_rate=45, bins=200, p
     Extract the position tuning for a specific cell. 
     The plotting option shows the firing rate as a function of position (average and split into states if applicable).
     """
-    assert session['num_laps'] > 1, 'This function has not been adapted to continuous corridors yet.'
-    
     dF_cell = extract_cell_trace(dF, cell, plot=False, session=session)
     lick_rate = extract_lick_rate(dF, cell, session)
 
@@ -495,7 +535,7 @@ def extract_modd_tuning(dF, cell, session, frame_rate=45, window_size=[-1, 2], p
                 plt.title('Goal D')
     return landmark_frames, all_lm_frames, modd_source
 
-def extract_lm_tuning(dF, cell, session, stage, frame_rate=45, window_size=[-1, 2], plot=False):
+def extract_lm_tuning(dF, cell, session, frame_rate=45, window_size=[-1, 2], plot=False):
     """Extract the tuning of the cell's activity to landmarks.
     This function finds the first frame where the position is greater than or equal to the landmark position for each lap.
     It then extracts the dF/F trace for the cell around these landmark frames.
@@ -503,32 +543,21 @@ def extract_lm_tuning(dF, cell, session, stage, frame_rate=45, window_size=[-1, 
 
     lm_entries = []
     for l in range(session['num_laps']):
-        if session['num_laps'] == 1:
-            lap_frames = np.where(session['lap_idx']==l+1)[0]
-        else:
-            lap_frames = np.where(session['lap_idx']==l)[0]
+        lap_frames = np.where(session['lap_idx']==l+1)[0]
         lap_pos = session['position'][lap_frames]
         lap_pos = lap_pos[3:]  # Remove first 3 frames to avoid NaN values
-        if session['num_laps'] == 1:
-            for lm in session['all_landmarks']: 
-                if np.all(lap_pos < lm[0]):
-                    print(f"Landmark {lm[0]} not found in lap {l+1}")
-                    continue
-                lm_pos = np.where((lap_pos >= lm[0]))[0][0]
-                lm_ix = lap_frames[lm_pos]
-                lm_entries.append(lm_ix)
-        else:
-            for lm in session['landmarks']: # might also consider non-visited lms
-                #find the first index where the lap position is greater than or equal to the landmark position
-                if np.all(lap_pos < lm[0]):
-                    print(f"Landmark {lm[0]} not found in lap {l+1}")
-                    continue
-                lm_pos = np.where((lap_pos >= lm[0]))[0][0]
-                lm_ix = lap_frames[lm_pos]
-                lm_entries.append(lm_ix)
+        # for lm in session['landmarks']: # might also consider non-visited lms
+        for lm in session['all_landmarks']:
+            #find the first index where the lap position is greater than or equal to the landmark position
+            if np.all(lap_pos < lm[0]):
+                print(f"Landmark {lm[0]} not found in lap {l+1}")
+                continue
+            lm_pos = np.where((lap_pos >= lm[0]))[0][0]
+            lm_ix = lap_frames[lm_pos]
+            lm_entries.append(lm_ix+3)
     lm_entries = np.array(lm_entries)
     num_lms = len(lm_entries)
-    
+
     dF_cell = extract_cell_trace(dF, cell, plot=False, session=session)
     window_start = window_size[0] * frame_rate
     window_end = window_size[1] * frame_rate
@@ -539,8 +568,8 @@ def extract_lm_tuning(dF, cell, session, stage, frame_rate=45, window_size=[-1, 
     goal_b = session['goal_idx'][1]
     goal_c = session['goal_idx'][2]
     goal_d = session['goal_idx'][3]
-    unique_lms = len(np.unique(session['all_lms'])) # works for single and multiple laps
-    # unique_lms = len(np.unique(session['lm_idx']))-1
+    unique_lms = len(np.unique(session['all_lms'])) #TODO
+    # unique_lms = len(np.unique(session['lm_idx']))-1  # frame idx before first lm is 0
 
     landmark_frames = np.zeros((unique_lms, window_frames))
     if session['laps_needed'] > 1:
@@ -550,13 +579,13 @@ def extract_lm_tuning(dF, cell, session, stage, frame_rate=45, window_size=[-1, 
             state3_frames = np.zeros((unique_lms, window_frames))
     std_frames = np.zeros((unique_lms, window_frames))
     sem_frames = np.zeros((unique_lms, window_frames))
-    
     for i in range(unique_lms):
-        # trials = np.zeros((num_lms//unique_lms, window_frames))
-        # for j,r in enumerate(lm_entries[i::unique_lms]):
         lm_subset = lm_entries[i::unique_lms]         # all entries for this landmark
         trials = np.zeros((len(lm_subset), window_frames))
         for j, r in enumerate(lm_subset):
+    # for i in range(unique_lms):
+    #     trials = np.zeros((num_lms//unique_lms, window_frames))
+    #     for j,r in enumerate(lm_entries[i::unique_lms]):
             trial_frames = np.arange(r + window_start, r + window_end)
             if np.min(trial_frames) < 0 or np.max(trial_frames) >= len(dF_cell):
                 trials[j,:] = np.full((window_frames,), np.nan)  # Fill with NaNs if out of bounds
@@ -566,10 +595,10 @@ def extract_lm_tuning(dF, cell, session, stage, frame_rate=45, window_size=[-1, 
         std_frames[i, :] = np.nanstd(trials, axis=0)
         sem_frames[i, :] = std_frames[i, :] / np.sqrt(trials.shape[0])
         if session['laps_needed'] > 1:
-            state1_frames[i, :] = np.nanmean(trials[session['state_id'][:len(lm_subset)] == 0], axis=0)
-            state2_frames[i, :] = np.nanmean(trials[session['state_id'][:len(lm_subset)] == 1], axis=0)
+            state1_frames[i, :] = np.nanmean(trials[session['state_id'] == 0], axis=0)
+            state2_frames[i, :] = np.nanmean(trials[session['state_id'] == 1], axis=0)
             if session['laps_needed'] == 3:
-                state3_frames[i, :] = np.nanmean(trials[session['state_id'][:len(lm_subset)] == 2], axis=0)
+                state3_frames[i, :] = np.nanmean(trials[session['state_id'] == 2], axis=0)
     if plot:
         plt.figure(figsize=(15, 5))
         if session['laps_needed'] > 1:
@@ -608,8 +637,6 @@ def extract_lick_tuning(dF, cell, session, frame_rate=45, window_size=[-1,2], pl
     """
     Extract the tuning of the cell's activity to licks.
     """
-    assert session['num_laps'] > 1, 'This function has not been adapted to continuous corridors yet.'
-
     dF_cell = extract_cell_trace(dF, cell, plot=False, session=session)
     window_start = window_size[0] * frame_rate
     window_end = window_size[1] * frame_rate
@@ -617,11 +644,9 @@ def extract_lick_tuning(dF, cell, session, frame_rate=45, window_size=[-1,2], pl
     window_frames = len(window)
 
     #find first licks inside each landmark
-    first_licks = np.zeros((session['num_laps'], len(session['all_landmarks'])), dtype=int)
-    # first_licks = np.zeros((session['num_laps'], len(session['landmarks'])), dtype=int)
+    first_licks = np.zeros((session['num_laps'], len(session['landmarks'])), dtype=int)
     for l in range(session['num_laps']):
-        for i, landmark in enumerate(session['all_landmarks']):
-        # for i, landmark in enumerate(session['landmarks']):
+        for i, landmark in enumerate(session['landmarks']):
             lap_licks = session['licks_per_lap_frames'][l]
             licks_in_landmark = lap_licks[(session['position'][lap_licks] > landmark[0]) & (session['position'][lap_licks] < landmark[1])]
             if len(licks_in_landmark) == 0:
@@ -723,17 +748,17 @@ def extract_goal_progress(dF,cell,session,frame_rate = 45,bins=90,plot=False,shu
     """
     #outlier detection and removal
     #calculate the frame intervals between rewards
-    frame_intervals = np.diff(session['rewards'])
+    frame_intervals = np.diff(session['reward_idx'])
     #get rid of reward outliers of under 2s (manual rewards, find better way of extracting in the future)
     outliers = np.where(frame_intervals < 2 * frame_rate)[0]
     #remove outliers from session['rewards']
-    session['rewards'] = np.delete(session['rewards'], outliers + 1)
-    reward_ix = session['rewards']
+    session['reward_idx'] = np.delete(session['reward_idx'], outliers + 1)
+    reward_ix = session['reward_idx']
 
     binned_phase_firing = np.zeros((len(reward_ix)-1, bins))
     ngoals = len(np.unique(session['goal_idx']))
     goal_rew_vec = np.arange(ngoals)
-    goal_rew_vec = np.tile(goal_rew_vec, len(session['rewards'])//ngoals)
+    goal_rew_vec = np.tile(goal_rew_vec, len(session['reward_idx'])//ngoals)
     goal_rew_vec = goal_rew_vec[:-1]
 
     dF_cell = extract_cell_trace(dF, cell, plot=False, session=session)
@@ -1070,7 +1095,7 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
         # Create a goal vector 
         if period == 'goal':
             # Events are organised based on whether they are a goal or not
-            if stages[c] < 7 and ('shuffled' in sessions[c]['sequence']):
+            if ('shuffled' in sessions[c]['sequence']):
                 assert ngoals == 2
                 goal_vec = np.empty((len(event_frames[c])), dtype=int)
                 for i in range(len(event_frames[c])):
@@ -1081,7 +1106,7 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
             else:
                 goal_vec = np.arange(ngoals)
                 goal_vec = np.tile(goal_vec, len(event_frames[c])//ngoals) 
-            
+
         elif period == 'landmark':
             # Events are organised based on the order in which they occur
             goal_vec = np.arange(ngoals)
@@ -1097,7 +1122,7 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
 
         # Bin firing between events
         for i in range(len(event_frames[c])-1):
-            phase_frames = np.arange(event_frames[c][i], event_frames[c][i+1]).astype(int)
+            phase_frames = np.arange(event_frames[c][i], event_frames[c][i+1])
             bin_edges = np.linspace(event_frames[c][i], event_frames[c][i+1], bins+1)
             phase_firing = dF_cell[phase_frames]
             if shuffle:
@@ -1234,3 +1259,4 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
         plt.tight_layout()
 
     return binned_all
+
