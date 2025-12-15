@@ -7,6 +7,7 @@ import numpy as np
 import datetime
 import json
 import re
+import os
 
 class AnalogData(Reader):
     def __init__(self, pattern, columns, channels, extension="bin"):
@@ -67,6 +68,12 @@ def load_data(base_path):
     buffer_reader = Csv("behav/analog-data/*", ["Seconds", "Value"])
     buffer_data = aeon.load(Path(base_path), buffer_reader)
 
+    if os.path.exists(Path(base_path) / "behav/current-landmark/"):
+        lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited"])
+        lm_data = aeon.load(Path(base_path), lm_reader)
+        lm_data = lm_data[lm_data['Visited'] == False]
+        sess_lm_data = lm_data.drop_duplicates(subset=['Position'], keep='first')
+
     sess_events_data = events_data[~events_data.index.duplicated(keep='first')]
     sess_lick_data = lick_data[~lick_data.index.duplicated(keep='first')]
     sess_treadmill_data = treadmill_data[~treadmill_data.index.duplicated(keep='first')]
@@ -74,19 +81,38 @@ def load_data(base_path):
     sess_reward_data = rewards_data[~rewards_data.index.duplicated(keep='first')]
     sess_buffer_data = buffer_data[~buffer_data.index.duplicated(keep='first')]
 
-    sess_data = {
-        'Events': pd.Series(sess_events_data['Value'], index=sess_events_data.index),
-        'Licks': pd.Series(sess_lick_data['Value'], index=sess_lick_data.index),
-        'Treadmill': pd.Series(sess_treadmill_data['Value'], index=sess_treadmill_data.index),
-        'Position': pd.Series(sess_position_data['Value.Length'], index=sess_position_data.index),
-        'Rewards': pd.Series(sess_reward_data['Value'], index=sess_reward_data.index),
-        'Buffer': pd.Series(sess_buffer_data['Value'], index=sess_buffer_data.index)
-    }
+    if os.path.exists(Path(base_path) / "behav/current-landmark/"):
+        sess_data = {
+            'Events': pd.Series(sess_events_data['Value'], index=sess_events_data.index),
+            'Licks': pd.Series(sess_lick_data['Value'], index=sess_lick_data.index),
+            'Treadmill': pd.Series(sess_treadmill_data['Value'], index=sess_treadmill_data.index),
+            'Position': pd.Series(sess_position_data['Value.Length'], index=sess_position_data.index),
+            'Rewards': pd.Series(sess_reward_data['Value'], index=sess_reward_data.index),
+            'Buffer': pd.Series(sess_buffer_data['Value'], index=sess_buffer_data.index),
+            'LM_Count': pd.Series(sess_lm_data['Count'], index=sess_lm_data.index),
+            'LM_Texture': pd.Series(sess_lm_data['Texture'], index=sess_lm_data.index),
+            'LM_Odour': pd.Series(sess_lm_data['Odour'], index=sess_lm_data.index),
+            'LM_Position': pd.Series(sess_lm_data['Position'], index=sess_lm_data.index)
+        }
+        #combine indices
+        all_ix = sess_events_data.index.union(sess_lick_data.index).union(sess_treadmill_data.index).union(sess_position_data.index).union(sess_reward_data.index).union(sess_buffer_data.index).union(sess_lm_data.index)
+        #take only unique indices
+        all_ix = all_ix.unique()
+    else:
+        sess_data = {
+            'Events': pd.Series(sess_events_data['Value'], index=sess_events_data.index),
+            'Licks': pd.Series(sess_lick_data['Value'], index=sess_lick_data.index),
+            'Treadmill': pd.Series(sess_treadmill_data['Value'], index=sess_treadmill_data.index),
+            'Position': pd.Series(sess_position_data['Value.Length'], index=sess_position_data.index),
+            'Rewards': pd.Series(sess_reward_data['Value'], index=sess_reward_data.index),
+            'Buffer': pd.Series(sess_buffer_data['Value'], index=sess_buffer_data.index)
+        }
+        #combine indices
+        all_ix = sess_events_data.index.union(sess_lick_data.index).union(sess_treadmill_data.index).union(sess_position_data.index).union(sess_reward_data.index).union(sess_buffer_data.index)
+        #take only unique indices
+        all_ix = all_ix.unique()
 
-    #combine indices
-    all_ix = sess_events_data.index.union(sess_lick_data.index).union(sess_treadmill_data.index).union(sess_position_data.index).union(sess_reward_data.index).union(sess_buffer_data.index)
-    #take only unique indices
-    all_ix = all_ix.unique()
+    
 
     sess_dataframe = pd.DataFrame(sess_data, index=all_ix)
     sess_dataframe['Position'] = sess_dataframe['Position'].interpolate()
@@ -104,7 +130,10 @@ def get_event_parsed(sess_dataframe, ses_settings):
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
 
-    release_df = estimate_release_events(sess_dataframe, ses_settings)
+    if 'LM_Count' in sess_dataframe.columns:
+        release_df = estimate_lm_events(sess_dataframe, ses_settings)
+    else:
+        release_df = estimate_release_events(sess_dataframe, ses_settings)
 
     return lick_position, lick_times, reward_times, reward_positions, release_df
 
@@ -156,7 +185,10 @@ def plot_ethogram(sess_dataframe,ses_settings):
     lick_times = sess_dataframe.index[sess_dataframe['Licks'].values > 0]
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
-    release_df = estimate_release_events(sess_dataframe, ses_settings)
+    if 'LM_Count' in sess_dataframe.columns:
+        release_df = estimate_lm_events(sess_dataframe, ses_settings)
+    else:
+        release_df = estimate_release_events(sess_dataframe, ses_settings)
     release_times = release_df.index.tolist() # time
     release_times = release_times[1:]  # remove first release for plotting because sometimes the timestamp is NaN
     release_positions = release_df["Position"].tolist()
@@ -201,18 +233,15 @@ def calc_hit_fa(sess_dataframe,ses_settings):
     licked_all = np.zeros(len(release_df))
     rewarded_all = np.zeros(len(release_df))
     release_positions = release_df['Position'].to_numpy()
-    tolerance = 0.2
     for idx, pos in enumerate(release_positions):
-        if np.any((lick_position > pos - tolerance) & (lick_position < (pos + lm_size + tolerance))):
+        #only take into account licks/rewards that came later than the release
+        licks = lick_position[lick_times >= release_df.index[idx]]
+        rewards = reward_positions[reward_times >= release_df.index[idx]]
+        #compare licks/rewards to position window (the LM position and logged position are offset by 3)
+        if np.any((licks > (pos - 3)) & (licks < (pos - 3 + lm_size))):
            licked_all[idx] = 1
-        if np.any((reward_positions > pos - tolerance) & (reward_positions < (pos + lm_size + tolerance))):
+        if np.any((rewards > (pos - 3)) & (rewards < (pos - 3 + lm_size))):
            rewarded_all[idx] = 1
-    
-    #sometimes the VR drops the first release event, check for that and add a 0 as a first element if needed
-    # first_release = ses_settings['trial']['landmarks'][0][0]['odour']
-    # if not first_release in release_events['Events'].values[0]:
-    #     licked_all = np.insert(licked_all, 0, 0)
-    #     rewarded_all = np.insert(rewarded_all, 0, 0)
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
     fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
@@ -1369,3 +1398,23 @@ def threshold_lick_speed(sess_dataframe, speed_threshold=0.3):
     sess_dataframe['Licks'] = filtered_licks
 
     return sess_dataframe
+
+def estimate_lm_events(sess_dataframe, ses_settings):
+
+    lm_position = sess_dataframe['LM_Position'].values[sess_dataframe['LM_Count'].values >= 0]
+
+    lm_time = sess_dataframe.index[sess_dataframe['LM_Count'].values >= 0]
+
+    lm_odour = sess_dataframe['LM_Odour'].values[sess_dataframe['LM_Count'].values >= 0]
+    lm_odour = [extract_int(odour) for odour in lm_odour]
+
+    lm_index = sess_dataframe['Buffer'].values[sess_dataframe['LM_Count'].values >= 0]
+
+    lm_df = pd.DataFrame({
+        'time': lm_time,
+        'Position': lm_position,
+        'Index': lm_index,
+        'Odour': lm_odour
+    }).set_index('time')
+
+    return lm_df
