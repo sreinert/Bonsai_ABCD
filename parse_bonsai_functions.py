@@ -119,7 +119,9 @@ def load_data(base_path):
     sess_dataframe['Treadmill'] = sess_dataframe['Treadmill'].interpolate()
     with pd.option_context("future.no_silent_downcasting", True):
         sess_dataframe['Licks'] = sess_dataframe['Licks'].fillna(False).astype(bool) 
-        # make it true or false by making nan to false
+
+    #crop sess_dataframe to when Buffer starts being non-zero
+    sess_dataframe = sess_dataframe[sess_dataframe['Buffer'] >= 0]
 
     return sess_dataframe
 
@@ -298,7 +300,7 @@ def find_targets_distractors(sess_dataframe,ses_settings):
         if pos in target_positions:
             was_target[idx] = 1
             lm_id[idx] = target_id[np.where(np.isclose(target_positions, pos))[0][0]]
-        else:
+        elif pos in distractor_positions:
             was_target[idx] = 0
             lm_id[idx] = distractor_id[np.where(np.isclose(distractor_positions, pos))[0][0]] + len(rew_odour)  #offset distractor IDs
 
@@ -1416,5 +1418,15 @@ def estimate_lm_events(sess_dataframe, ses_settings):
         'Index': lm_index,
         'Odour': lm_odour
     }).set_index('time')
+
+    if lm_df['Position'][0] != 0:
+        # Add initial landmark at position 0 if not present
+        initial_lm = pd.DataFrame({
+            'time': [pd.NaT],
+            'Position': [0],
+            'Index': [-1],
+            'Odour': [0]  # Assume first odour is the initial one
+        }).set_index('time')
+        lm_df = pd.concat([initial_lm, lm_df]).reset_index().set_index('time')
 
     return lm_df
