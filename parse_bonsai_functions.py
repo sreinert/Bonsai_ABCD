@@ -232,6 +232,10 @@ def calc_hit_fa(sess_dataframe,ses_settings):
         if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
             licked_distractor[idx] = 1
 
+    if 'LM_Count' in sess_dataframe.columns:
+        LM_offset = 3
+    else:
+        LM_offset = 0
     licked_all = np.zeros(len(release_df))
     rewarded_all = np.zeros(len(release_df))
     release_positions = release_df['Position'].to_numpy()
@@ -240,9 +244,9 @@ def calc_hit_fa(sess_dataframe,ses_settings):
         licks = lick_position[lick_times >= release_df.index[idx]]
         rewards = reward_positions[reward_times >= release_df.index[idx]]
         #compare licks/rewards to position window (the LM position and logged position are offset by 3)
-        if np.any((licks > (pos - 3)) & (licks < (pos - 3 + lm_size))):
+        if np.any((licks > (pos - LM_offset)) & (licks < (pos - LM_offset + lm_size))):
            licked_all[idx] = 1
-        if np.any((rewards > (pos - 3)) & (rewards < (pos - 3 + lm_size))):
+        if np.any((rewards > (pos - LM_offset)) & (rewards < (pos - LM_offset + lm_size))):
            rewarded_all[idx] = 1
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
@@ -1430,3 +1434,33 @@ def estimate_lm_events(sess_dataframe, ses_settings):
         lm_df = pd.concat([initial_lm, lm_df]).reset_index().set_index('time')
 
     return lm_df
+
+def load_analog_data(base_path, ses_rig_settings):
+    channel_names = []
+    for c in ses_rig_settings['analogInputChannels']:
+        channel_names.append(c['alias'])
+    print(f"Analog channels found: {channel_names}")
+    analog_reader = AnalogData("behav/analog-data/*", channel_names, len(channel_names))
+    analog_data = aeon.load(Path(base_path), analog_reader)
+    analog_data = analog_data.reset_index() # aeon load assumes our indices are valid harp timestamps which they are not in this case
+    analog_data = analog_data.drop(columns='time')
+
+    return analog_data
+
+def align_analog_to_events(analog_data, sess_dataframe):
+
+    buffer_data = sess_dataframe[['Buffer']].dropna().drop_duplicates()
+    buffer_size = int(analog_data.shape[0] / buffer_data.shape[0]) # how many samples per buffer did we record?
+
+    buffer_seconds = (buffer_data.index - datetime.datetime(1904, 1, 1)).total_seconds()
+    sliced_index = np.array(analog_data.index)[(buffer_size-1)::buffer_size]
+
+
+    o_m, o_b = np.polyfit(sliced_index, buffer_seconds, 1)
+    index_to_timestamp = lambda x: x*o_m + o_b
+
+    remapped_analog_index = aeon.aeon(index_to_timestamp(analog_data["rewards"].index))
+    remapped_analog_data = analog_data
+    remapped_analog_data = remapped_analog_data.set_index(remapped_analog_index)
+
+    return remapped_analog_data
