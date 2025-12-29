@@ -2,12 +2,21 @@ from aeon.io.reader import Csv, Reader
 import aeon.io.api as aeon
 from pathlib import Path
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import pandas as pd
 import numpy as np
 import datetime
 import json
-import re
-import os
+import importlib
+import scipy.stats as stats
+import re, os, sys
+import palettes
+import pickle
+import seaborn as sns
+from pynwb import NWBHDF5IO
+
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
+import parse_nwb_functions as parse_nwb_functions
 
 '''This is a copy of parse_bonsai_functions with new functions added.'''
 
@@ -22,7 +31,7 @@ class AnalogData(Reader):
         data = np.reshape(data, (-1, self.channels))
         return pd.DataFrame(data, columns=self.columns)
 
-def find_base_path(mouse,date,root):
+def find_base_path(mouse, date, root):
     mouse_path = Path(root) / f"sub-{mouse}" 
 
     for folder in mouse_path.iterdir():
@@ -53,6 +62,7 @@ def load_settings(base_path):
     return ses_settings, rig_settings
 
 def load_data(base_path):
+    '''Load raw behaviour data logged by Bonsai'''
     events_reader = Csv("behav/experiment-events/*", ["Seconds", "Value"])
     events_data = aeon.load(Path(base_path), events_reader)
 
@@ -115,8 +125,6 @@ def load_data(base_path):
         #take only unique indices
         all_ix = all_ix.unique()
 
-    
-
     sess_dataframe = pd.DataFrame(sess_data, index=all_ix)
     sess_dataframe['Position'] = sess_dataframe['Position'].interpolate()
     sess_dataframe['Treadmill'] = sess_dataframe['Treadmill'].interpolate()
@@ -129,6 +137,7 @@ def load_data(base_path):
     return sess_dataframe
 
 def load_analog_data(base_path, ses_rig_settings):
+    '''Load analog data'''
     channel_names = []
     for c in ses_rig_settings['analogInputChannels']:
         channel_names.append(c['alias'])
@@ -141,7 +150,7 @@ def load_analog_data(base_path, ses_rig_settings):
     return analog_data
 
 def align_analog_to_events(analog_data, sess_dataframe, plot=False):
-
+    '''Align analog data to Bonsai buffers'''
     buffer_data = sess_dataframe[['Buffer']].dropna().drop_duplicates()
     # buffer_data = sess_dataframe['Buffer']
 
@@ -172,6 +181,31 @@ def align_analog_to_events(analog_data, sess_dataframe, plot=False):
 
     return remapped_analog_data
 
+def load_session_npz(base_path):
+    '''Load behaviour data for valid funcimg frames'''
+    data = np.load(base_path + '/behaviour_data.npz')
+    return data
+
+def load_dF(base_path):
+    '''Load dF and valid frames and find valid neurons'''
+    # Load data 
+    nwb_path = parse_nwb_functions.find_nwbfile(base_path)
+    io = NWBHDF5IO(nwb_path, mode='r')
+    nwb = io.read()
+    nwb.processing['ophys']
+    dF_all = nwb.processing['ophys'].data_interfaces['DfOverF'].roi_response_series['DfOverFChan1Plane0'].data[:]
+
+    # Load valid frames
+    valid_frames = np.load(os.path.join(base_path, 'valid_frames.npz'))['valid_frames']
+    
+    dF = dF_all[valid_frames,:].T
+
+    # Find valid neurons 
+    segmentation = nwb.processing['ophys'].data_interfaces['ImageSegmentation'].plane_segmentations['PlaneSegmentationChan1Plane0'][:]
+    neurons = np.where(segmentation['Accepted'] == 1)[0] 
+
+    return dF, neurons
+
 #%% ##### Session functions #####
 def get_event_parsed(sess_dataframe, ses_settings):
 
@@ -181,7 +215,7 @@ def get_event_parsed(sess_dataframe, ses_settings):
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
 
     if 'LM_Count' in sess_dataframe.columns:
-        release_df = estimate_lm_events(sess_dataframe, ses_settings)
+        release_df = estimate_lm_events(sess_dataframe)
     else:
         release_df = estimate_release_events(sess_dataframe, ses_settings)
 
@@ -373,7 +407,6 @@ def get_ideal_performance(sess_dataframe,ses_settings):
     return ideal_licks
 
 def calc_conditional_matrix(sess_dataframe,ses_settings):
-
 
     target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
     hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
@@ -604,7 +637,6 @@ def calculate_corr_length(ses_settings):
     return sum_length
 
 def divide_laps(sess_dataframe, ses_settings):
-
     # Divide the session dataframe into laps based on the position and corridor length
 
     corridor_length = calculate_corr_length(ses_settings)
@@ -628,11 +660,11 @@ def calc_laps_needed(ses_settings):
 
     return laps_needed
 
-def give_state_id(sess_dataframe,ses_settings):
+def give_state_id(sess_dataframe, ses_settings):
 
     goals,lm_ids = parse_stable_goal_ids(ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
-    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     if rewarded_all.shape[0] % 10 != 0:
         #extend the array to make it divisible by 10
         rewarded_all = np.pad(rewarded_all, (0, 10 - (rewarded_all.shape[0] % 10)), 'constant')
@@ -697,8 +729,7 @@ def give_state_id(sess_dataframe,ses_settings):
 
 def calc_speed_per_lap(sess_dataframe, ses_settings):
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
-    laps_needed = calc_laps_needed(ses_settings)
-    #max position is the max of all positions where lap id is 0
+    # max position is the max of all positions where lap id is 0
     max_position = sess_dataframe['Position'][sess_dataframe['Lap'] == 0].max()
     max_position = np.round(max_position).astype(int)
 
@@ -719,18 +750,90 @@ def calc_speed_per_lap(sess_dataframe, ses_settings):
 
     return speed_per_bin
 
+def calc_speed_per_lm(session):
+    '''Calculate average speed per landmark'''
+    actual_num_laps = np.round((len(session['all_lms']) // session['num_landmarks']) )
+
+    _, lm_exit_idx = get_lm_entry_exit(session)
+    lap_change_idx = lm_exit_idx[session['num_landmarks']-1::session['num_landmarks']]
+
+    x = 0
+    if '3' in session['stage'] or '4' in session['stage']:
+        bins = 15
+        binned_lms = []
+        binned_goals = []
+
+        # Calculate and bin speed per lm
+        speed_per_bin = np.zeros((len(session['all_lms']), bins))
+        for i, idx in enumerate(lm_exit_idx):
+            lm_idx = np.arange(x, idx+1)
+
+            speed_per_lm = session['speed'][lm_idx]
+            pos_per_lm = session['position'][lm_idx]
+
+            speed_per_bin[i, :], bin_edges, _ = stats.binned_statistic(pos_per_lm, speed_per_lm, bins=bins)
+            
+            # Bin goals and landmarks
+            if session['goals_idx'][0] == i:
+                binned_goals.append(np.digitize(session['goals'][0], bin_edges))
+            if i <= 1:
+                lm_bin = np.digitize(session['landmarks'][i], bin_edges)
+                lm_bin_shifted = lm_bin + i * bins
+                binned_lms.append(lm_bin_shifted)
+
+            x = idx + 1
+
+        # Split binned speed into goal and non-goal
+        min_len = min(len([session['goals_idx']][0]), len([session['non_goals_idx']][0]))
+        goal_speed = speed_per_bin[session['goals_idx'][:min_len], :]       # (min_len, bins)
+        non_goal_speed = speed_per_bin[session['non_goals_idx'][:min_len], :]  # (min_len, bins)
+        speed_per_bin = np.column_stack((goal_speed, non_goal_speed))    
+
+    elif '5' in session['stage'] or '6' in session['stage']:
+        bins = 120
+        speed_per_bin = np.zeros((actual_num_laps, bins))
+
+        for i, idx in enumerate(lap_change_idx):
+            lap_idx = np.arange(x, idx+1)
+
+            speed_per_lap = session['speed'][lap_idx]
+            pos_per_lap = session['position'][lap_idx] 
+
+            speed_per_bin[i, :], bin_edges, _ = stats.binned_statistic(pos_per_lap, speed_per_lap, bins=bins)
+        
+            # TODO remove from loop? 
+            goals_per_lap = session['goals'][i * 4 : (i + 1) * 4]
+            lms_per_lap = session['landmarks'][i * session['num_landmarks'] : (i + 1) * session['num_landmarks']]
+        
+            x = idx + 1
+
+        binned_goals = np.digitize(goals_per_lap, bin_edges)
+        binned_lms = np.digitize(lms_per_lap, bin_edges)
+
+    else:
+        raise ValueError('This function only works for T3-T6 for now.')
+
+    av_speed_per_bin = np.nanmean(speed_per_bin, axis=0)
+    std_speed_per_bin = np.nanstd(speed_per_bin, axis=0)
+    sem_speed_per_bin = std_speed_per_bin / np.sqrt(actual_num_laps)
+
+    session['speed_per_bin'] = av_speed_per_bin
+    session['sem_speed_per_bin'] = sem_speed_per_bin
+    session['binned_goals'] = binned_goals
+    session['binned_lms'] = binned_lms
+
+    return session
+
 def calc_sw_state_ratio(sess_dataframe, ses_settings):
     state_id = give_state_id(sess_dataframe,ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
-    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     if licked_all.shape[0] % 10 != 0:
         #extend the array to make it divisible by 10
         licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
     licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
-
-
 
     if laps_needed == 2:
         window = 10
@@ -1018,7 +1121,7 @@ def threshold_lick_speed(sess_dataframe, speed_threshold=0.3):
 
     return sess_dataframe
 
-def estimate_lm_events(sess_dataframe, ses_settings):
+def estimate_lm_events(sess_dataframe):
 
     lm_position = sess_dataframe['LM_Position'].values[sess_dataframe['LM_Count'].values >= 0]
 
@@ -1062,6 +1165,391 @@ def print_sess_summary(sess_dataframe,ses_settings):
     print(f'rewarded odours: {rew_odour}, rewarded textures: {rew_texture}')
     print(f'non-rewarded odours: {non_rew_odour}, non-rewarded textures: {non_rew_texture}')
 
+# def get_num_landmarks(session):
+#     # Get number of unique landmarks for the session
+#     session['num_landmarks'] = len(session['lm_ids'])
+
+#     return session
+
+def get_licks_idx(session, lick_threshold=True):
+    '''Get the idx of licks in the session'''
+
+    if lick_threshold:
+        session = threshold_licks(session)
+    else:
+        licks_idx = np.where(session['licks'])[0]
+        session['licks_idx'] = licks_idx
+
+    return session 
+
+def get_lap_idx(session):
+    # Divide the session dataframe into laps based on the position and corridor length
+    session['num_laps'] = int(np.ceil(session['position'].max() / session['tunnel_length']))
+    
+    # For each position, determine which lap it belongs to
+    session['lap_idx'] = (session['position'] // session['tunnel_length']).astype(int)
+
+    return session
+
+def get_lm_idx(session):
+    # Get landmark idx for each datapoint
+    lm_idx = np.zeros(len(session['position']))
+    for i in range(len(session['landmarks'])):
+        lm = session['landmarks'][i]
+        lm_entry = np.where((session['position'] > lm[0]) & (session['position'] < lm[1]))[0]
+        lm_idx[lm_entry] = i+1
+
+    session['lm_idx'] = lm_idx
+
+    return session
+
+def threshold_licks(session):
+    # Threshold licks based on speed 
+    speed_ok = session['speed'] < session['lick_threshold']
+    licked = session['licks'] > 0
+    threshold_mask = speed_ok & licked
+
+    licks_idx = np.where(threshold_mask)[0]
+    thresholded_licks = session['licks'][licks_idx]
+
+    session['thresholded_licks'] = thresholded_licks
+    session['licks_idx'] = licks_idx
+
+    return session
+
+def get_licks_per_lap(session):
+    # Get position and frame index for each lick 
+    lick_frames = {}
+    lick_positions = {}
+    for i in range(session['num_laps']):
+        if session['num_laps'] == 1:
+            lap_ix = np.where(session['lap_idx'] == i+1)[0]
+        else:
+            lap_ix = np.where(session['lap_idx'] == i)[0]
+        # licks_per_lap_ix = np.intersect1d(lap_ix, session['thresholded_licks'])
+        licks_per_lap_ix = np.intersect1d(lap_ix, session['licks_idx'])
+        lick_frames[i] = licks_per_lap_ix
+        lick_positions[i] = session['position'][licks_per_lap_ix]
+
+    session['licks_per_lap'] = lick_positions
+    session['licks_per_lap_frames'] = lick_frames
+
+    return session
+
+def get_licked_lms(session):
+    # Get licked landmarks
+    licked_lms = np.zeros((session['num_laps'], len(session['landmarks'])))
+    
+    for i in range(session['num_laps']):
+        lap_idx = np.where(session['lap_idx'] == i)[0]
+        for j in range(len(session['landmarks'])):
+            lm = np.where(session['lm_idx'] == j+1)[0]
+            target_ix = np.intersect1d(lap_idx, lm)
+            # if session['thresholded_licks'] exists, use that
+            if 'thresholded_licks' in session:
+                target_licks = np.intersect1d(target_ix, session['thresholded_licks'])
+            # otherwise use all licks
+            else:
+                target_licks = np.intersect1d(target_ix, session['licks'])
+            if len(target_licks) > 0:
+                licked_lms[i,j] = 1
+            else:
+                licked_lms[i,j] = 0
+
+    session['licked_lms'] = licked_lms
+
+    return session
+
+def get_rewarded_lms(session):
+    # Get rewarded landmarks
+    rewarded_lms = np.zeros((session['num_laps'], len(session['landmarks'])))
+    
+    for i in range(session['num_laps']):
+        lap_idx = np.where(session['lap_idx'] == i)[0]
+        for j in range(len(session['landmarks'])):
+            lm = np.where(session['lm_idx'] == j+1)[0]
+            target_ix = np.intersect1d(lap_idx, lm)
+            target_rewards = np.intersect1d(target_ix, session['rewards'])
+            if len(target_rewards) > 0:
+                rewarded_lms[i,j] = 1
+            else:
+                rewarded_lms[i,j] = 0
+
+    session['rewarded_lms'] = rewarded_lms
+
+    return session
+
+def get_lms_visited(session):
+    # Calculate number of landmarks visited
+    if len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) != 0:
+        last_landmark = len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) # find the last landmark that was run through
+    else:
+        last_landmark = len(session['landmarks'])  # TODO: confirm
+    
+    # num_lms = len(session['landmarks'])*(session['num_laps']-1) + last_landmark 
+    num_lms = len(session['landmarks'])
+
+    all_lms = np.array([])  # landmark ids
+    for i in range(session['num_laps']):
+        all_lms = np.append(all_lms, session['lm_ids'])
+    all_lms = all_lms.astype(int)[:num_lms]
+
+    all_landmarks = session['landmarks']  
+    for i in range(1, session['num_laps']):  
+        all_landmarks = np.concatenate((all_landmarks, session['landmarks']), axis=0)
+    all_landmarks = all_landmarks[:num_lms]  # landmark positions
+    session['all_landmarks'] = all_landmarks
+    session['all_lms'] = all_lms
+
+    return session
+
+def get_active_goal(session):
+    # get goal indices
+    goal_idx = np.array([])
+    if session['num_laps'] > 1:
+        for goal in session['goal_ids']:
+            goal_idx = np.append(goal_idx, np.where(session['all_lms'] == goal)[0][0])
+    else:
+        for goal in session['goal_ids']:
+            matches = np.where(session['all_lms'][:session['num_landmarks']] == goal)[0]
+            if matches.size > 0:
+                goal_idx = np.append(goal_idx, matches[0])
+
+    session['goal_idx'] = goal_idx.astype(int)
+
+    # get active goal
+    active_goal = np.zeros((session['num_laps'], len(session['all_lms'])))
+    count = 0
+    active_goal[0,0] = goal_idx[count]
+
+    for i in range(session['num_laps']):
+        for j in range(len(session['all_lms'])):
+            active_goal[i,j] = goal_idx[count]
+            if session['rewarded_lms'][i,j]==1:
+                count += 1
+                if count == len(goal_idx):
+                    count = 0
+
+    session['active_goal'] = active_goal
+
+    return session
+
+def get_data_lm_idx(session):
+    """Get the landmark id of every data entry"""
+    
+    # Find landmark entry and exit idx
+    lm_entry, lm_exit = get_lm_entry_exit(session)
+
+    # Find datapoints within a landmark
+    lm_idx = np.zeros(len(session['position']))
+    for i in range(len(session['all_lms'])):
+        lm_idx[lm_entry[i]:lm_exit[i]+1] = i+1
+
+    session['data_lm_idx'] = lm_idx
+
+    return session 
+
+def get_binary_lick_map(session):
+    """Create a binary map of licked landmarks"""
+    
+    # Get all datapoints within landmarks
+    session = get_data_lm_idx(session)
+
+    licked_lms = np.empty((len(session['all_lms'])))
+    for lm in range(len(session['all_lms'])):
+        # datapoints within landmarks for each lap 
+        lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
+
+        # Find all licks within the landmark
+        target_licks = np.intersect1d(lm_idx, session['licks_idx'])
+        if len(target_licks) > 0:
+            licked_lms[lm] = 1
+        else:
+            licked_lms[lm] = 0
+
+    session['binary_licked_lms'] = licked_lms
+
+    return session
+
+def get_lm_lick_rate(session, bins=16):  # TODO I really need to fix this and make it consistent across sessions
+    """Get lick rate per frame bin as the mean per bin for each landmark"""
+    
+    # Get all datapoints within landmarks
+    session = get_data_lm_idx(session)
+
+    # Create a binary lick map for the entire session 
+    binary_licks = np.zeros(len(session['position'])) # (actually not binary)
+    if 'thresholded_licks' in session:
+        binary_licks[session['licks_idx']] = session['thresholded_licks'] 
+    else:
+        binary_licks[session['licks_idx']] = session['licks'] 
+
+    if ('stage' in session) and ('3' in session['stage'] or '4' in session['stage']):
+        
+        lm_lick_rate = np.zeros((len(session['all_lms']), bins))
+        for lm in range(len(session['all_lms'])):
+            # datapoints within landmarks for each lap 
+            lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
+
+            # binary licks within landmark
+            lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+            
+            # calculate lick rate within each landmark (mean in each bin)
+            lm_lick_rate[lm], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+
+    else:
+        # lm_lick_rate = {}
+        lm_lick_rate = np.zeros((len(session['all_lms']), bins))
+        # for lap in range(session['num_laps']):
+        for lm in range(len(session['all_lms'])):
+            # key = (lap, lm)
+
+            # datapoints within landmarks for each lap 
+            lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
+
+            # binary licks within landmark
+            lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+            
+            # calculate lick rate within each landmark (mean in each bin)
+            lm_lick_rate[lm], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+
+    session['lm_lick_rate'] = lm_lick_rate
+
+    return session
+
+#%% ##### Functions that work with NIDAQ data only (after funcimg alignment) #####
+def get_landmark_positions(session, sess_dataframe, ses_settings):
+    '''Get the start and end of each landmark'''
+    result_df = estimate_release_events(sess_dataframe, ses_settings)
+    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+
+    release_positions = result_df['Position'].values
+    landmarks = np.zeros((len(release_positions), 2))
+    for lm, pos in enumerate(release_positions):
+        landmarks[lm,0] = pos
+        landmarks[lm,1] = pos + lm_size
+
+    session['landmarks'] = landmarks
+
+    return session
+
+def get_goal_positions(session, sess_dataframe, ses_settings):
+    '''Get the start and end of each goal landmark'''
+    target_positions, _, _, _, _, _ = find_targets_distractors(sess_dataframe, ses_settings)
+    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+
+    goals = np.zeros((len(target_positions), 2))
+    for i, pos in enumerate(target_positions):
+        goals[i,0] = pos
+        goals[i,1] = pos + lm_size
+    
+    session['goals'] = goals
+
+    return session
+
+def get_lm_entry_exit(session):
+    '''Find data idx closest to landmark entry and exit.'''
+
+    positions = session['position']
+        
+    lm_entry_idx = []
+    lm_exit_idx = []
+
+    if (positions[0] - session['landmarks'][-1,1]) < (positions[0] - session['landmarks'][0,0]):
+        search_start = np.where(positions <= session['all_landmarks'][0,0])[0][-1]  # the mouse accidentally moved backwards first
+    else: 
+        search_start = 0
+
+    for lm_start in session['all_landmarks'][:,0]:
+        lm_entry_idx.append(np.where(positions[search_start:] >= lm_start)[0][0] + search_start)
+
+    for lm_end in session['all_landmarks'][:,1]:
+        lm_exit_idx.append(np.where(positions[search_start:] <= lm_end)[0][-1] + search_start)
+
+    return np.array(lm_entry_idx), np.array(lm_exit_idx)
+
+
+#%% ##### Analysis wrappers #####
+def create_session_struct_npz(data, ses_settings):
+
+    position = np.nan_to_num(data['position'], nan=0.0)
+    rewards = np.where(data['rewards'])[0]
+    speed = np.nan_to_num(data['speed'], nan=0.0)
+    licks = data['licks']
+    
+    goal_ids, lm_ids = parse_stable_goal_ids(ses_settings)
+    num_landmarks = len(lm_ids) # unique number of lm ids
+
+    tunnel_length = calculate_corr_length(ses_settings)
+    lick_threshold = ses_settings['velocityThreshold']
+
+    session = {'position': position,
+               'licks': licks, 
+               'rewards': rewards, 
+               'goal_ids': goal_ids, 
+               'lm_ids': lm_ids,
+               'num_landmarks': num_landmarks,
+               'tunnel_length': tunnel_length,
+               'lick_threshold': lick_threshold,
+               'speed': speed}
+    
+    return session
+
+def get_behaviour(session, sess_dataframe, ses_settings):
+    transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe, ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    state_id = give_state_id(sess_dataframe, ses_settings)
+
+    plot_licks_per_state(sess_dataframe, ses_settings)
+    plot_speed_per_state(sess_dataframe, ses_settings)
+
+    _ = plot_lick_maps(session)
+    plot_speed_profile(session, stage=int(session['stage'][-1]))
+    
+    session['transition_prob'] = transition_prob
+    session['control_prob'] = control_prob
+    session['ideal_prob'] = ideal_prob
+    session['laps_needed'] = laps_needed
+    session['state_id'] = state_id
+
+    return session
+
+def analyse_npz_pre7(mouse, session_id, stage, root):
+    '''Wrapper for session analysis'''
+    if '3' not in stage and '4' not in stage and '5' not in stage and '6' not in stage:
+        raise ValueError('This function only works for T3-T6.')
+    
+    session_path = parse_nwb_functions.find_base_path(mouse, session_id, root)
+    ses_settings, _ = parse_nwb_functions.load_settings(session_path)
+    behav_data = load_session_npz(str(session_path))
+    with open(list((session_path / 'behav').glob('*.pkl'))[0], 'rb') as f:
+        sess_dataframe = pickle.load(f)
+
+    session = create_session_struct_npz(behav_data, ses_settings)
+    session = get_landmark_positions(session, sess_dataframe, ses_settings)
+    session = get_goal_positions(session, sess_dataframe, ses_settings)
+    
+    session['mouse'] = mouse
+    session['session_id'] = session_id
+    # session['date'] = date
+    session['stage'] = stage
+    
+    session = get_lap_idx(session)
+    session = get_lm_idx(session)
+    session = get_licks_idx(session) # thresholding is also performed here
+    session = get_licks_per_lap(session)
+    session = get_licked_lms(session)
+    session = get_rewarded_lms(session)
+    session = get_lms_visited(session)
+    session = get_active_goal(session)
+
+    # Get behaviour
+    session = get_behaviour(session, sess_dataframe, ses_settings)
+
+    print('Number of laps = ', session['num_laps'])
+    
+    return session
+
 #%% ##### Plotting #####
 def plot_ethogram(sess_dataframe,ses_settings):
     lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
@@ -1069,7 +1557,7 @@ def plot_ethogram(sess_dataframe,ses_settings):
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
     if 'LM_Count' in sess_dataframe.columns:
-        release_df = estimate_lm_events(sess_dataframe, ses_settings)
+        release_df = estimate_lm_events(sess_dataframe,)
     else:
         release_df = estimate_release_events(sess_dataframe, ses_settings)
     release_times = release_df.index.tolist() # time
@@ -1463,7 +1951,7 @@ def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
 def plot_licks_per_state(sess_dataframe, ses_settings):
     state_id = give_state_id(sess_dataframe,ses_settings)
 
-    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
     if licked_all.shape[0] % 10 != 0:
         #extend the array to make it divisible by 10
@@ -1552,3 +2040,129 @@ def plot_sw_state_ratio(sess_dataframe, ses_settings):
     plt.title('Switch-Stay Ratio per State/Lap')
     plt.show()
 
+def plot_lick_maps(session):
+    '''Plot binary lick and lick rate maps per landmark'''
+
+    # ------- Get binary lick map (laps x landmarks) ------- #
+    session = get_binary_lick_map(session)
+
+    # Check number of actual laps
+    num_lms_considered = int(np.round((len(session['all_landmarks']) // session['num_landmarks']) * session['num_landmarks']))
+    num_laps = int(num_lms_considered / session['num_landmarks'])
+
+    if '3' in session['stage'] or '4' in session['stage']:
+        # The landmarks might not be in order so we need to be careful about binning 
+        # Determine how many rows to keep
+        min_len = min(len(session['goals_idx']), len(session['non_goals_idx']))
+        goal_licked_lms = session['binary_licked_lms'][session['goals_idx'][:min_len]]
+        non_goal_licked_lms = session['binary_licked_lms'][session['non_goals_idx'][:min_len]]
+
+        goal_licked_lms = goal_licked_lms.reshape((num_laps, -1))        # -1 lets numpy figure out columns
+        non_goal_licked_lms = non_goal_licked_lms.reshape((num_laps, -1))
+
+        binary_licked_lms = np.column_stack((goal_licked_lms, non_goal_licked_lms))
+    else: 
+        # The landmarks are in order so we can simply reshape
+        binary_licked_lms = np.array(session['binary_licked_lms'][:num_lms_considered]).reshape((num_laps, session['num_landmarks']))
+    
+    # ------- Get lick rate map (laps x landmarks) ------- #
+    session = get_lm_lick_rate(session)
+
+    if '3' in session['stage'] or '4' in session['stage']:
+        goal_lm_lick_rate = session['lm_lick_rate'][session['goals_idx']]
+        non_goal_lm_lick_rate = session['lm_lick_rate'][session['non_goals_idx']]
+
+        min_len = min(len(goal_lm_lick_rate), len(non_goal_lm_lick_rate))
+        goal_lm_lick_rate = goal_lm_lick_rate[:min_len, :]
+        non_goal_lm_lick_rate = non_goal_lm_lick_rate[:min_len, :]
+
+        lm_lick_rate = np.column_stack((goal_lm_lick_rate, non_goal_lm_lick_rate))
+        
+    else: 
+        lm_lick_rate = [[] for _ in range(num_laps)]
+        for lap in range(num_laps):
+            start = lap * session['num_landmarks']
+            end = start + session['num_landmarks']
+            for lm_idx in range(start, end):
+                rate = session['lm_lick_rate'][lm_idx]
+                lm_lick_rate[lap].extend(rate)                
+        lm_lick_rate = np.array(lm_lick_rate)  # (num_laps, num_bins * num_landmarks)
+
+    # Plotting
+    tm_palette = palettes.met_brew('Tam', n=123, brew_type="continuous")
+    tm_palette = tm_palette[::-1]
+
+    tick_positions = [i * 16 + 16 // 2 for i in range(session['num_landmarks'])]
+    tick_labels = np.arange(1, session['num_landmarks']+1)  
+    
+    # Plot the binary and lick rate maps for each landmark 
+    if session['num_landmarks'] == 2:
+        _, ax = plt.subplots(1,2, figsize=(8,3), sharex=False, sharey=False)
+    else:
+        _, ax = plt.subplots(2, 1, figsize=(12,7), sharex=False, sharey=False)
+    ax = ax.ravel()
+
+    # Plot binary licks  
+    sns.heatmap(binary_licked_lms, ax=ax[0], cmap=[tm_palette[0], tm_palette[-1]], 
+                vmin=0, vmax=1, cbar_kws={"ticks": [0, 1]}, xticklabels=(tick_labels), 
+                yticklabels=[0, binary_licked_lms.shape[0]])
+
+    # Plot lick rate
+    max_lick_rate = np.round(np.nanmax(lm_lick_rate), 1)
+    sns.heatmap(lm_lick_rate, ax=ax[1], cmap=tm_palette, vmin=0, vmax=max_lick_rate, 
+                cbar_kws={"ticks": [0, max_lick_rate]})
+    for i in range(1, session['num_landmarks']):
+        ax[1].axvline(i * 16, color='white', linestyle='--', linewidth=1)
+
+    for axis in ax:
+        axis.set_yticks([0, binary_licked_lms.shape[0]])
+        axis.set_yticklabels([0, binary_licked_lms.shape[0]])
+        axis.set_ylabel('Lap')
+
+    ax[0].set_title('Licked Landmarks')
+    ax[1].set_title('Lick Rate')
+    ax[1].set_xlabel('Landmark')
+    ax[1].set_xticks(tick_positions)
+    ax[1].set_xticklabels(tick_labels, rotation=0)
+    
+    plt.tight_layout()
+
+    return binary_licked_lms, lm_lick_rate
+
+def plot_speed_profile(session, stage):
+    '''Plot the speed profile per landmark'''
+    session = calc_speed_per_lm(session)
+
+    if stage == 3:
+        color = '#325235'
+    elif stage == 4:
+        color = '#9E664C'
+    elif stage == 5:
+        color = 'blue'
+    elif stage == 6:
+        color = 'orange'
+    elif stage == 8:
+        color = 'red'
+    else: 
+        color = 'black'
+
+    if session['num_landmarks'] == 2:
+        _, ax = plt.subplots(1, 1, figsize=(8,3), sharex=False, sharey=False)
+    else:
+        _, ax = plt.subplots(1, 1, figsize=(10,3))
+    ax.plot(session['speed_per_bin'], color=color)
+    ax.fill_between(range(len(session['speed_per_bin'])),
+                    session['speed_per_bin'] - session['sem_speed_per_bin'],
+                    session['speed_per_bin'] + session['sem_speed_per_bin'],
+                    color=color, alpha=0.3)
+
+    for lm in session['binned_lms']:
+        ax.add_patch(patches.Rectangle((lm[0],0), np.diff(lm)[0], ax.get_ylim()[1], color='grey', alpha=0.3))
+    for goal in session['binned_goals']:
+        ax.add_patch(patches.Rectangle((goal[0],0), np.diff(goal)[0], ax.get_ylim()[1], color='grey', alpha=0.5))
+    ax.set_xlabel('Landmark')
+    ax.set_ylabel('Speed (cm/s)')
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+
+    return
