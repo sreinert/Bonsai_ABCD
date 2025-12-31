@@ -801,7 +801,7 @@ def calc_speed_per_lm(session):
 
             speed_per_bin[i, :], bin_edges, _ = stats.binned_statistic(pos_per_lap, speed_per_lap, bins=bins)
         
-            # TODO remove from loop? 
+            # Only the last landmarks and goals will be used for binning
             goals_per_lap = session['goals'][i * 4 : (i + 1) * 4]
             lms_per_lap = session['landmarks'][i * session['num_landmarks'] : (i + 1) * session['num_landmarks']]
         
@@ -1439,7 +1439,7 @@ def get_goal_positions(session, sess_dataframe, ses_settings):
     lm_size = ses_settings['trial']['landmarks'][0][0]['size']
 
     goals = np.zeros((len(target_positions), 2))
-    for i, pos in enumerate(target_positions):
+    for i, pos in enumerate(np.sort(target_positions)):
         goals[i,0] = pos
         goals[i,1] = pos + lm_size
     
@@ -1500,8 +1500,10 @@ def get_behaviour(session, sess_dataframe, ses_settings):
     laps_needed = calc_laps_needed(ses_settings)
     state_id = give_state_id(sess_dataframe, ses_settings)
 
-    plot_licks_per_state(sess_dataframe, ses_settings)
-    plot_speed_per_state(sess_dataframe, ses_settings)
+    if int(session['stage'][-1]) > 6:
+        print('Plotting the lick and speed profile for the 2 and 3 lap sequences.')
+        plot_licks_per_state(sess_dataframe, ses_settings)
+        plot_speed_per_state(sess_dataframe, ses_settings)
 
     _ = plot_lick_maps(session)
     plot_speed_profile(session, stage=int(session['stage'][-1]))
