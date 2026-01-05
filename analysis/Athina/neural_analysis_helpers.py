@@ -1,6 +1,7 @@
 import numpy as np 
 import matplotlib.pyplot as plt
 from matplotlib.colors import to_rgba
+import matplotlib.gridspec as gridspec
 import os, re, sys
 import scipy.stats as stats
 from scipy.ndimage import gaussian_filter1d
@@ -61,6 +62,8 @@ def load_dF_session_data(base_path, mouse, stage, calculate_DF_F=False):
         session = parse_session_functions.analyse_npz_pre7(mouse, date2, stage=stage, plot=False)
     else:
         session = parse_session_functions.analyse_npz(mouse, date2, plot=True)
+
+    session['save_path'] = save_path
 
     return save_path, dF, session
 
@@ -1973,8 +1976,10 @@ def create_templates(peaks=[1,4,5], bins=360, plot=True):
     return templates, peaks
 
 
-def get_goal_progress_cells(dF, neurons, session, event_frames, stage, save_path, ngoals=4, bins=90, period='goal', reload=False, plot=True, shuffle=False):
+def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoals=4, bins=90, period='goal', reload=False, plot=True, shuffle=False):
     # Find goal progress tuned cells - takes long if shuffling
+    stage = int(session['stage'][-1])
+
     if period == 'goal':
         filename = f'T{stage}_{ngoals}goal_progress_tracked_neurons.npz'
     else:
@@ -1982,32 +1987,42 @@ def get_goal_progress_cells(dF, neurons, session, event_frames, stage, save_path
 
     if os.path.exists(os.path.join(save_path, filename)) and not reload:
         print(f'Goal progress and tracked neurons found. Loading...')
-        goal_progress_tuned = np.load(os.path.join(save_path, filename))['goal_progress_tuned']
+        data = np.load(os.path.join(save_path, filename), allow_pickle=True)
+        goal_progress_tuned = data['goal_progress_tuned']
+        real_scores = data['real_scores'].item()
+        shuffled_scores = data['shuffled_scores'].item()
 
     else:
         goal_progress_tuned = []
+        real_scores = {}
+        shuffled_scores = {}
         for cell in neurons:
-            real_score, shuffled_scores, phase_pref, state_pref = cellTV.calc_goal_tuningix(dF, cell, session, condition='arb', period=period, event_frames=event_frames, n_goals=ngoals, frame_rate=45, bins=bins, shuffle=shuffle, plot=False)
+            real_scores[cell], shuffled_scores[cell], _, _ = cellTV.calc_goal_tuningix(dF, cell, session, condition='arb', period=period, event_frames=event_frames, n_goals=ngoals, frame_rate=45, bins=bins, shuffle=shuffle, plot=False)
 
             if 'shuffled' in session['sequence']:
-                if real_score - np.median(shuffled_scores) > 0.07:
+                if real_scores[cell] - np.median(shuffled_scores[cell]) > 0.07:
                     goal_progress_tuned.append(cell)
             else:
-                if (real_score > 1) & (np.abs(real_score - np.median(shuffled_scores)) > 0.5):
+                if (real_scores[cell] > 1) & (np.abs(real_scores[cell] - np.median(shuffled_scores[cell])) > 0.5):
                     goal_progress_tuned.append(cell)
 
         # Plot firing rates for goal progress tuned cells
-        for cell in goal_progress_tuned:
-            _ = cellTV.extract_arb_progress(dF, cell, session, event_frames, ngoals=ngoals, 
-                                            bins=bins, period=period, stage=stage, 
-                                            plot=plot, shuffle=False)
+        if plot:
+            for cell in goal_progress_tuned:
+                _ = cellTV.extract_arb_progress(dF, cell, session, event_frames, ngoals=ngoals, 
+                                                bins=bins, period=period, stage=stage, 
+                                                plot=plot, shuffle=False)
 
         # Save these neurons
-        np.savez(os.path.join(save_path, filename), goal_progress_tuned=np.array(goal_progress_tuned))
+        np.savez(os.path.join(save_path, filename), 
+                 goal_progress_tuned=np.array(goal_progress_tuned), 
+                 real_scores=np.array(real_scores), 
+                 shuffled_scores=np.array(shuffled_scores),
+                 allow_pickle=True)
 
     print(f"{len(goal_progress_tuned)} out of {len(neurons)} tracked neurons are goal progress tuned in T{stage}")
 
-    return goal_progress_tuned
+    return goal_progress_tuned, real_scores, shuffled_scores 
 
 
 def circular_crosscorr(x, y):
@@ -2202,3 +2217,334 @@ def classify_4_or_5_peak_neurons(neurons, mean_goal_firing, peaks=[1,4,5], plot=
             plt.tight_layout()
     
     return neurons_1peaks, neurons_4peaks, neurons_5peaks
+
+def annotate_cell(cell, binned_firing, n_peaks=None):
+    """
+    Show polar plot for one cell and let the user assign number of peaks.
+    Returns:
+        - int: assigned peak count (0-9)
+    """
+    smooth_avg_bin = gaussian_filter1d(binned_firing, sigma=4, mode='wrap')
+    angles = np.linspace(0, 2 * np.pi, len(binned_firing), endpoint=False)
+    angles = np.concatenate((angles, [angles[0]]))
+    smooth_plot = np.concatenate([smooth_avg_bin, smooth_avg_bin[:1]])
+
+    result = {"peaks": None, "back": False, "quit": False}
+
+    def on_key(event):
+        if event.key.isdigit():
+            result["peaks"] = int(event.key)
+            plt.close('all')
+        elif event.key == 'escape':
+            result["peaks"] = "keep" 
+            plt.close('all')
+        elif event.key.lower() == 'q':
+            result["quit"] = True
+            plt.close('all')
+        elif event.key.lower() == 'b':
+            result["back"] = True
+            plt.close('all')
+
+    fig = plt.figure(figsize=(6,6))
+    ax = fig.add_subplot(111, projection='polar')
+    ax.set_theta_zero_location('N')
+    ax.set_theta_direction(-1)
+    ax.set_xticks(np.linspace(0, 2 * np.pi, 5, endpoint=False))
+    ax.plot(angles, smooth_plot, lw=2)
+    if n_peaks:
+        ax.set_title(
+            f"Cell {cell} n_peaks = {n_peaks}\n"
+            "0-9 = assign peaks | B = back | Q = quit | ESC = keep")
+    else:
+        ax.set_title(
+        f"Cell {cell}\n"
+        "0-9 = assign peaks | B = back | Q = quit | ESC = keep")
+    fig.canvas.mpl_connect('key_press_event', on_key)
+
+    plt.show(block=True)
+    
+    if result["quit"]:
+        return "quit"
+    if result["back"]:
+        return "back"
+    return result["peaks"]
+
+def classify_4_or_5_peak_neurons_with_gui(neurons, mean_goal_firing, peaks=[1,4,5], plot=False, gui=True):
+    """
+    Initial peak counting using CCG with templates and peak counting. 
+    Optional manual curation by running a GUI.
+    """
+    # Create templates 
+    templates, peaks = create_templates(peaks=peaks, bins=360, plot=False)
+
+    peak_counts = {}       # cell_id -> number of peaks
+    n_cell_peaks = {}
+
+    for cell in neurons:
+        # ----- Criterion 1 ----- #
+        
+        # Detect number of peaks on the binned firing
+        binned_firing = np.mean(mean_goal_firing[cell], axis=0)
+
+        # Smooth the firing to detect peaks
+        smooth_avg_bin = gaussian_filter1d(binned_firing, sigma=4, mode='wrap').copy()
+        N = binned_firing.size
+
+        # Triple the signal to detect boundary peaks
+        avg_tripled = np.concatenate((smooth_avg_bin, smooth_avg_bin, smooth_avg_bin))
+        peaks_tripled, props = find_peaks(avg_tripled, distance=10, prominence=0.3, wlen=50, height=0.7)
+        
+        # Discard very small peaks
+        mask = props["peak_heights"] >= 0.4 * np.mean(props['peak_heights'])
+        peaks_tripled = peaks_tripled[mask]
+
+        # Identify peaks on the first third of the tripled signal
+        polar_peaks = peaks_tripled[(peaks_tripled >= N) & (peaks_tripled < 2*N)] - N
+        
+        # ----- Criterion 2 ----- #
+
+        # Get maximum cross-correlation with either 4-peak or 5-peak templates
+        n_cell_peaks[cell], ccg = get_template_ccg(cell, binned_firing, templates, peaks, plot=False)
+
+        # Overwrite template-based cell classification if needed 
+        if (n_cell_peaks[cell] == 4) and (len(polar_peaks) > n_cell_peaks[cell]):
+            n_cell_peaks[cell] = 5
+
+        # ----- Classification ----- #
+        peak_counts[cell] = n_cell_peaks[cell]
+
+        # ----- Plotting ----- #
+        if plot: 
+
+            fig = plt.figure(figsize=(8, 5))
+            gs = gridspec.GridSpec(2, 2, height_ratios=[3, 2])  # top row 3/5, bottom row 2/5
+
+            # top row (polar plots)
+            ax1 = fig.add_subplot(gs[0, 0], projection='polar')
+            ax2 = fig.add_subplot(gs[0, 1], projection='polar')
+
+            # bottom row (CCGs)
+            ax3 = fig.add_subplot(gs[1, 0])
+            ax4 = fig.add_subplot(gs[1, 1])
+            # fig = plt.figure(figsize=(10, 5))
+
+            angles = np.linspace(0, 2 * np.pi, 90*5, endpoint=False)
+            angles = np.concatenate((angles, [angles[0]]))  # add the first angle to close the circle
+            peak_angles = angles[polar_peaks]
+
+            # ax1 = fig.add_subplot(221, projection='polar')
+            ax1.set_theta_zero_location('N')
+            ax1.set_theta_direction(-1)
+            smooth_avg_bin = np.concatenate((smooth_avg_bin, [smooth_avg_bin[0]]))
+            ax1.plot(angles, smooth_avg_bin, color='blue', linewidth=2)
+            ax1.scatter(peak_angles, smooth_avg_bin[polar_peaks], color="red", s=40, zorder=3)
+            ax1.set_xticks(np.linspace(0, 2 * np.pi, 5, endpoint=False))
+            ax1.set_title(f'Smooth firing rate (sigma=4)')
+
+            # ax2 = fig.add_subplot(222, projection='polar')
+            ax2.set_theta_zero_location('N')
+            ax2.set_theta_direction(-1)
+            binned_firing = np.concatenate((binned_firing, [binned_firing[0]]))
+            ax2.plot(angles, binned_firing, color='blue', linewidth=2)
+            ax2.scatter(peak_angles, binned_firing[polar_peaks], color="red", s=40, zorder=3)
+            ax2.set_xticks(np.linspace(0, 2 * np.pi, 5, endpoint=False))
+            ax2.set_title(f'Raw firing rate')
+
+            y_min = min(cc.min() for cc in ccg)
+            y_max = max(cc.max() for cc in ccg)
+
+            # ax3 = fig.add_subplot(223)
+            ax3.plot(ccg[0])
+            ax3.set_ylim([y_min, y_max])
+            ax3.set_title(f'CCG with {peaks[0]}-peak template')
+
+            # ax4 = fig.add_subplot(224)
+            ax4.plot(ccg[1])
+            ax4.set_ylim([y_min, y_max])
+            ax4.set_title(f'CCG with {peaks[1]}-peak template')
+
+            plt.suptitle(f'Neuron {cell} n_peaks {n_cell_peaks[cell]}')
+            plt.tight_layout()
+
+    # ----- GUI ----- #
+    if gui:
+        peak_counts = dict(n_cell_peaks)
+
+        i = 0
+        while i < len(neurons):
+            cell = neurons[i]
+            binned_firing = np.mean(mean_goal_firing[cell], axis=0)
+
+            assigned = annotate_cell(cell, binned_firing, n_cell_peaks[cell])
+
+            # ----- QUIT -----
+            if assigned == "quit":
+                print("Annotation stopped by user.")
+                break
+
+            # ----- BACK -----
+            if assigned == "back":
+                if i > 0:
+                    i -= 1
+                    print(f"Going back to cell {neurons[i]}")
+                else:
+                    print("Already at first cell")
+                continue
+
+            # ----- KEEP DEFAULT -----
+            if assigned == "keep":
+                # Do nothing, keep existing value
+                i += 1
+                continue
+
+            # ----- OVERWRITE -----
+            if assigned is not None:
+                peak_counts[cell] = assigned
+                i += 1
+
+        print("Final peak counts:", peak_counts)
+
+    return peak_counts
+
+def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, sigma_smooth=10, plot=True, shuffled_scores_path=''):
+    """
+    Get state-tuned neurons following the z-scoring method in El Gaby et al., and adding a tuning score criterion.
+    """
+    stage = int(session['stage'][-1])
+    if stage == 3:
+        color = '#325235'
+    elif stage == 4:
+        color = '#9E664C'
+    elif stage == 5:
+        color = 'blue'
+    elif stage == 6:
+        color = 'orange'
+    elif stage == 8:
+        color = 'red'
+    elif stage == 12:
+        color = 'teal'
+    else:
+        color = 'gray'
+
+    # Load shuffled scores or compute them if needed 
+    tuning_score_criterion = True
+    if ngoals > 5:
+        print('Shuffled scores do not exist for this number of goals. Ignoring this criterion for now.')
+        tuning_score_criterion = False
+
+    if shuffled_scores_path and tuning_score_criterion:
+        print('Shuffled scores found. Loading...')
+        _, _, shuffled_scores = get_goal_progress_cells(dF, neurons, session, event_idx, shuffled_scores_path, ngoals=ngoals, bins=bins, period='goal', plot=False, shuffle=True)
+    elif not shuffled_scores_path and tuning_score_criterion:
+        print('Shuffled scores path not defined. Scores are computed now...')
+        _, _, shuffled_scores = get_goal_progress_cells(dF, neurons, session, event_idx, session['save_path'], ngoals=ngoals, bins=bins, period='goal', plot=False, shuffle=True)
+    
+    sigma_bins = sigma_smooth / (360 / bins * ngoals) # sigma_smooth in deg
+    angles = np.linspace(0, 2 * np.pi, 90*5, endpoint=False)
+    angles = np.concatenate((angles, [angles[0]]))  # add the first angle to close the circle
+    states = ['A','B','C','D','test']
+    if ngoals == 10:
+        states = ['A','A','B','B','C','C','D','D','test','test']
+    state_number = np.arange(1,11)
+    state_width = 2 * np.pi / ngoals
+
+    state_tuned = []
+    state_number_preference = {}
+    keep_cell = []
+
+    binned_goal_activity = {}
+    for cell in neurons:
+        # Bin activity per goal 
+        binned_goal_activity[cell] = cellTV.extract_arb_progress(dF, cell, session, event_idx, ngoals=ngoals, bins=bins, 
+                                                            stage=stage, plot=False, shuffle=False)
+
+        ntrials = binned_goal_activity[cell].shape[0]
+
+        # (1) Find the preferred state 
+        av_binned = np.nanmean(binned_goal_activity[cell], axis=0)
+        avg_tripled = np.concatenate((av_binned, av_binned, av_binned))
+        avg_smoothed = gaussian_filter1d(avg_tripled, sigma=sigma_bins, mode='nearest').copy()
+        N = av_binned.size
+        smooth_center = avg_smoothed[N:2*N]  
+
+        state_max = np.array([np.max(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
+        state_min = np.array([np.min(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
+        state_mean = np.array([np.mean(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
+        state_preference = np.where(state_max == np.max(state_max))[0][0]
+        tuning_score = (state_max - state_min) / state_mean
+
+        if tuning_score_criterion:
+            if tuning_score[state_preference] - np.mean(shuffled_scores[cell]) > 0.9:
+                keep_cell.append(cell)
+        else:
+            keep_cell.append(cell)
+
+        # (2) Take the peak firing rate in each state and trial (n_trials x n_goals)
+        trial_state_max = np.zeros((ntrials, ngoals))
+        for i in range(ngoals):
+            trial_state_max[:,i] = np.max(binned_goal_activity[cell][:,bins*i:bins*(i+1)], axis=1)
+            
+        # (3) z-score across each trial 
+        trial_state_max_zscored = stats.zscore(trial_state_max, axis=1)
+
+        # (4) Extract the z-score of the preferred state 
+        pref_state_zscore = np.array([trial_state_max_zscored[t, state_preference] for t in range(ntrials)])
+
+        # (5) t-test of z-scores across all trials against 0
+        result = stats.ttest_1samp(pref_state_zscore, popmean=0.0, alternative='two-sided')
+    
+        # Define state-tuned cells 
+        if (result.pvalue < 0.05) and np.isin(cell, keep_cell):
+            state_tuned.append(cell)
+            state_number_preference[cell] = state_number[state_preference]
+
+            # Plot state-tuned cells
+            if plot:
+                fig = plt.figure(figsize=(3, 3))
+                ax1 = fig.add_subplot(projection='polar')
+                ax1.set_theta_zero_location('N')
+                ax1.set_theta_direction(-1)
+                data = av_binned # smooth_center
+                data = np.concatenate((data, [data[0]]))
+                ax1.plot(angles, data, color=color, linewidth=2)
+                ax1.set_xticks(np.linspace(0, 2 * np.pi, 5, endpoint=False))
+                ax1.set_title(f'Cell {cell} - pref state: {states[state_preference]}')
+                ax1.set_rlim(0, np.nanmax(data) * 1.1)
+                theta_start = state_preference * state_width
+                
+                ax1.bar(
+                    theta_start + state_width/2,
+                    ax1.get_rmax(),
+                    width=state_width,
+                    bottom=0,
+                    color=color,
+                    alpha=0.15,
+                    edgecolor=None
+                )
+
+            # elif (result.pvalue < 0.05) and not np.isin(cell, keep_cell):
+            #     fig = plt.figure(figsize=(3, 3))
+            #     ax1 = fig.add_subplot(projection='polar')
+            #     ax1.set_theta_zero_location('N')
+            #     ax1.set_theta_direction(-1)
+            #     data = av_binned
+            #     data = np.concatenate((data, [data[0]]))
+            #     ax1.plot(angles, data, color='gray', linewidth=2)
+            #     ax1.set_xticks(np.linspace(0, 2 * np.pi, 5, endpoint=False))
+            #     ax1.set_title(f'Cell {cell}: pref state {states[state_preference]}')
+            #     ax1.set_rlim(0, np.nanmax(data) * 1.1)
+            #     theta_start = state_preference * state_width
+            #     theta_end   = (state_preference + 1) * state_width
+            #     theta_arc = np.linspace(theta_start, theta_end, 200)
+
+            #     ax1.bar(
+            #         theta_start + state_width/2,
+            #         ax1.get_rmax(),
+            #         width=state_width,
+            #         bottom=0,
+            #         color='gray',
+            #         alpha=0.15,
+            #         edgecolor=None
+            #     )
+
+    return state_tuned, state_number_preference
