@@ -207,9 +207,9 @@ def get_VR_rewards(VR_data):
 def get_lap_idx(session):
     # get lap idx
     flip_ix = find_peaks(session['position'], height=session['tunnel_length']-1,distance=100)[0]
-    if (session['position'][0] - session['landmarks'][-1,1]) < (session['position'][0] - session['landmarks'][0,0]):
+    if np.abs(session['position'][0] - session['landmarks'][-1,1]) < np.abs(session['position'][0] - session['landmarks'][0,0]):
         flip_ix = flip_ix[1:]  # Remove the first peak index - the mouse accidentally moved backwards first
-        
+
     if len(flip_ix) > 0:
         # a lap is between two flips
         lap_idx = np.zeros(len(session['position']))
@@ -218,7 +218,7 @@ def get_lap_idx(session):
         lap_idx[flip_ix[-1]:] = len(flip_ix)
 
         session['lap_idx'] = lap_idx
-        session['num_laps'] = len(flip_ix) + 1
+        session['num_laps'] = len(flip_ix) #+ 1
     else:
         # the session didn't have any flips
         session['lap_idx'] = np.ones(len(session['position']))
@@ -389,12 +389,12 @@ def give_lap_state_id(session):
 def get_lms_visited(options, session):
     # Calculate number of landmarks visited
     if len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) != 0:
-        last_landmark = len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) # find the last landmark that was run through
+        last_landmark = len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0]) # find the last landmark that was run through
     else:
-        last_landmark = len(session['landmarks'])  # TODO: confirm
-    
+        last_landmark = len(session['landmarks'])  
+
     num_lms = len(session['landmarks'])*(session['num_laps']-1) + last_landmark 
-   
+
     lm_ids =  np.array(options['flip_tunnel']['landmarks_sequence'])
     all_lms = np.array([])  # landmark ids
     for i in range(session['num_laps']):
@@ -405,12 +405,14 @@ def get_lms_visited(options, session):
     for i in range(1, session['num_laps']):  
         all_landmarks = np.concatenate((all_landmarks, session['landmarks']), axis=0)
     all_landmarks = all_landmarks[:num_lms]  # landmark positions
+
     session['all_landmarks'] = all_landmarks
     session['all_lms'] = all_lms
 
     return session
 
 def get_num_landmarks(session, options):
+    # Get number of landmarks in the corridor according to behaviour timepoint
     rulename = options['sequence_task']['rulename']
     if rulename == 'run-auto' or rulename == 'run-lick':  # stages 1-2
         num_landmarks = 0
@@ -817,7 +819,7 @@ def get_lm_entry_exit(session, positions=None):
         base_path = find_base_path_npz(session['mouse'], session['date'])
         nidaq_data = load_session_npz(base_path)
         positions = nidaq_data['position']
-        
+
     lm_entry_idx = []
     lm_exit_idx = []
     
@@ -825,19 +827,14 @@ def get_lm_entry_exit(session, positions=None):
         search_start = 0  
 
         for i, (lm_start, lm_end) in enumerate(session['all_landmarks'][:-1]):  
-            lm_start_idx = np.where(positions[search_start:] >= lm_start)[0][0] + search_start
-
             next_lm_start = session['all_landmarks'][i+1,0]
             next_lm_start_idx = np.where(positions[search_start:] >= next_lm_start)[0][0] + search_start
 
             if next_lm_start < lm_start:    # position reset 
                 # print('Lap change')
-                distance = 10 ** (int(math.log10(len(positions))) - 1) 
-                height = math.floor(max(positions)/10)*10
-                lap_change_idx = find_peaks(positions[search_start:], height=height, distance=distance)[0][0] + 1
-
+                lap_change_idx = find_peaks(positions[search_start:], height=session['tunnel_length']-1, distance=100)[0][0] + 10 
                 next_lm_start_idx = search_start + lap_change_idx + 1
-
+                
             start_candidates = np.where(positions[search_start:next_lm_start_idx] >= lm_start)[0]
             entry_idx = start_candidates[0] + search_start
             
@@ -1211,6 +1208,106 @@ def get_data_lm_idx(nidaq_data, session):
 
     return session
 
+def get_landmark_categories(session):
+    '''Find the landmarks in the entire session that belong to goals, non-goals and test.'''
+
+    session = get_landmark_ids(session)
+
+    # Get the landmarks that belong to each condition  
+    goals_idx = np.where(np.isin(session['all_lms'], session['goal_landmark_id']))[0]
+    non_goals_idx = np.where(np.isin(session['all_lms'], session['non_goal_landmark_id']))[0]
+    test_idx = np.where(np.isin(session['all_lms'], session['test_landmark_id']))[0] if session['test_landmark_id'] is not None else None
+    
+    session['goals_idx'] = goals_idx
+    session['non_goals_idx'] = non_goals_idx
+    session['test_idx'] = test_idx
+
+    return session
+
+def get_landmark_ids(session):
+    '''Define which landmarks belong to goals, non-goals and test.'''
+ 
+    t = int(session['stage'].replace("-t", ""))
+
+    if t == 5 or t == 6:
+    # if '5' in session['stage'] or '6' in session['stage']:
+        assert session['num_landmarks'] == 10, 'The number of landmarks in T5 or T6 should be 10.'
+        
+        if session['sequence'] == 'ABAB':
+            goal_landmark_id = np.array([1, 3, 5, 7])
+            test_landmark_id = 9
+        elif session['sequence'] == 'AABB':  
+            goal_landmark_id = np.array([0, 1, 4, 5])
+            test_landmark_id = np.array([8, 9])
+        non_goal_landmark_id = np.setxor1d(np.arange(0, session['num_landmarks']), np.append(goal_landmark_id, test_landmark_id))
+
+    elif t == 3 or t == 4:
+    # elif '3' in session['stage'] or '4' in session['stage']:
+        assert session['num_landmarks'] == 2, 'The number of landmarks in T3 or T4 should be 2.'
+        
+        lms = np.unique(session['all_lms'])
+        goal_mask = [i for i, landmark in enumerate(session['all_landmarks']) if landmark in session['goals']]
+        goal_landmark_id = session['all_lms'][goal_mask[0]]
+        non_goal_landmark_id = np.setdiff1d(lms, goal_landmark_id)[0]
+        test_landmark_id = None
+
+    elif t > 6:
+        lms = np.arange(session['num_landmarks'])
+        print(session['goal_idx'])
+        goal_landmark_id = session['goal_idx']
+        non_goal_landmark_id = np.setdiff1d(lms, session['goal_idx'])
+        test_landmark_id = None
+
+    session['goal_landmark_id'] = goal_landmark_id
+    session['non_goal_landmark_id'] = non_goal_landmark_id
+    session['test_landmark_id'] = test_landmark_id
+
+    return session
+
+def get_landmark_category_rew_idx(session, VR_data, nidaq_data):
+    '''Find indices also in non-goal landmarks corresponding to the same time after landmark entry as mean reward time lag.'''
+    
+    session = get_rewards(VR_data, nidaq_data, session, print_output=True)
+
+    rew_lm_entry_idx, miss_lm_entry_idx, nongoal_lm_entry_idx, test_lm_entry_idx = get_landmark_category_entries(VR_data, nidaq_data, session)
+    
+    # Calculate time lag between landmark entry and reward delivery
+    rew_time_lag = np.round(np.mean(session['reward_idx'] - rew_lm_entry_idx))
+    print('Reward time lag from lm entry: ', rew_time_lag)
+
+    # Find where reward would be on average if these landmarks were rewarded
+    miss_rew_idx = miss_lm_entry_idx + rew_time_lag
+    nongoal_rew_idx = nongoal_lm_entry_idx + rew_time_lag  
+    test_rew_idx = test_lm_entry_idx + rew_time_lag
+
+    session['rew_time_lag'] = rew_time_lag
+    session['miss_rew_idx'] = miss_rew_idx
+    session['nongoal_rew_idx'] = nongoal_rew_idx
+    session['test_rew_idx'] = test_rew_idx
+
+    return session
+
+def get_landmark_category_entries(VR_data, nidaq_data, session):
+    '''Find the indices of landmark entry for different types of landmarks: rewarded, miss, non-goal, test.'''
+    
+    lm_entry_idx, _ = get_lm_entry_exit(session, positions=nidaq_data['position'])
+
+    # Find category for each landmark 
+    session = get_landmark_categories(session)
+
+    # Find the rewarded landmarks 
+    session = get_rewarded_landmarks(VR_data, nidaq_data, session)
+
+    # Find landmark entry indices for each landmark category
+    rew_lm_entry_idx = [lm_entry_idx[i] for i in session['rewarded_landmarks']]
+    miss_lm_entry_idx = np.array([lm_entry_idx[i] for i in session['goals_idx'] if i not in session['rewarded_landmarks']])
+    nongoal_lm_entry_idx = np.array([lm_entry_idx[i] for i in session['non_goals_idx']])
+    test_lm_entry_idx = np.array([lm_entry_idx[i] for i in session['test_idx']]) if session['test_idx'] is not None else np.array([])
+
+    assert len(rew_lm_entry_idx) + len(miss_lm_entry_idx) + len(nongoal_lm_entry_idx) + len(test_lm_entry_idx) == len(session['all_lms']), 'Some landmarks have not been considered.'
+
+    return rew_lm_entry_idx, miss_lm_entry_idx, nongoal_lm_entry_idx, test_lm_entry_idx
+
 #%% ##### Analysis wrappers #####
 def create_session_struct_npz(data,options):
     position = data['position']
@@ -1323,7 +1420,6 @@ def analyse_session(mouse, date, plot=True):
 
     return session
 
-# def analyse_session_pre7(base_path):
 def analyse_session_pre7(mouse, date, plot=True):
     base_path = find_base_path(mouse, date)
     data = load_session(base_path)
@@ -1349,7 +1445,7 @@ def analyse_session_pre7(mouse, date, plot=True):
 
     return session
 
-def analyse_npz(mouse, date, plot=True): # TODO add stage 
+def analyse_npz(mouse, date, stage, plot=True): 
     base_path = find_base_path_npz(mouse, date)
     data = load_session_npz(base_path)
     base_path2 = find_base_path(mouse, date)
@@ -1358,6 +1454,7 @@ def analyse_npz(mouse, date, plot=True): # TODO add stage
     session = create_session_struct_npz(data, options)
     session['mouse'] = mouse
     session['date'] = date
+    session['stage'] = stage
 
     session = get_num_landmarks(session, options)
     session = get_lap_idx(session)
@@ -1365,9 +1462,18 @@ def analyse_npz(mouse, date, plot=True): # TODO add stage
     session = threshold_licks(session)
     session = get_licks_per_lap(session)
     session = get_licked_lms(session)
+    
     session = get_rewarded_lms(session)
     session = get_lms_visited(options, session)
+    session = get_licks(data, session)
     session = get_active_goal(session)
+
+    VR_data = load_session(base_path2)
+    session = get_rewarded_landmarks(VR_data, data, session)
+    session = get_landmark_category_rew_idx(session, VR_data, data)
+    session = calculate_frame_lick_rate(data, session)
+
+    
     session = get_transition_prob(session)
     session = get_all_transitions(session)
     session = get_ideal_transitions(session)
@@ -1873,107 +1979,6 @@ def get_AB_sequence(session, mouse, stage):
     session['sequence'] = sequence
 
     return session
-
-def get_landmark_categories(session):
-    '''Find the landmarks in the entire session that belong to goals, non-goals and test.'''
-
-    if ('stage' not in session) or ('3' not in session['stage'] and '4' not in session['stage'] and '5' not in session['stage'] and '6' not in session['stage']):
-        raise ValueError('This function only works for T3-T6.')
-    
-    session = get_landmark_ids(session)
-
-    # Get the landmarks that belong to each condition  
-    goals_idx = np.where(np.isin(session['all_lms'], session['goal_landmark_id']))[0]
-    non_goals_idx = np.where(np.isin(session['all_lms'], session['non_goal_landmark_id']))[0]
-    test_idx = np.where(np.isin(session['all_lms'], session['test_landmark_id']))[0] if session['test_landmark_id'] is not None else None
-    
-    session['goals_idx'] = goals_idx
-    session['non_goals_idx'] = non_goals_idx
-    session['test_idx'] = test_idx
-
-    return session
-
-def get_landmark_ids(session):
-    '''Define which landmarks belong to goals, non-goals and test.'''
-
-    if ('stage' not in session) or ('3' not in session['stage'] and '4' not in session['stage'] and '5' not in session['stage'] and '6' not in session['stage']):
-        raise ValueError('This function only works for T3-T6.')
-    
-    if '5' in session['stage'] or '6' in session['stage']:
-        assert session['num_landmarks'] == 10, 'The number of landmarks in T5 or T6 should be 10.'
-        
-        if session['sequence'] == 'ABAB':
-            goal_landmark_id = np.array([1, 3, 5, 7])
-            test_landmark_id = 9
-        elif session['sequence'] == 'AABB':  
-            goal_landmark_id = np.array([0, 1, 4, 5])
-            test_landmark_id = np.array([8, 9])
-        non_goal_landmark_id = np.setxor1d(np.arange(0, session['num_landmarks']), np.append(goal_landmark_id, test_landmark_id))
-
-    if '3' in session['stage'] or '4' in session['stage']:
-        assert session['num_landmarks'] == 2, 'The number of landmarks in T3 or T4 should be 2.'
-        
-        lms = np.unique(session['all_lms'])
-        goal_mask = [i for i, landmark in enumerate(session['all_landmarks']) if landmark in session['goals']]
-        goal_landmark_id = session['all_lms'][goal_mask[0]]
-        non_goal_landmark_id = np.setdiff1d(lms, goal_landmark_id)[0]
-        test_landmark_id = None
-
-    session['goal_landmark_id'] = goal_landmark_id
-    session['non_goal_landmark_id'] = non_goal_landmark_id
-    session['test_landmark_id'] = test_landmark_id
-
-    return session
-
-def get_landmark_category_rew_idx(session, VR_data, nidaq_data):
-    '''Find indices also in non-goal landmarks corresponding to the same time after landmark entry as mean reward time lag.'''
-    
-    if ('stage' not in session) or ('3' not in session['stage'] and '4' not in session['stage'] and '5' not in session['stage'] and '6' not in session['stage']):
-        raise ValueError('This function only works for T3-T6.')
-    
-    session = get_rewards(VR_data, nidaq_data, session, print_output=True)
-
-    rew_lm_entry_idx, miss_lm_entry_idx, nongoal_lm_entry_idx, test_lm_entry_idx = get_landmark_category_entries(VR_data, nidaq_data, session)
-    
-    # Calculate time lag between landmark entry and reward delivery
-    rew_time_lag = np.round(np.mean(session['reward_idx'] - rew_lm_entry_idx))
-    print('Reward time lag from lm entry: ', rew_time_lag)
-
-    # Find where reward would be on average if these landmarks were rewarded
-    miss_rew_idx = miss_lm_entry_idx + rew_time_lag
-    nongoal_rew_idx = nongoal_lm_entry_idx + rew_time_lag  
-    test_rew_idx = test_lm_entry_idx + rew_time_lag
-
-    session['rew_time_lag'] = rew_time_lag
-    session['miss_rew_idx'] = miss_rew_idx
-    session['nongoal_rew_idx'] = nongoal_rew_idx
-    session['test_rew_idx'] = test_rew_idx
-
-    return session
-
-def get_landmark_category_entries(VR_data, nidaq_data, session):
-    '''Find the indices of landmark entry for different types of landmarks: rewarded, miss, non-goal, test.'''
-    
-    if ('stage' not in session) or ('3' not in session['stage'] and '4' not in session['stage'] and '5' not in session['stage'] and '6' not in session['stage']):
-        raise ValueError('This function only works for T3-T6.')
-    
-    lm_entry_idx, _ = get_lm_entry_exit(session, positions=nidaq_data['position'])
-
-    # Find category for each landmark 
-    session = get_landmark_categories(session)
-
-    # Find the rewarded landmarks 
-    session = get_rewarded_landmarks(VR_data, nidaq_data, session)
-
-    # Find landmark entry indices for each landmark category
-    rew_lm_entry_idx = [lm_entry_idx[i] for i in session['rewarded_landmarks']]
-    miss_lm_entry_idx = np.array([lm_entry_idx[i] for i in session['goals_idx'] if i not in session['rewarded_landmarks']])
-    nongoal_lm_entry_idx = np.array([lm_entry_idx[i] for i in session['non_goals_idx']])
-    test_lm_entry_idx = np.array([lm_entry_idx[i] for i in session['test_idx']]) if session['test_idx'] is not None else np.array([])
-
-    assert len(rew_lm_entry_idx) + len(miss_lm_entry_idx) + len(nongoal_lm_entry_idx) + len(test_lm_entry_idx) == len(session['all_lms']), 'Some landmarks have not been considered.'
-
-    return rew_lm_entry_idx, miss_lm_entry_idx, nongoal_lm_entry_idx, test_lm_entry_idx
 
 def get_lick_types(session, VR_data, nidaq_data):
     """

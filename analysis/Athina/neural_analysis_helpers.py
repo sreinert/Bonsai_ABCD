@@ -46,22 +46,34 @@ def load_dF_session_data(base_path, mouse, stage, calculate_DF_F=False):
         print(dF.shape)
         
     else:
-        DF_F_file = os.path.join(imaging_path, 'DF_F0_valid_frames.npy')
-        if os.path.exists(DF_F_file):
-            print('DF_F0 file with valid frames found. Loading...')
-            dF = np.load(DF_F_file)
-        else:
-            # TODO: incorporate this into the main analysis and ensure DF_F is the same everywhere
-            f, fneu, iscell, ops, seg, frame_rate = cellTV.load_img_data(imaging_path)
-            dF = cellTV.get_dff(f, fneu, frame_ix, ops)
+        # DF_F_file = os.path.join(imaging_path, 'DF_F0_valid_frames.npy')
+        # if os.path.exists(DF_F_file):
+        #     print('DF_F0 file with valid frames found. Loading...')
+        #     dF = np.load(DF_F_file)
+        # else:
+        #     # TODO: incorporate this into the main analysis and ensure DF_F is the same everywhere
+        f, fneu, iscell, ops, seg, frame_rate = cellTV.load_img_data(imaging_path)
+        # dF = cellTV.get_dff(f, fneu, frame_ix, ops)
+        
+        from scipy.ndimage import percentile_filter
 
-            np.save(DF_F_file, dF)
+        Fcorr = f - 0.7 * fneu + 0.7 * np.median(fneu, axis=1).reshape(-1,1)
+        F0 = np.zeros(np.shape(f))
+        f0_window = 60 * frame_rate  # frames
+        for n in range(f.shape[0]):  # Loop over neurons (rows)
+            F0[n, :] = percentile_filter(f[n, :], percentile=25, size=f0_window, mode='nearest')
+
+        DF_F_all = (Fcorr - F0) / F0  # Compute DF/F as (F-F0)/F0 per frame per neuron
+
+        dF = DF_F_all[:, frame_ix['valid_frames']]  # Select the correct frames that fall within VR behaviour 
+
+        np.save(DF_F_file, dF)
             
     # Get session data 
     if stage in ['-t3','-t4','-t5', '-t6']:
-        session = parse_session_functions.analyse_npz_pre7(mouse, date2, stage=stage, plot=False)
+        session = parse_session_functions.analyse_npz_pre7(mouse, date2, stage, plot=False)
     else:
-        session = parse_session_functions.analyse_npz(mouse, date2, plot=True)
+        session = parse_session_functions.analyse_npz(mouse, date2, stage, plot=True)
 
     session['save_path'] = save_path
 
@@ -1870,7 +1882,7 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
     # Create a goal vector 
     if period == 'goal':
         # Events are organised based on whether they are a goal or not
-        if ('shuffled' in session['sequence']):
+        if ('sequence' in session) and ('shuffled' in session['sequence']):
             assert ngoals == 2
             goal_vec = np.empty((len(event_frames)), dtype=int)
             for i in range(len(event_frames)):
@@ -1999,7 +2011,7 @@ def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoal
         for cell in neurons:
             real_scores[cell], shuffled_scores[cell], _, _ = cellTV.calc_goal_tuningix(dF, cell, session, condition='arb', period=period, event_frames=event_frames, n_goals=ngoals, frame_rate=45, bins=bins, shuffle=shuffle, plot=False)
 
-            if 'shuffled' in session['sequence']:
+            if ('sequence' in session) and ('shuffled' in session['sequence']):
                 if real_scores[cell] - np.median(shuffled_scores[cell]) > 0.07:
                     goal_progress_tuned.append(cell)
             else:
@@ -2406,7 +2418,7 @@ def classify_4_or_5_peak_neurons_with_gui(neurons, mean_goal_firing, peaks=[1,4,
 
     return peak_counts
 
-def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, sigma_smooth=10, plot=True, shuffled_scores_path=''):
+def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, plot=True, shuffled_scores_path=''):
     """
     Get state-tuned neurons following the z-scoring method in El Gaby et al., and adding a tuning score criterion.
     """
@@ -2439,7 +2451,6 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, si
         print('Shuffled scores path not defined. Scores are computed now...')
         _, _, shuffled_scores = get_goal_progress_cells(dF, neurons, session, event_idx, session['save_path'], ngoals=ngoals, bins=bins, period='goal', plot=False, shuffle=True)
     
-    sigma_bins = sigma_smooth / (360 / bins * ngoals) # sigma_smooth in deg
     angles = np.linspace(0, 2 * np.pi, 90*5, endpoint=False)
     angles = np.concatenate((angles, [angles[0]]))  # add the first angle to close the circle
     states = ['A','B','C','D','test']
@@ -2462,11 +2473,7 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, si
 
         # (1) Find the preferred state 
         av_binned = np.nanmean(binned_goal_activity[cell], axis=0)
-        avg_tripled = np.concatenate((av_binned, av_binned, av_binned))
-        avg_smoothed = gaussian_filter1d(avg_tripled, sigma=sigma_bins, mode='nearest').copy()
-        N = av_binned.size
-        smooth_center = avg_smoothed[N:2*N]  
-
+        
         state_max = np.array([np.max(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
         state_min = np.array([np.min(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
         state_mean = np.array([np.mean(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
@@ -2504,7 +2511,7 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, si
                 ax1 = fig.add_subplot(projection='polar')
                 ax1.set_theta_zero_location('N')
                 ax1.set_theta_direction(-1)
-                data = av_binned # smooth_center
+                data = av_binned 
                 data = np.concatenate((data, [data[0]]))
                 ax1.plot(angles, data, color=color, linewidth=2)
                 ax1.set_xticks(np.linspace(0, 2 * np.pi, 5, endpoint=False))

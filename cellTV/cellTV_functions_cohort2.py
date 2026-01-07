@@ -1086,8 +1086,8 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
         dF_cell = extract_cell_trace(dF[c], cell[c], plot=False)
         
         # z-score to remove differences across sessions 
-        if not all(s == stages[0] for s in stages):
-            dF_cell = stats.zscore(dF_cell)
+        # if not all(s == stages[0] for s in stages):
+        dF_cell = stats.zscore(dF_cell)
         
         # Bin the activity
         binned_phase_firing = np.zeros((len(event_frames[c])-1, bins))
@@ -1095,7 +1095,7 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
         # Create a goal vector 
         if period == 'goal':
             # Events are organised based on whether they are a goal or not
-            if ('shuffled' in sessions[c]['sequence']):
+            if ('sequence' in sessions[c]) and ('shuffled' in sessions[c]['sequence']):
                 assert ngoals == 2
                 goal_vec = np.empty((len(event_frames[c])), dtype=int)
                 for i in range(len(event_frames[c])):
@@ -1169,7 +1169,10 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
             elif stages[0] == 8:
                 colors[0] = 'red'
                 colors[1] = 'tomato'
-
+            elif stages[0] == 12:
+                colors[0] = 'teal'
+                colors[1] = 'lightseagreen'
+                
             if labels is None:
                 labels = np.empty(len(stages), dtype=object)
                 labels[0] = f'T{stages[0]} - rewards'
