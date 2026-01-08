@@ -1877,33 +1877,41 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
     If ax1/ax2 are given, plot into them. Otherwise, create a new figure.
     """
     dF_cell = cellTV.extract_cell_trace(dF, cell, plot=False)
-    binned_phase_firing = np.zeros((len(event_frames)-1, bins))
+
+    n_events = len(event_frames)
+    binned_phase_firing = np.zeros((n_events-1, bins))
 
     # Create a goal vector 
     if period == 'goal':
         # Events are organised based on whether they are a goal or not
         if ('sequence' in session) and ('shuffled' in session['sequence']):
             assert ngoals == 2
-            goal_vec = np.empty((len(event_frames)), dtype=int)
-            for i in range(len(event_frames)):
+            goal_vec = np.empty((n_events), dtype=int)
+            for i in range(n_events):
                 if i in session['goals_idx']:
                     goal_vec[i] = 0
                 elif i in session['non_goals_idx']:
                     goal_vec[i] = 1
         else:
-            goal_vec = np.arange(ngoals)
-            goal_vec = np.tile(goal_vec, len(event_frames)//ngoals) 
+            if ngoals == 10:
+                goal_vec = (np.arange(n_events) - 1) % ngoals # shift by 1 goal so that 0 corresponds to first reward
+            else:
+                goal_vec = np.arange(ngoals)
+                goal_vec = np.tile(goal_vec, n_events//ngoals) 
 
     elif period == 'landmark':
         # Events are organised based on the order in which they occur
-        goal_vec = np.arange(ngoals)
-        goal_vec = np.tile(goal_vec, len(event_frames)//ngoals)  
+        if ngoals == 10:
+            goal_vec = (np.arange(n_events) - 1) % ngoals # shift by 1 goal so that 0 corresponds to first reward
+        else:
+            goal_vec = np.arange(ngoals)
+            goal_vec = np.tile(goal_vec, n_events//ngoals) 
     goal_vec = goal_vec[:-1]
     
     num_trials = np.array([np.sum(goal_vec == i) for i in range(ngoals)])
     max_trials = np.max(num_trials)
 
-    for i in range(len(event_frames)-1):
+    for i in range(n_events-1):
         phase_frames = np.arange(event_frames[i], event_frames[i+1])
         bin_edges = np.linspace(event_frames[i], event_frames[i+1], bins+1)
         phase_firing = dF_cell[phase_frames]
@@ -1990,7 +1998,8 @@ def create_templates(peaks=[1,4,5], bins=360, plot=True):
 
 def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoals=4, bins=90, period='goal', reload=False, plot=True, shuffle=False):
     # Find goal progress tuned cells - takes long if shuffling
-    stage = int(session['stage'][-1])
+    # stage = int(session['stage'][-1])
+    stage = int(session['stage'].replace("-t", ""))
 
     if period == 'goal':
         filename = f'T{stage}_{ngoals}goal_progress_tracked_neurons.npz'
@@ -2422,7 +2431,9 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
     """
     Get state-tuned neurons following the z-scoring method in El Gaby et al., and adding a tuning score criterion.
     """
-    stage = int(session['stage'][-1])
+    # stage = int(session['stage'][-1])
+    stage = int(session['stage'].replace("-t", ""))
+
     if stage == 3:
         color = '#325235'
     elif stage == 4:
@@ -2451,12 +2462,12 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
         print('Shuffled scores path not defined. Scores are computed now...')
         _, _, shuffled_scores = get_goal_progress_cells(dF, neurons, session, event_idx, session['save_path'], ngoals=ngoals, bins=bins, period='goal', plot=False, shuffle=True)
     
-    angles = np.linspace(0, 2 * np.pi, 90*5, endpoint=False)
+    angles = np.linspace(0, 2 * np.pi, bins*ngoals, endpoint=False)
     angles = np.concatenate((angles, [angles[0]]))  # add the first angle to close the circle
     states = ['A','B','C','D','test']
     if ngoals == 10:
         states = ['A','A','B','B','C','C','D','D','test','test']
-    state_number = np.arange(1,11)
+    state_number = np.arange(ngoals)
     state_width = 2 * np.pi / ngoals
 
     state_tuned = []
@@ -2474,9 +2485,9 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
         # (1) Find the preferred state 
         av_binned = np.nanmean(binned_goal_activity[cell], axis=0)
         
-        state_max = np.array([np.max(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
-        state_min = np.array([np.min(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
-        state_mean = np.array([np.mean(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
+        state_max = np.array([np.nanmax(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
+        state_min = np.array([np.nanmin(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
+        state_mean = np.array([np.nanmean(av_binned[bins*i:bins*(i+1)]) for i in range(ngoals)])
         state_preference = np.where(state_max == np.max(state_max))[0][0]
         tuning_score = (state_max - state_min) / state_mean
 
@@ -2489,7 +2500,7 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
         # (2) Take the peak firing rate in each state and trial (n_trials x n_goals)
         trial_state_max = np.zeros((ntrials, ngoals))
         for i in range(ngoals):
-            trial_state_max[:,i] = np.max(binned_goal_activity[cell][:,bins*i:bins*(i+1)], axis=1)
+            trial_state_max[:,i] = np.nanmax(binned_goal_activity[cell][:,bins*i:bins*(i+1)], axis=1)
             
         # (3) z-score across each trial 
         trial_state_max_zscored = stats.zscore(trial_state_max, axis=1)
@@ -2514,7 +2525,7 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
                 data = av_binned 
                 data = np.concatenate((data, [data[0]]))
                 ax1.plot(angles, data, color=color, linewidth=2)
-                ax1.set_xticks(np.linspace(0, 2 * np.pi, 5, endpoint=False))
+                ax1.set_xticks(np.linspace(0, 2 * np.pi, ngoals, endpoint=False))
                 ax1.set_title(f'Cell {cell} - pref state: {states[state_preference]}')
                 ax1.set_rlim(0, np.nanmax(data) * 1.1)
                 theta_start = state_preference * state_width
@@ -2529,29 +2540,28 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
                     edgecolor=None
                 )
 
-            # elif (result.pvalue < 0.05) and not np.isin(cell, keep_cell):
-            #     fig = plt.figure(figsize=(3, 3))
-            #     ax1 = fig.add_subplot(projection='polar')
-            #     ax1.set_theta_zero_location('N')
-            #     ax1.set_theta_direction(-1)
-            #     data = av_binned
-            #     data = np.concatenate((data, [data[0]]))
-            #     ax1.plot(angles, data, color='gray', linewidth=2)
-            #     ax1.set_xticks(np.linspace(0, 2 * np.pi, 5, endpoint=False))
-            #     ax1.set_title(f'Cell {cell}: pref state {states[state_preference]}')
-            #     ax1.set_rlim(0, np.nanmax(data) * 1.1)
-            #     theta_start = state_preference * state_width
-            #     theta_end   = (state_preference + 1) * state_width
-            #     theta_arc = np.linspace(theta_start, theta_end, 200)
+            elif (result.pvalue < 0.05) and not np.isin(cell, keep_cell):
+                fig = plt.figure(figsize=(3, 3))
+                ax1 = fig.add_subplot(projection='polar')
+                ax1.set_theta_zero_location('N')
+                ax1.set_theta_direction(-1)
+                data = av_binned
+                data = np.concatenate((data, [data[0]]))
+                ax1.plot(angles, data, color='gray', linewidth=2)
+                ax1.set_xticks(np.linspace(0, 2 * np.pi, 5, endpoint=False))
+                ax1.set_title(f'Cell {cell}: pref state {states[state_preference]}')
+                ax1.set_rlim(0, np.nanmax(data) * 1.1)
+                theta_start = state_preference * state_width
 
-            #     ax1.bar(
-            #         theta_start + state_width/2,
-            #         ax1.get_rmax(),
-            #         width=state_width,
-            #         bottom=0,
-            #         color='gray',
-            #         alpha=0.15,
-            #         edgecolor=None
-            #     )
+                ax1.bar(
+                    theta_start + state_width/2,
+                    ax1.get_rmax(),
+                    width=state_width,
+                    bottom=0,
+                    color='gray',
+                    alpha=0.15,
+                    edgecolor=None
+                )
 
+    print(pvalues)
     return state_tuned, state_number_preference

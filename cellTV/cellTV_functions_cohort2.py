@@ -813,26 +813,34 @@ def extract_arb_progress(dF, cell, session, event_frames, ngoals, bins, period='
     Extract the progress tuning between arbitrary events.
     """
     dF_cell = extract_cell_trace(dF, cell, plot=False)
-    binned_phase_firing = np.zeros((len(event_frames)-1, bins))
+
+    n_events = len(event_frames)
+    binned_phase_firing = np.zeros((n_events-1, bins))
 
     if period == 'goal':
         # Events are organised based on whether they are a goal or not
         if 'sequence' in session and 'shuffled' in session['sequence']:
             assert ngoals == 2
             goal_vec = np.empty((len(event_frames)), dtype=int)
-            for i in range(len(event_frames)):
+            for i in range(n_events):
                 if i in session['goals_idx']:
                     goal_vec[i] = 0
                 elif i in session['non_goals_idx']:
                     goal_vec[i] = 1
         else:
-            goal_vec = np.arange(ngoals)
-            goal_vec = np.tile(goal_vec, len(event_frames)//ngoals) 
+            if ngoals == 10:
+                goal_vec = (np.arange(n_events) - 1) % ngoals # shift by 1 goal so that 0 corresponds to first reward
+            else:
+                goal_vec = np.arange(ngoals)
+                goal_vec = np.tile(goal_vec, n_events//ngoals) 
 
     elif period == 'landmark':
         # Events are organised based on the order in which they occur
-        goal_vec = np.arange(ngoals)
-        goal_vec = np.tile(goal_vec, len(event_frames)//ngoals)  
+        if ngoals == 10:
+            goal_vec = (np.arange(n_events) - 1) % ngoals # shift by 1 goal so that 0 corresponds to first reward
+        else:
+            goal_vec = np.arange(ngoals)
+            goal_vec = np.tile(goal_vec, n_events//ngoals)
     goal_vec = goal_vec[:-1]
 
     num_trials = np.zeros(ngoals)
@@ -841,7 +849,7 @@ def extract_arb_progress(dF, cell, session, event_frames, ngoals, bins, period='
     num_trials = num_trials.astype(int)
     max_trials = np.max(num_trials)
 
-    for i in range(len(event_frames)-1):
+    for i in range(n_events-1):
         phase_frames = np.arange(event_frames[i], event_frames[i+1])
         bin_edges = np.linspace(event_frames[i], event_frames[i+1], bins+1)
         phase_firing = dF_cell[phase_frames]
