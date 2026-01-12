@@ -42,32 +42,30 @@ def load_dF_session_data(base_path, mouse, stage, calculate_DF_F=False):
         print('DF_F0 file found. Loading...')
         
         DF_F_all = np.load(DF_F_file)
-        dF = DF_F_all[:, frame_ix['valid_frames']]
+        dF = DF_F_all[:, frame_ix['valid_frames']] # Select the correct frames that fall within VR behaviour 
         print(dF.shape)
         
     else:
-        # DF_F_file = os.path.join(imaging_path, 'DF_F0_valid_frames.npy')
-        # if os.path.exists(DF_F_file):
-        #     print('DF_F0 file with valid frames found. Loading...')
-        #     dF = np.load(DF_F_file)
-        # else:
-        #     # TODO: incorporate this into the main analysis and ensure DF_F is the same everywhere
-        f, fneu, iscell, ops, seg, frame_rate = cellTV.load_img_data(imaging_path)
-        # dF = cellTV.get_dff(f, fneu, frame_ix, ops)
+        DF_F_file = os.path.join(imaging_path, 'DF_F0_valid_frames.npy')
+        if os.path.exists(DF_F_file):
+            print('DF_F0 file with valid frames found. Loading...')
+            dF = np.load(DF_F_file)
+        else:
+            from scipy.ndimage import percentile_filter
+            # TODO: incorporate this into the main analysis and ensure DF_F is the same everywhere
+            f, fneu, iscell, ops, seg, frame_rate = cellTV.load_img_data(imaging_path)
+            # dF = cellTV.get_dff(f, fneu, frame_ix, ops)
         
-        from scipy.ndimage import percentile_filter
+            Fcorr = f - 0.7 * fneu + 0.7 * np.median(fneu, axis=1).reshape(-1,1)
+            F0 = np.zeros(np.shape(f))
+            f0_window = 60 * frame_rate  # frames
+            for n in range(f.shape[0]):  # Loop over neurons (rows)
+                F0[n, :] = percentile_filter(f[n, :], percentile=25, size=f0_window, mode='nearest')
 
-        Fcorr = f - 0.7 * fneu + 0.7 * np.median(fneu, axis=1).reshape(-1,1)
-        F0 = np.zeros(np.shape(f))
-        f0_window = 60 * frame_rate  # frames
-        for n in range(f.shape[0]):  # Loop over neurons (rows)
-            F0[n, :] = percentile_filter(f[n, :], percentile=25, size=f0_window, mode='nearest')
+            DF_F_all = (Fcorr - F0) / F0  # Compute DF/F as (F-F0)/F0 per frame per neuron
+            dF = DF_F_all
 
-        DF_F_all = (Fcorr - F0) / F0  # Compute DF/F as (F-F0)/F0 per frame per neuron
-
-        dF = DF_F_all[:, frame_ix['valid_frames']]  # Select the correct frames that fall within VR behaviour 
-
-        np.save(DF_F_file, dF)
+            np.save(DF_F_file, dF)
             
     # Get session data 
     if stage in ['-t3','-t4','-t5', '-t6']:
