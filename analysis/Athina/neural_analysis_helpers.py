@@ -1998,13 +1998,12 @@ def create_templates(peaks=[1,4,5], bins=360, plot=True):
 
 def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoals=4, bins=90, period='goal', reload=False, plot=True, shuffle=False):
     # Find goal progress tuned cells - takes long if shuffling
-    # stage = int(session['stage'][-1])
-    stage = int(session['stage'].replace("-t", ""))
+    t = parse_session_functions.extract_int(session['stage'])
 
     if period == 'goal':
-        filename = f'T{stage}_{ngoals}goal_progress_tracked_neurons.npz'
+        filename = f'T{t}_{ngoals}goal_progress_tracked_neurons.npz'
     else:
-        filename = f'T{stage}_{ngoals}period_tracked_neurons.npz'
+        filename = f'T{t}_{ngoals}period_tracked_neurons.npz'
 
     if os.path.exists(os.path.join(save_path, filename)) and not reload:
         print(f'Goal progress and tracked neurons found. Loading...')
@@ -2031,7 +2030,7 @@ def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoal
         if plot:
             for cell in goal_progress_tuned:
                 _ = cellTV.extract_arb_progress(dF, cell, session, event_frames, ngoals=ngoals, 
-                                                bins=bins, period=period, stage=stage, 
+                                                bins=bins, period=period, stage=t, 
                                                 plot=plot, shuffle=False)
 
         # Save these neurons
@@ -2041,7 +2040,7 @@ def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoal
                  shuffled_scores=np.array(shuffled_scores),
                  allow_pickle=True)
 
-    print(f"{len(goal_progress_tuned)} out of {len(neurons)} tracked neurons are goal progress tuned in T{stage}")
+    print(f"{len(goal_progress_tuned)} out of {len(neurons)} tracked neurons are goal progress tuned in T{t}")
 
     return goal_progress_tuned, real_scores, shuffled_scores 
 
@@ -2431,20 +2430,19 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
     """
     Get state-tuned neurons following the z-scoring method in El Gaby et al., and adding a tuning score criterion.
     """
-    # stage = int(session['stage'][-1])
-    stage = int(session['stage'].replace("-t", ""))
+    t = parse_session_functions.extract_int(session['stage'])
 
-    if stage == 3:
+    if t == 3:
         color = '#325235'
-    elif stage == 4:
+    elif t == 4:
         color = '#9E664C'
-    elif stage == 5:
+    elif t == 5:
         color = 'blue'
-    elif stage == 6:
+    elif t == 6:
         color = 'orange'
-    elif stage == 8:
+    elif t == 8:
         color = 'red'
-    elif stage == 12:
+    elif t == 12:
         color = 'teal'
     else:
         color = 'gray'
@@ -2478,7 +2476,7 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
     for cell in neurons:
         # Bin activity per goal 
         binned_goal_activity[cell] = cellTV.extract_arb_progress(dF, cell, session, event_idx, ngoals=ngoals, bins=bins, 
-                                                            stage=stage, plot=False, shuffle=False)
+                                                            stage=t, plot=False, shuffle=False)
 
         ntrials = binned_goal_activity[cell].shape[0]
 
@@ -2563,5 +2561,4 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
                     edgecolor=None
                 )
 
-    print(pvalues)
     return state_tuned, state_number_preference

@@ -695,7 +695,7 @@ def extract_lick_tuning(dF, cell, session, frame_rate=45, window_size=[-1,2], pl
         plt.tight_layout()
     return lick_frames, lin_first_licks
 
-def extract_arb_peth(dF,cell,event_frames, frame_rate=45, window_size=[-1,5], plot=False):
+def extract_arb_peth(dF, cell, event_frames, frame_rate=45, window_size=[-1,5], plot=False):
     """
     Extract the peri-event time histogram (PETH) for a specific cell around arbitrary events. (window[0] before, window[1] after)
     """
@@ -742,7 +742,7 @@ def extract_arb_peth(dF,cell,event_frames, frame_rate=45, window_size=[-1,5], pl
 
 # Goal or arbitrary (e.g. licked landmarks/internal goals) progress coding
 
-def extract_goal_progress(dF,cell,session,frame_rate = 45,bins=90,plot=False,shuffle=False):
+def extract_goal_progress(dF, cell, session, frame_rate=45, bins=90, plot=False, shuffle=False):
     """
     Extract the goal progress for a specific cell.
     """
