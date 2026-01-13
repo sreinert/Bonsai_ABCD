@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter.filedialog import askdirectory, askopenfilename
 # import defopt
-from barcode_util import read_h5, read_h5_with_key
+from .barcode_util import read_h5, read_h5_with_key
 from scipy.signal import find_peaks
 import pickle
 

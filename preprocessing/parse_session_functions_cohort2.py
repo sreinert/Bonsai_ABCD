@@ -64,8 +64,17 @@ def load_config(base_path):
         options = yaml.load(file, Loader=yaml.FullLoader)
     return options
 
+def find_session_base_path(mouse, date, root):
+    data_dir = root + mouse
+    folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
+    sessions = [s for s in folders if date in s]
+    base_path = os.path.join(data_dir, sessions[0])
+
+    return base_path
+
 def find_base_path(mouse, date):
-    data_dir = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
+    root = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'
+    data_dir = root + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
     if not sessions:
@@ -94,7 +103,7 @@ def find_base_path(mouse, date):
         # print(base_path)
     return base_path
 
-def find_base_path_npz(mouse,date):
+def find_base_path_npz(mouse, date):
     data_dir = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
@@ -396,11 +405,10 @@ def give_lap_state_id(session):
 
 def get_lms_visited(options, session):
     # Calculate number of landmarks visited
-    if len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) != 0: # TODO might need to fix this to select only one lm
-        last_landmark = len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0]) # find the last landmark that was run through
+    if len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) != len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0]):
+        last_landmark = len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0]) # session ended before mouse exited last lm entered
     else:
-        last_landmark = len(session['landmarks'])  
-
+        last_landmark = len(session['all_landmarks'])     
     num_lms = len(session['landmarks'])*(session['num_laps']-1) + last_landmark 
 
     lm_ids =  np.array(options['flip_tunnel']['landmarks_sequence'])
@@ -741,14 +749,12 @@ def calc_acceleration(session, funcimg_frame_rate=45):
 def calc_goal_progress(session, bins=5):
     '''Create a goal progress vector'''
     
-    reward_ix = session['reward_idx']
-
     binned_goal_progress = np.zeros(len(session['position'])) 
 
-    # ngoals = len(np.unique(session['goal_idx']))
-    # goal_rew_vec = np.arange(ngoals)
-    # goal_rew_vec = np.tile(goal_rew_vec, len(session['reward_idx'])//ngoals)
-    # goal_rew_vec = goal_rew_vec[:-1]
+    if session['test_landmark_id'] is not None: 
+        reward_ix = np.sort(np.concatenate([session['reward_idx'], session['test_rew_idx']])).astype(int)
+    else:
+        reward_ix = session['reward_idx']
 
     # first trial 
     phase_frames = np.arange(0, reward_ix[0])
@@ -871,14 +877,14 @@ def get_lm_entry_exit(session, positions=None):
 
     lm_entry_idx = []
     lm_exit_idx = []
-    
+
     if session['num_laps'] > 1:
         search_start = 0  
 
-        for i, (lm_start, lm_end) in enumerate(session['all_landmarks'][:-1]):  
-            next_lm_start = session['all_landmarks'][i+1,0]
-            next_lm_start_idx = np.where(positions[search_start:] >= next_lm_start)[0][0] + search_start
+        for i, (lm_start, lm_end) in enumerate(session['all_landmarks'][:-1]):
 
+            next_lm_start = session['all_landmarks'][i+1,0]
+            next_lm_start_idx = np.where(positions[search_start:] >= next_lm_start)[0][0] + search_start                
             if next_lm_start < lm_start:    # position reset 
                 # print('Lap change')
                 lap_change_idx = find_peaks(positions[search_start:], height=session['tunnel_length']-1, distance=100)[0][0] + 10 
@@ -886,7 +892,7 @@ def get_lm_entry_exit(session, positions=None):
                 
             start_candidates = np.where(positions[search_start:next_lm_start_idx] >= lm_start)[0]
             entry_idx = start_candidates[0] + search_start
-            
+
             end_candidates = np.where(positions[entry_idx:next_lm_start_idx] >= lm_end)[0]
             exit_idx = end_candidates[0] + entry_idx
 
@@ -1466,7 +1472,7 @@ def analyse_session(mouse, date, plot=True):
 
     return session
 
-def analyse_session_pre7(mouse, date, plot=True):
+def analyse_session_pre7(mouse, date):
     base_path = find_base_path(mouse, date)
     data = load_session(base_path)
     options = load_config(base_path)
@@ -1545,7 +1551,7 @@ def analyse_npz_pre7(mouse, date, stage, plot=False):
     
     base_path = find_base_path_npz(mouse, date)
     data = load_session_npz(base_path)
-    base_path2 = find_base_path(mouse,date)
+    base_path2 = find_base_path(mouse, date)
     options = load_config(base_path2)
 
     session = create_session_struct_npz(data, options)
@@ -2163,11 +2169,11 @@ def get_first_licks(session, VR_data=None, nidaq_data=None):
 
     # Load data if needed
     if VR_data is None:
-        base_path2 = find_base_path(session['mouse'],session['date'])
+        base_path2 = find_base_path(session['mouse'], session['date'])
         VR_data = load_session(base_path2)
 
     if nidaq_data is None:
-        base_path = find_base_path_npz(session['mouse'],session['date'])
+        base_path = find_base_path_npz(session['mouse'], session['date'])
         nidaq_data = load_session_npz(base_path)
         
     # Get landmark entry and exit indices 

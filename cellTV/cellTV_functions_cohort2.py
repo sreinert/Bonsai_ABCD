@@ -16,9 +16,6 @@ import pandas as pd
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-## New version
-
-
 ## Loading functions 
 
 def get_session_folders(base_path,mouse,stage):
@@ -51,7 +48,7 @@ def load_img_data(imaging_path):
 
     return f, fneu, iscell, ops, seg, frame_rate
 
-def get_dff(f,fneu, frame_ix, ops):
+def get_dff(f, fneu, frame_ix, ops):
     """
     Calculate the dF/F for the imaging data (suite2p default method).
     """

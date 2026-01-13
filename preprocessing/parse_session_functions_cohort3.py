@@ -1317,14 +1317,12 @@ def calc_acceleration(session, funcimg_frame_rate=45):
 def calc_goal_progress(session, bins=5):
     '''Create a goal progress vector'''
     
-    reward_ix = session['rewards']
-
     binned_goal_progress = np.zeros(len(session['position'])) 
 
-    ngoals = len(np.unique(session['goal_idx']))
-    goal_rew_vec = np.arange(ngoals)
-    goal_rew_vec = np.tile(goal_rew_vec, len(session['rewards'])//ngoals)
-    goal_rew_vec = goal_rew_vec[:-1]
+    if session['test_landmark_id'] is not None: 
+        reward_ix = np.sort(np.concatenate([session['reward_idx'], session['test_rew_idx']])).astype(int)
+    else:
+        reward_ix = session['reward_idx']
 
     # first trial 
     phase_frames = np.arange(0, reward_ix[0])
@@ -1532,7 +1530,7 @@ def get_landmark_category_rew_idx(session):
     rew_lm_entry_idx, miss_lm_entry_idx, nongoal_lm_entry_idx, test_lm_entry_idx = get_landmark_category_entries(session)
     
     # Calculate time lag between landmark entry and reward delivery
-    rew_time_lag = np.round(np.mean(session['rewards'] - rew_lm_entry_idx))
+    rew_time_lag = np.round(np.mean(session['reward_idx'] - rew_lm_entry_idx))
     print('Reward time lag from lm entry: ', rew_time_lag)
 
     # Find where reward would be on average if these landmarks were rewarded
@@ -1627,7 +1625,7 @@ def get_rewarded_landmarks(session):
     lm_entry_idx, lm_exit_idx = get_lm_entry_exit(session)
 
     # Find rewarded landmarks 
-    reward_positions = session['position'][session['rewards']]
+    reward_positions = session['position'][session['reward_idx']]
 
     rewarded_landmarks = [i for i, (start, end) in enumerate(zip(np.floor(session['position'][lm_entry_idx]), np.ceil(session['position'][lm_exit_idx]))) 
                             if np.any((np.ceil(reward_positions) >= start) & (np.floor(reward_positions) <= end))] 
@@ -1647,6 +1645,17 @@ def get_AB_sequence(session, mouse, stage):
     session['sequence'] = sequence
 
     return session
+
+def get_reward_idx(session):
+    # Ensure mouse has left last rewarded landmark 
+    reward_idx = session['rewards']
+    if session['all_landmarks'][-1,1] < session['position'][reward_idx[-1]]:  
+        reward_idx = reward_idx[0:-1]  
+        print('Mouse did not leave the last rewarded landmark. Removing landmark...')
+
+    session['reward_idx'] = reward_idx
+
+    return session 
 
 #%% ##### Analysis wrappers #####
 def create_session_struct_npz(data, ses_settings):
@@ -1726,6 +1735,7 @@ def analyse_npz_pre7(mouse, session_id, root, stage):
     session = get_licked_lms(session)
     session = get_rewarded_lms(session)
     session = get_lms_visited(session)
+    session = get_reward_idx(session)
     session = get_active_goal(session)
     session = calc_acceleration(session)
     session = calculate_frame_lick_rate(session)
