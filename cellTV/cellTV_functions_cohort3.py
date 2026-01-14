@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 from skimage.segmentation import find_boundaries
+import scipy.stats as stats
 
 # import h5py
 # from scipy.signal import find_peaks
@@ -58,7 +59,7 @@ def load_img_data(imaging_path):
     return funcimg_data
 
 
-def load_dF_data(mouse, session_id, funcimg_root, behav_root, save_path):
+def load_dF_data(mouse, session_id, funcimg_root, behav_root, save_path, reload=False):
 
     # Load funcimg data 
     imaging_path = get_funcimg_path(mouse, session_id, funcimg_root)
@@ -69,7 +70,7 @@ def load_dF_data(mouse, session_id, funcimg_root, behav_root, save_path):
 
     # Load or calculate dF
     dF_path = os.path.join(save_path, 'DF_F0.npy')
-    if os.path.exists(dF_path):
+    if os.path.exists(dF_path) and not reload:
         print('dF file found. Loading...')
         dF = np.load(dF_path)
     else:
@@ -79,7 +80,7 @@ def load_dF_data(mouse, session_id, funcimg_root, behav_root, save_path):
     # Check for red channel data
     if 'f2' in funcimg_data:
         dF2_path = os.path.join(save_path, 'DF_F02.npy')
-        if os.path.exists(dF2_path):
+        if os.path.exists(dF2_path) and not reload:
             print('dF2 file found. Loading...')
             dFred = np.load(dF2_path)
         else:
@@ -87,7 +88,7 @@ def load_dF_data(mouse, session_id, funcimg_root, behav_root, save_path):
             np.save(dF2_path, dFred)
 
         dF_GR_path = os.path.join(save_path, 'DG_R.npy')
-        if os.path.exists(dF_GR_path):
+        if os.path.exists(dF_GR_path) and not reload:
             print('dF_GR file found. Loading...')
             dF_GR = np.load(dF_GR_path)
         else:
@@ -129,6 +130,7 @@ def get_dff(funcimg_data, frame_ix, chan=1):
 
 def get_dff_GR(funcimg_data, frame_ix):
     from suite2p.extraction import dcnv
+    from scipy.signal import medfilt
 
     ops = funcimg_data['ops']
     f = funcimg_data['f']
@@ -141,10 +143,26 @@ def get_dff_GR(funcimg_data, frame_ix):
     all_f2 = f2[:, frame_ix['valid_frames']]
     all_fneu2 = fneu2[:, frame_ix['valid_frames']]
 
-    all_cells_f_corr = all_f - all_fneu*0.7
-    all_cells_f_corr2 = all_f2 - all_fneu2*0.7
-    f_corr = all_cells_f_corr / all_cells_f_corr2
-    dF_GR = dcnv.preprocess(f_corr, ops['baseline'], ops['win_baseline'], 
+    # Neuropil correction
+    f_corr = all_f - all_fneu * 0.7
+    f_corr2 = all_f2 - all_fneu2 * 0.7
+
+    # Median filter on each trace 
+    w = int(ops['fs'] * 0.25) | 1  # force odd
+    print(f'Smoothing both green and red channel data with a median filter of kernel size {w}')
+    f_corr = medfilt(f_corr, kernel_size=(1, w))
+    f_corr2 = medfilt(f_corr2, kernel_size=(1, w))
+
+    # ensure denominator is not too low, otehrwise the G/R ratio will blow up
+    f_corr2_floor = np.percentile(f_corr2, 5, axis=1, keepdims=True) 
+    f_corr2_floor = np.maximum(f_corr2_floor, 1e-3)
+
+    # Compute G/R ratio
+    f_ratio = f_corr / np.maximum(f_corr2, f_corr2_floor)
+    # f_ratio = f_corr / f_corr2
+
+    # Compute dG/R
+    dF_GR = dcnv.preprocess(f_ratio, ops['baseline'], ops['win_baseline'], 
                                     ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
     
     return dF_GR
@@ -180,21 +198,23 @@ def plot_fluorescence_traces(neurons, funcimg_data, dF, dFred=None, dF_GR=None):
         else:
             _, ax = plt.subplots(1, 1, figsize=(10,3))
 
-        ax[0].plot(funcimg_data['f'][n,0:2000], label='F')
-        ax[0].plot(funcimg_data['fneu'][n,0:2000], label='Fneu')
-        ax[0].plot(dF[n,0:2000], label='dF')
+        ax[0].plot(funcimg_data['f'][n,0:2000], label='F', color='green')
+        ax[0].plot(funcimg_data['fneu'][n,0:2000], label='Fneu', color='darkgreen')
+        ax[0].plot(dF[n,0:2000], label='dF', color='gray')
         ax[0].legend()
 
         if dFred is not None:
-            ax[1].plot(funcimg_data['f2'][n,0:2000], label='F2')
-            ax[1].plot(funcimg_data['fneu2'][n,0:2000], label='Fneu2')
-            ax[1].plot(dFred[n,0:2000], label='dFred')
+            ax[1].plot(funcimg_data['f2'][n,0:2000], label='F2', color='red')
+            ax[1].plot(funcimg_data['fneu2'][n,0:2000], label='Fneu2', color='darkred')
+            ax[1].plot(dFred[n,0:2000], label='dFred', color='gray')
             ax[1].legend()
 
-            ax[2].plot(dFred[n,0:2000], label='dFred', c='red')
-            ax[2].plot(dF[n,0:2000], label='dF', c='green')
             if dF_GR is not None:
                 ax[2].plot(dF_GR[n,0:2000], label='dF(G/R)', c='black')
+                ax[2].set_ylim([-0.2,1])
+            else:
+                ax[2].plot(dFred[n,0:2000], label='dFred', c='red')
+                ax[2].plot(dF[n,0:2000], label='dF', c='green')
             ax[2].legend()
         
         plt.tight_layout()
