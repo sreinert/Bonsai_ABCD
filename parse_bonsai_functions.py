@@ -24,7 +24,7 @@ def find_base_path(mouse,date,root):
 
     for folder in mouse_path.iterdir():
         if folder.is_dir() and date in folder.name:
-            print(f"Found folder: {folder}")
+            # print(f"Found folder: {folder}")
             base_path = folder
     return base_path
 
@@ -233,7 +233,11 @@ def calc_hit_fa(sess_dataframe,ses_settings):
             licked_distractor[idx] = 1
 
     if 'LM_Count' in sess_dataframe.columns:
-        LM_offset = 3
+        first_LM = sess_dataframe['LM_Position'].dropna().index[0]
+        #get the entry of sess_dataframe['Position'] at that index
+        first_position = sess_dataframe['Position'].loc[first_LM]
+        first_LMpos = sess_dataframe['LM_Position'].loc[first_LM]
+        LM_offset = first_position - first_LMpos
     else:
         LM_offset = 0
     licked_all = np.zeros(len(release_df))
