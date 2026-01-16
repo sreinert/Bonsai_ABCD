@@ -133,7 +133,7 @@ def get_event_parsed(sess_dataframe, ses_settings):
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
 
     if 'LM_Count' in sess_dataframe.columns:
-        release_df = estimate_lm_events(sess_dataframe, ses_settings)
+        release_df,sess_dataframe = estimate_lm_events(sess_dataframe, ses_settings)
     else:
         release_df = estimate_release_events(sess_dataframe, ses_settings)
 
@@ -188,7 +188,7 @@ def plot_ethogram(sess_dataframe,ses_settings):
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
     if 'LM_Count' in sess_dataframe.columns:
-        release_df = estimate_lm_events(sess_dataframe, ses_settings)
+        release_df,sess_dataframe = estimate_lm_events(sess_dataframe, ses_settings)
     else:
         release_df = estimate_release_events(sess_dataframe, ses_settings)
     release_times = release_df.index.tolist() # time
@@ -232,26 +232,19 @@ def calc_hit_fa(sess_dataframe,ses_settings):
         if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
             licked_distractor[idx] = 1
 
-    if 'LM_Count' in sess_dataframe.columns:
-        first_LM = sess_dataframe['LM_Position'].dropna().index[0]
-        #get the entry of sess_dataframe['Position'] at that index
-        first_position = sess_dataframe['Position'].loc[first_LM]
-        first_LMpos = sess_dataframe['LM_Position'].loc[first_LM]
-        LM_offset = first_position - first_LMpos
-    else:
-        LM_offset = 0
+
     licked_all = np.zeros(len(release_df))
     rewarded_all = np.zeros(len(release_df))
     release_positions = release_df['Position'].to_numpy()
     for idx, pos in enumerate(release_positions):
-        #only take into account licks/rewards that came later than the release
+        true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == pos][0]
+        true_pos = sess_dataframe['Position'].loc[true_ix]
         licks = lick_position[lick_times >= release_df.index[idx]]
         rewards = reward_positions[reward_times >= release_df.index[idx]]
-        #compare licks/rewards to position window (the LM position and logged position are offset by 3)
-        if np.any((licks > (pos - LM_offset)) & (licks < (pos - LM_offset + lm_size))):
-           licked_all[idx] = 1
-        if np.any((rewards > (pos - LM_offset)) & (rewards < (pos - LM_offset + lm_size))):
-           rewarded_all[idx] = 1
+        if np.any((licks > (true_pos)) & (licks < (true_pos + lm_size))):
+            licked_all[idx] = 1
+        if np.any((rewards > (true_pos)) & (rewards < (true_pos + lm_size))):
+            rewarded_all[idx] = 1
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
     fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
@@ -1498,17 +1491,19 @@ def estimate_lm_events(sess_dataframe, ses_settings):
         'Odour': lm_odour
     }).set_index('time')
 
-    if lm_df['Position'][0] != 0:
+    if lm_df['Position'].iloc[0] != 0:
         # Add initial landmark at position 0 if not present
         initial_lm = pd.DataFrame({
-            'time': [pd.NaT],
+            'time': [sess_dataframe.index[0]], #set the index to the first time point to make alignment work
             'Position': [0],
             'Index': [-1],
             'Odour': [0]  # Assume first odour is the initial one
         }).set_index('time')
         lm_df = pd.concat([initial_lm, lm_df]).reset_index().set_index('time')
-
-    return lm_df
+        sess_dataframe.loc[sess_dataframe.index[0], 'LM_Position'] = 0 #amend sess_dataframe with the first position, otherwise alignment fails
+        sess_dataframe.loc[sess_dataframe.index[0], 'LM_Count'] = -1
+        
+    return lm_df,sess_dataframe
 
 def load_analog_data(base_path, ses_rig_settings):
     channel_names = []
