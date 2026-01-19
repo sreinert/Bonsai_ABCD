@@ -291,7 +291,7 @@ def find_targets_distractors(sess_dataframe,ses_settings):
         matches = release_df[release_df["Odour"] == test_int] # does released odour match with test_int
         pos = matches["Position"].tolist()
 
-        distractor_id.extend([i] * len(pos))
+        distractor_id.extend([i + len(rew_odour)] * len(pos)) # offset distractor IDs
         distractor_positions.extend(pos)
     
     all_release_positions = release_df["Position"].tolist()
@@ -303,7 +303,7 @@ def find_targets_distractors(sess_dataframe,ses_settings):
             lm_id[idx] = target_id[np.where(np.isclose(target_positions, pos))[0][0]]
         elif pos in distractor_positions:
             was_target[idx] = 0
-            lm_id[idx] = distractor_id[np.where(np.isclose(distractor_positions, pos))[0][0]] + len(rew_odour)  #offset distractor IDs
+            lm_id[idx] = distractor_id[np.where(np.isclose(distractor_positions, pos))[0][0]]   
 
     return target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id
 
@@ -1321,6 +1321,8 @@ def estimate_release_events(sess_dataframe, ses_settings):
     # Step 6: Clean the output format
     result = []
     for i, row in df.iterrows():
+        if pd.isna(row["released_odour"]):
+            continue  # no odour released → skip
         idx = int(row["idx"])
         if i == 0 and np.isnan(row["released_odour"]):
             continue # this means nothing was released. We check this at Step 7

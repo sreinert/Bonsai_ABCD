@@ -1,15 +1,26 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import palettes 
-import os
+import os, sys
 import scipy.stats as stats
 from scipy.stats import friedmanchisquare, wilcoxon, norm, kruskal, mannwhitneyu
 from scipy.signal import find_peaks
 from scipy.ndimage import gaussian_filter1d
 import neural_analysis_helpers
 
-def get_XYY_patches(session, include_next=True):
-    # Find ABB and BAA patches     
+parse_session_functions = None
+def set_parse_session_functions(psf):
+    global parse_session_functions
+    parse_session_functions = psf
+
+def get_XYY_patches(session, include_next=True, precede_XY=False):
+    '''
+    Find ABB and BAA patches
+    
+    arguments:
+    - include_next: whether the landmark after the XYY patch should be included i.e., XYYX (default = True) 
+    - precede_XY: whether the two landmarks preceding the patch should be XY (relevant for truly random sequences) (default = False)
+    '''     
     event_idx = session['event_idx']
     non_goals = session['non_goals_idx'][session['non_goals_idx'] < len(event_idx)]
     goals = session['goals_idx'][session['goals_idx'] < len(event_idx)]
@@ -28,17 +39,31 @@ def get_XYY_patches(session, include_next=True):
     BAA_patches = []
 
     if include_next: # XYYX
-        for i in range(0, len(labels_sorted)-3):
-            if labels_sorted[i] == 1 and labels_sorted[i+1] == 0 and labels_sorted[i+2] == 0 and labels_sorted[i+3] == 1: # ABBA
-                ABB_patches.append(combined_sorted[i:i+4])
-            if labels_sorted[i] == 0 and labels_sorted[i+1] == 1 and labels_sorted[i+2] == 1 and labels_sorted[i+3] == 0: # BAAB
-                BAA_patches.append(combined_sorted[i:i+4])
+        if precede_XY: 
+            for i in range(2, len(labels_sorted)-3):
+                if labels_sorted[i-2] == 1 and labels_sorted[i-1] == 0 and labels_sorted[i] == 1 and labels_sorted[i+1] == 0 and labels_sorted[i+2] == 0 and labels_sorted[i+3] == 1: # ABBA
+                    ABB_patches.append(combined_sorted[i:i+4])
+                if labels_sorted[i-2] == 0 and labels_sorted[i-1] == 1 and labels_sorted[i] == 0 and labels_sorted[i+1] == 1 and labels_sorted[i+2] == 1 and labels_sorted[i+3] == 0: # BAAB
+                    BAA_patches.append(combined_sorted[i:i+4])
+        else:
+            for i in range(0, len(labels_sorted)-3):
+                if labels_sorted[i] == 1 and labels_sorted[i+1] == 0 and labels_sorted[i+2] == 0 and labels_sorted[i+3] == 1: # ABBA
+                    ABB_patches.append(combined_sorted[i:i+4])
+                if labels_sorted[i] == 0 and labels_sorted[i+1] == 1 and labels_sorted[i+2] == 1 and labels_sorted[i+3] == 0: # BAAB
+                    BAA_patches.append(combined_sorted[i:i+4])
     else: # XYY
-        for i in range(0, len(labels_sorted)-2):
-            if labels_sorted[i] == 1 and labels_sorted[i+1] == 0 and labels_sorted[i+2] == 0: # ABB
-                ABB_patches.append(combined_sorted[i:i+3])
-            if labels_sorted[i] == 0 and labels_sorted[i+1] == 1 and labels_sorted[i+2] == 1: # BBA
-                BAA_patches.append(combined_sorted[i:i+3])
+        if precede_XY: 
+            for i in range(2, len(labels_sorted)-2):
+                if labels_sorted[i-2] == 1 and labels_sorted[i-1] == 0 and labels_sorted[i] == 1 and labels_sorted[i+1] == 0 and labels_sorted[i+2] == 0: # ABB
+                    ABB_patches.append(combined_sorted[i:i+3])
+                if labels_sorted[i-2] == 0 and labels_sorted[i-1] == 1 and labels_sorted[i] == 0 and labels_sorted[i+1] == 1 and labels_sorted[i+2] == 1: # BBA
+                    BAA_patches.append(combined_sorted[i:i+3])
+        else:
+            for i in range(0, len(labels_sorted)-2):
+                if labels_sorted[i] == 1 and labels_sorted[i+1] == 0 and labels_sorted[i+2] == 0: # ABB
+                    ABB_patches.append(combined_sorted[i:i+3])
+                if labels_sorted[i] == 0 and labels_sorted[i+1] == 1 and labels_sorted[i+2] == 1: # BBA
+                    BAA_patches.append(combined_sorted[i:i+3])
 
     # Convert patches to entry/exit indices
     ABB_patches_idx = [(event_idx[patch[0]], event_idx[patch[-1]]) for patch in ABB_patches]
@@ -65,6 +90,8 @@ def get_repeating_XY_patches(session, min_length=2):
     patches = []
     start = 0
     for i in range(1, len(labels_sorted)):
+        if labels_sorted[i] != labels_sorted[i-1]:
+            continue
         if labels_sorted[i] == labels_sorted[i-1]:
             # End of an alternating patch
             if i - start > min_length:  
@@ -80,7 +107,7 @@ def get_repeating_XY_patches(session, min_length=2):
     AB_patches = [patch for patch in patches if np.isin(patch[0], goals)]
 
     # Find the corresponding indices in the data 
-    # lm_entry_idx, lm_exit_idx = neural_analysis_helpers.get_lm_entry_exit(session)
+    # lm_entry_idx, lm_exit_idx = parse_session_functions.get_lm_entry_exit(session)
 
     # # Convert patches to entry/exit indices
     # patches_idx = [(lm_entry_idx[patch[0]], lm_exit_idx[patch[-1]]) for patch in patches]
@@ -258,7 +285,7 @@ def get_lm_data(session, neurons, patches, AB_patches, BA_patches, time_around,
 
 def compare_lms_in_AB_patches(neurons, session, patches, AB_patches, BA_patches, dF, time_around, n_bins=10, zscoring=False, plot=True, plot_neurons=None):
     
-    lm_entry_idx, lm_exit_idx = neural_analysis_helpers.get_lm_entry_exit(session)
+    lm_entry_idx, lm_exit_idx = parse_session_functions.get_lm_entry_exit(session)
 
     next_lm_data, _, _ = get_lm_data(session, neurons, patches, AB_patches, BA_patches, time_around,
                 lm_entry_idx, lm_exit_idx, dF, condition='next', n_bins=n_bins, zscoring=zscoring, plot=False)
@@ -746,12 +773,13 @@ def get_binning_by_XY_patch_length(neurons, session, dF, condition='AB', bins=90
     XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
 
     # Bin from the beginning to the end of the patch
-    lm_entry_idx, lm_exit_idx = neural_analysis_helpers.get_lm_entry_exit(session)
+    lm_entry_idx, lm_exit_idx = parse_session_functions.get_lm_entry_exit(session)
     entry_exit_events = np.sort(np.concatenate([lm_entry_idx, lm_exit_idx]))
     
     binned_XY_patch_activity = {cell: [] for cell in neurons}
     avg_XY_patch_length_activity = {cell: {} for cell in neurons}
 
+    print(patches)
     for cell in neurons: 
         # Bin activity across each patch
         for i, patch in enumerate(patches):
@@ -1444,8 +1472,7 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
     XY_repeats = XY_repeats[:Y_data[neurons[0]].shape[0]] # exclude last repeat if it doesn't end with an XYY patch
 
     # Perform linear regression per time bin
-    if not reload:
-        if os.path.exists(results_file):
+    if os.path.exists(results_file) and not reload:
             print('Linear regression with CPA file found. Loading...')
             results = np.load(results_file, allow_pickle=True)
             slopes = results['slopes'].item() 
@@ -1461,9 +1488,8 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
                 cluster_mass_stat_shuffled = results['cluster_mass_stat_shuffled'].item() 
                 pvalue = results['pvalue'].item() 
                 cluster_pvalue = results['cluster_pvalue'].item() 
-        else:
-            raise ValueError(f'This file does not exist {results_file}')
     else:
+        print('Fitting linear regression with CPA')
         x = XY_repeats.copy()
 
         nbins = Y_data[neurons[0]].shape[1]
@@ -1601,9 +1627,11 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
         min_null = min(min(v) for v in low_percentile.values())
         max_slope = max(np.max(slopes[cell]) for cell in neurons)
         min_slope = min(np.min(slopes[cell]) for cell in neurons)
+        max_rvalue = max(np.max(rvalues[cell]) for cell in neurons)
+        min_rvalue = min(np.min(rvalues[cell]) for cell in neurons)
 
-        global_ymax = max(max_null, max_slope) + 0.1
-        global_ymin = min(min_null, min_slope) - 0.8
+        global_ymax = max(max_null, max_slope, max_rvalue) + 0.1
+        global_ymin = min(min_null, min_slope, min_rvalue) - 0.8
 
         for cell in neurons:
             fig = plt.figure(figsize=(8,4))
@@ -1657,7 +1685,7 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
             ax1.legend(lines_left + lines_right, labels_left + labels_right, loc="upper right")
             
             # Heatmaps
-            XY_repeat_sorting_idx = np.argsort(XY_repeats, stable=True)
+            XY_repeat_sorting_idx = np.argsort(XY_repeats, kind='stable')
             sorted_repeats = XY_repeats[XY_repeat_sorting_idx]
             if sort_heatmap:
                 heatmap_data = Y_data[cell][XY_repeat_sorting_idx]

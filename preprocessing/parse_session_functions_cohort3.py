@@ -252,6 +252,8 @@ def parse_rew_lms(ses_settings):
     return rew_odour, rew_texture, non_rew_odour, non_rew_texture
 
 def parse_stable_goal_ids(ses_settings):
+    '''Identify the number of landmarks and goals for stable world sequences'''
+
     num_lms = len(ses_settings['trial']['landmarks'])
     num_goals = ses_settings['availableRewardPositions']
     lm_ids = np.arange(num_lms)
@@ -265,6 +267,28 @@ def parse_stable_goal_ids(ses_settings):
                     goal_counter += 1
                     if goal_counter >= num_goals:
                         break
+                    
+    return goals, lm_ids
+
+def parse_random_goal_ids(ses_settings):
+    '''Identify the number of landmarks and goals for random world sequences'''
+    rew_odour, _, non_rew_odour, _ = parse_rew_lms(ses_settings)
+
+    num_lms = len(rew_odour) + len(non_rew_odour)
+    num_goals = ses_settings['availableRewardPositions']
+    lm_ids = np.arange(num_lms)
+
+    goal_counter = 0
+    goals = []
+    while goal_counter < num_goals:
+        for i in range(num_lms):
+            for j in ses_settings['trial']['landmarks'][i]:
+                if j['rewardSequencePosition'] == goal_counter:
+                    goals.append(i)
+                    goal_counter += 1
+                    if goal_counter >= num_goals:
+                        break
+
     return goals, lm_ids
 
 def calc_hit_fa(sess_dataframe,ses_settings):
@@ -274,7 +298,7 @@ def calc_hit_fa(sess_dataframe,ses_settings):
 
     rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
 
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe, ses_settings)
 
     licked_target = np.zeros(len(target_positions))
     for idx, pos in enumerate(target_positions):
@@ -348,7 +372,7 @@ def find_targets_distractors(sess_dataframe,ses_settings):
         matches = release_df[release_df["Odour"] == test_int] # does released odour match with test_int
         pos = matches["Position"].tolist()
 
-        distractor_id.extend([i] * len(pos))
+        distractor_id.extend([i + len(rew_odour)] * len(pos)) # offset distractor IDs
         distractor_positions.extend(pos)
     
     all_release_positions = release_df["Position"].tolist()
@@ -360,8 +384,8 @@ def find_targets_distractors(sess_dataframe,ses_settings):
             lm_id[idx] = target_id[np.where(np.isclose(target_positions, pos))[0][0]]
         elif pos in distractor_positions:
             was_target[idx] = 0
-            lm_id[idx] = distractor_id[np.where(np.isclose(distractor_positions, pos))[0][0]] + len(rew_odour)  #offset distractor IDs
-
+            lm_id[idx] = distractor_id[np.where(np.isclose(distractor_positions, pos))[0][0]] 
+    
     return target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id
 
 def calc_transition_matrix(sess_dataframe,ses_settings):
@@ -412,9 +436,9 @@ def get_ideal_performance(sess_dataframe,ses_settings):
 
 def calc_conditional_matrix(sess_dataframe,ses_settings):
 
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
-    ideal_licks = get_ideal_performance(sess_dataframe,ses_settings)
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe, ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
+    ideal_licks = get_ideal_performance(sess_dataframe, ses_settings)
 
     transition_prob = np.zeros((np.unique(target_id).shape[0], np.unique(lm_id).shape[0]))
     control_prob = np.zeros((np.unique(target_id).shape[0], np.unique(lm_id).shape[0])) 
@@ -427,8 +451,8 @@ def calc_conditional_matrix(sess_dataframe,ses_settings):
         for i,reward in enumerate(rewards):
             if i == len(rewards)-1:
                 break
-            next_lick_index = licked_lm_ix[licked_lm_ix>reward][0]
-            next_control_index = controlled_lm_ix[controlled_lm_ix>reward][0]
+            next_lick_index = licked_lm_ix[licked_lm_ix > reward][0]
+            next_control_index = controlled_lm_ix[controlled_lm_ix > reward][0]
             next_lm = lm_id[next_lick_index].astype(int)
             next_control_lm = lm_id[next_control_index].astype(int)
             transition_prob[g,next_lm] += 1
@@ -439,7 +463,7 @@ def calc_conditional_matrix(sess_dataframe,ses_settings):
         for i,ideal_reward in enumerate(ideal_rewards):
             if i == len(ideal_rewards)-1:
                 break
-            next_ideal_index = np.where(ideal_licks == 1)[0][np.where(np.where(ideal_licks == 1)[0]>ideal_reward)[0][0]]
+            next_ideal_index = np.where(ideal_licks == 1)[0][np.where(np.where(ideal_licks == 1)[0] > ideal_reward)[0][0]]
             next_ideal_lm = lm_id[next_ideal_index].astype(int)
             ideal_prob[g,next_ideal_lm] += 1
     return transition_prob, control_prob, ideal_prob
@@ -447,7 +471,7 @@ def calc_conditional_matrix(sess_dataframe,ses_settings):
 def calc_stable_conditional_matrix(sess_dataframe,ses_settings):
 
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
 
     transition_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
     control_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
@@ -467,8 +491,8 @@ def calc_stable_conditional_matrix(sess_dataframe,ses_settings):
         for i,reward in enumerate(rewards):
             if i == len(rewards)-1:
                 break
-            next_lick_index = licked_lm_ix[licked_lm_ix>reward][0]
-            next_control_index = controlled_lm_ix[controlled_lm_ix>reward][0]
+            next_lick_index = licked_lm_ix[licked_lm_ix > reward][0]
+            next_control_index = controlled_lm_ix[controlled_lm_ix > reward][0]
             next_lm = all_lms[next_lick_index].astype(int)
             next_control_lm = all_lms[next_control_index].astype(int)
             transition_prob[g,next_lm] += 1
@@ -480,9 +504,9 @@ def calc_stable_conditional_matrix(sess_dataframe,ses_settings):
 
     return transition_prob, control_prob, ideal_prob
 
-def calc_seq_fraction(sess_dataframe,ses_settings,test='transition'):
+def calc_seq_fraction(sess_dataframe, ses_settings, test='transition'):
     
-    transition_prob, control_prob, ideal_prob = calc_conditional_matrix(sess_dataframe,ses_settings)
+    transition_prob, control_prob, ideal_prob = calc_conditional_matrix(sess_dataframe, ses_settings)
 
     if test == 'transition':
         test_prob = transition_prob
@@ -973,6 +997,8 @@ def estimate_release_events(sess_dataframe, ses_settings):
     # Step 6: Clean the output format
     result = []
     for i, row in df.iterrows():
+        if pd.isna(row["released_odour"]) or int(row["released_odour"]) == 0:
+            continue  # no odour released → skip
         idx = int(row["idx"])
         if i == 0 and np.isnan(row["released_odour"]):
             continue # this means nothing was released. We check this at Step 7
@@ -985,7 +1011,8 @@ def estimate_release_events(sess_dataframe, ses_settings):
     # Step 7: Add the first odour stimulus that VR ABCD forgot
     # sometimes the VR drops the first release event, check for that and add first element if needed
     first_release = extract_int(ses_settings['trial']['landmarks'][0][0]['odour'])
-    if first_release != result[0][3]:
+    # if first_release != result[0][3]:
+    if first_release != 0 and (len(result) == 0 or first_release != result[0][3]):
         result = [[pd.NaT, 0, -1, first_release]] + result
 
     result_df = pd.DataFrame(result,
@@ -1188,8 +1215,10 @@ def get_licks_idx(session, lick_threshold=True):
 
 def get_lap_idx(session):
     # Divide the session dataframe into laps based on the position and corridor length
-    session['num_laps'] = int(np.ceil(session['position'].max() / session['tunnel_length']))
-    
+    if session['world'] == 'stable':
+        session['num_laps'] = int(np.ceil(session['position'].max() / session['tunnel_length']))
+    elif session['world'] == 'random':
+        session['num_laps'] = 1
     # For each position, determine which lap it belongs to
     session['lap_idx'] = (session['position'] // session['tunnel_length']).astype(int)
 
@@ -1285,22 +1314,58 @@ def get_rewarded_lms(session):
 
     return session
 
-def get_lms_visited(session):
+def create_odour_lm_mapping(ses_settings):
+    '''Create a list of rewarded and non-rewarded odours based on the order in which they are created in the session settings file'''
+    
+    odour_lm_id_mapping = []
+    for lm_list in ses_settings['trial']['landmarks']:
+        for lm in lm_list:
+            odour_id = extract_int(lm['odour'])
+            if np.isin(odour_id, odour_lm_id_mapping) or odour_id == 0:
+                break
+            else:
+                odour_lm_id_mapping.append(odour_id)
+
+    return odour_lm_id_mapping
+
+def get_random_lm_sequence(sess_dataframe, ses_settings):
+    '''Create a list with lm ids for each lm in the random world'''
+    odour_lm_id_mapping = create_odour_lm_mapping(ses_settings)
+
+    _, _, _, _, release_df = get_event_parsed(sess_dataframe, ses_settings)
+
+    release_ids = release_df['Odour'].to_numpy()
+    lm_ids_list = np.empty(len(release_ids), dtype=int)
+    for i, odour in enumerate(release_ids):
+        matches = np.where(odour_lm_id_mapping == odour)[0]
+        if len(matches) == 0:
+            lm_ids_list[i] = np.nan
+        else:
+            lm_ids_list[i] = matches[0]
+
+    return lm_ids_list
+
+def get_lms_visited(session, sess_dataframe, ses_settings):
     # Calculate number of landmarks visited
     if len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) != len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0]):
         num_lms = len(session['landmarks']) - 1 # session ended before mouse exited last lm entered
     else:
         num_lms = len(session['landmarks'])  
 
-    all_lms = np.array([])  # landmark ids
-    for i in range(session['num_laps']):
-        all_lms = np.append(all_lms, session['lm_ids'])
-    all_lms = all_lms.astype(int)[:num_lms]
-
+    if session['world'] == 'stable':
+        all_lms = np.array([])  # landmark ids
+        for i in range(session['num_laps']):
+            all_lms = np.append(all_lms, session['lm_ids'])
+        all_lms = all_lms.astype(int)[:num_lms]
+    elif session['world'] == 'random':
+        all_lms = get_random_lm_sequence(sess_dataframe, ses_settings)
+        all_lms = all_lms[:num_lms]
+        
     all_landmarks = session['landmarks']  
     for i in range(1, session['num_laps']):  
         all_landmarks = np.concatenate((all_landmarks, session['landmarks']), axis=0)
     all_landmarks = all_landmarks[:num_lms]  # landmark positions
+
     session['all_landmarks'] = all_landmarks
     session['all_lms'] = all_lms
 
@@ -1634,13 +1699,13 @@ def get_rewarded_landmarks(session):
 
     return session
 
-def get_AB_sequence(session, mouse, stage):
-    if mouse == "004" or mouse == "006" or mouse == "007" or mouse == "008" or mouse == "010" or mouse == "011" or mouse == "012" or mouse == "013":
+def get_AB_sequence(session, world='stable'):
+    if world == 'stable':
         sequence = 'ABAB'
-    elif mouse == "001" or mouse == "002" or mouse == "003" or mouse == "005" or mouse == "009" or mouse == "014":
+    elif world == 'random':
         sequence = 'AB_shuffled'
     else:
-        raise ValueError("Oops I don't know what to do about this mouse")
+        raise ValueError("Oops I don't know what to do about this type of world")
     
     session['sequence'] = sequence
 
@@ -1658,14 +1723,17 @@ def get_reward_idx(session):
     return session 
 
 #%% ##### Analysis wrappers #####
-def create_session_struct_npz(data, ses_settings):
+def create_session_struct_npz(data, ses_settings, world):
 
     position = np.nan_to_num(data['position'], nan=0.0)
     rewards = np.where(data['rewards'])[0]
     speed = np.nan_to_num(data['speed'], nan=0.0)
     licks = data['licks']
     
-    goal_ids, lm_ids = parse_stable_goal_ids(ses_settings)
+    if world == 'stable':
+        goal_ids, lm_ids = parse_stable_goal_ids(ses_settings)
+    elif world == 'random':
+        goal_ids, lm_ids = parse_random_goal_ids(ses_settings)
     num_landmarks = len(lm_ids) # unique number of lm ids
 
     tunnel_length = calculate_corr_length(ses_settings)
@@ -1693,8 +1761,9 @@ def get_behaviour(session, sess_dataframe, ses_settings):
         plot_licks_per_state(sess_dataframe, ses_settings)
         plot_speed_per_state(sess_dataframe, ses_settings)
 
-    _ = plot_lick_maps(session)
-    plot_speed_profile(session, stage=int(session['stage'][-1]))
+    if session['world'] == 'stable':
+        _ = plot_lick_maps(session)
+        plot_speed_profile(session, stage=int(session['stage'][-1]))
     
     session['transition_prob'] = transition_prob
     session['control_prob'] = control_prob
@@ -1704,8 +1773,9 @@ def get_behaviour(session, sess_dataframe, ses_settings):
 
     return session
 
-def analyse_npz_pre7(mouse, session_id, root, stage):
+def analyse_npz_pre7(mouse, session_id, root, stage, world='stable'):
     '''Wrapper for session analysis'''
+
     if '3' not in stage and '4' not in stage and '5' not in stage and '6' not in stage:
         raise ValueError('This function only works for T3-T6.')
     
@@ -1715,7 +1785,7 @@ def analyse_npz_pre7(mouse, session_id, root, stage):
     with open(list((session_path / 'behav').glob('*.pkl'))[0], 'rb') as f:
         sess_dataframe = pickle.load(f)
 
-    session = create_session_struct_npz(behav_data, ses_settings)
+    session = create_session_struct_npz(behav_data, ses_settings, world=world)
     session = get_landmark_positions(session, sess_dataframe, ses_settings)
     session = get_goal_positions(session, sess_dataframe, ses_settings)
 
@@ -1723,6 +1793,7 @@ def analyse_npz_pre7(mouse, session_id, root, stage):
     session['session_id'] = session_id
     # session['date'] = date
     session['stage'] = stage
+    session['world'] = world
 
     save_path = Path(session_path) / 'analysis'
     save_path.mkdir(parents=True, exist_ok=True)
@@ -1734,13 +1805,13 @@ def analyse_npz_pre7(mouse, session_id, root, stage):
     session = get_licks_per_lap(session)
     session = get_licked_lms(session)
     session = get_rewarded_lms(session)
-    session = get_lms_visited(session)
+    session = get_lms_visited(session, sess_dataframe, ses_settings)
     session = get_reward_idx(session)
     session = get_active_goal(session)
     session = calc_acceleration(session)
     session = calculate_frame_lick_rate(session)
 
-    session = get_AB_sequence(session, mouse, stage)
+    session = get_AB_sequence(session, world)
     session = get_landmark_categories(session)
     # session = get_licks(data, session)
     session = get_rewarded_landmarks(session)
