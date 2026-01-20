@@ -22,6 +22,7 @@ def find_roicat_path(mouse,root):
 
 def load_settings(base_path):
     settings_path = Path(base_path) / "behav"
+    print(list(settings_path.glob("*.yaml")))
     settings_file = list(settings_path.glob("*.yaml"))[0]
     with open(settings_file, "r") as f:
         ses_settings = yaml.safe_load(f)

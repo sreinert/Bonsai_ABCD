@@ -73,7 +73,7 @@ def find_session_base_path(mouse, date, root):
     return base_path
 
 def find_base_path(mouse, date):
-    root = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'
+    root = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'
     data_dir = root + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
@@ -104,7 +104,7 @@ def find_base_path(mouse, date):
     return base_path
 
 def find_base_path_npz(mouse, date):
-    data_dir = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
+    data_dir = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
     base_path = os.path.join(data_dir, sessions[0])
@@ -275,6 +275,26 @@ def threshold_licks(session):
 
     return session
 
+# def threshold_nidaq_licks(nidaq_data, session):
+#     """Threshold which licks are considered based on the animal's speed."""
+    
+#     lick_threshold = session['lick_threshold']
+#     threshold_licks = session['lick_idx'][np.where(nidaq_data['speed'][session['lick_idx']] < lick_threshold)[0]]
+
+#     session['thresholded_lick_idx'] = threshold_licks
+
+#     return session
+
+# def threshold_nidaq_licks(session):
+#     """Threshold which licks are considered based on the animal's speed."""
+    
+#     lick_threshold = session['lick_threshold']
+#     threshold_licks = session['lick_idx'][np.where(session['speed'][session['lick_idx']] < lick_threshold)[0]]
+
+#     session['thresholded_lick_idx'] = threshold_licks
+
+#     return session
+
 def calculate_lick_rate(session):
     # calculate lick rate in a sliding window
     window = 100
@@ -405,10 +425,14 @@ def give_lap_state_id(session):
 
 def get_lms_visited(options, session):
     # Calculate number of landmarks visited
-    if len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) != len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0]):
-        last_landmark = len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0]) # session ended before mouse exited last lm entered
+    if session['num_laps'] == 1:
+        last_landmark = len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0])
+        if len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) != len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0]):
+            last_landmark -= 1 # session ended before mouse exited last lm entered
     else:
-        last_landmark = len(session['all_landmarks'])     
+        last_landmark = len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0])
+        # last_landmark = len(session['landmarks'])    
+
     num_lms = len(session['landmarks'])*(session['num_laps']-1) + last_landmark 
 
     lm_ids =  np.array(options['flip_tunnel']['landmarks_sequence'])
@@ -870,10 +894,11 @@ def get_sorted_transitions(session):
 def get_lm_entry_exit(session, positions=None):
     '''Find data idx closest to landmark entry and exit.'''
 
-    if positions is None:
-        base_path = find_base_path_npz(session['mouse'], session['date'])
-        nidaq_data = load_session_npz(base_path)
-        positions = nidaq_data['position']
+    positions = session['position']
+    # if positions is None:
+    #     base_path = find_base_path_npz(session['mouse'], session['date'])
+    #     nidaq_data = load_session_npz(base_path)
+    #     positions = nidaq_data['position']
 
     lm_entry_idx = []
     lm_exit_idx = []
@@ -912,9 +937,11 @@ def get_lm_entry_exit(session, positions=None):
             return np.array(lm_entry_idx), np.array(lm_exit_idx)  # terminate early 
     
     else:
-        if np.abs(positions[0] - session['landmarks'][-1,1]) < np.abs(positions[0] - session['landmarks'][0,0]):
-            search_start = np.where(positions <= session['all_landmarks'][0,0])[0][-1]  # the mouse accidentally moved backwards first
-        else: 
+        # consider if the mouse accidentally moved backwards first
+        backward_idx = np.where(np.abs(positions[:2000] - session['landmarks'][-1,1]) < np.abs(positions[:2000] - session['landmarks'][0,0]))[0]
+        if backward_idx.size > 0:
+            search_start = backward_idx[-1] + 1
+        else:
             search_start = 0
 
         for lm_start in session['all_landmarks'][:,0]:
@@ -946,42 +973,114 @@ def get_imag_rew_idx(session, lm_idx):
 
     return imag_rew_idx
     
-def get_rewarded_landmarks(VR_data, nidaq_data, session):
+# def get_rewarded_landmarks(VR_data, nidaq_data, session):
+#     '''Find the indices of rewarded (lick-triggered) landmarks.'''
+
+#     session = get_rewards(session, VR_data, nidaq_data, print_output=False)
+#     lm_entry_idx, lm_exit_idx = get_lm_entry_exit(session)
+
+#     # Find rewarded landmarks 
+#     reward_positions = nidaq_data['distance'][session['reward_idx']]  # using flattened position array 
+
+#     rewarded_landmarks = [i for i, (start, end) in enumerate(zip(np.floor(nidaq_data['distance'][lm_entry_idx]), np.ceil(nidaq_data['distance'][lm_exit_idx]))) 
+#                             if np.any((np.ceil(reward_positions) >= start) & (np.floor(reward_positions) <= end))] 
+    
+#     session['rewarded_landmarks'] = rewarded_landmarks
+
+#     return session
+
+def get_rewarded_landmarks(session, VR_data=None, nidaq_data=None):
     '''Find the indices of rewarded (lick-triggered) landmarks.'''
 
-    session = get_rewards(VR_data, nidaq_data, session, print_output=False)
+    session = get_rewards(session, VR_data, nidaq_data, print_output=False)
     lm_entry_idx, lm_exit_idx = get_lm_entry_exit(session)
+    # if VR_data is None:
+    #     lm_entry_idx, lm_exit_idx = get_lm_entry_exit(session)
+    # else:
+    #     lm_entry_idx, lm_exit_idx = get_lm_entry_exit(session)
 
     # Find rewarded landmarks 
-    reward_positions = nidaq_data['distance'][session['reward_idx']]  # using flattened position array 
+    reward_positions = session['total_dist'][session['reward_idx']]  # using flattened position array 
 
-    rewarded_landmarks = [i for i, (start, end) in enumerate(zip(np.floor(nidaq_data['distance'][lm_entry_idx]), np.ceil(nidaq_data['distance'][lm_exit_idx]))) 
+    rewarded_landmarks = [i for i, (start, end) in enumerate(zip(np.floor(session['total_dist'][lm_entry_idx]), np.ceil(session['total_dist'][lm_exit_idx]))) 
                             if np.any((np.ceil(reward_positions) >= start) & (np.floor(reward_positions) <= end))] 
     
     session['rewarded_landmarks'] = rewarded_landmarks
 
     return session
 
-def get_rewards(VR_data, nidaq_data, session, print_output=False):
-    '''Find the indices of lick-triggered rewards in the nidaq logging file.'''
+# def get_rewards(VR_data, nidaq_data, session, print_output=False):
+#     '''Find the indices of lick-triggered rewards in the nidaq logging file.'''
 
-    # Find different types of rewards from VR data
-    rewards_VR, assistant_reward_idx, manual_reward_idx = get_VR_rewards(VR_data)
-    all_rewards_VR = np.sort(np.concatenate([rewards_VR, assistant_reward_idx, manual_reward_idx]))
+#     # Find different types of rewards from VR data
+#     rewards_VR, assistant_reward_idx, manual_reward_idx = get_VR_rewards(VR_data)
+#     all_rewards_VR = np.sort(np.concatenate([rewards_VR, assistant_reward_idx, manual_reward_idx]))
 
-    # Find rewards in NIDAQ data
-    reward_idx = np.where(nidaq_data['rewards'] == 1)[0]  
-    rewards_to_remove = []
+#     # Find rewards in NIDAQ data
+#     reward_idx = np.where(nidaq_data['rewards'] == 1)[0]  
+#     rewards_to_remove = []
 
-    for r, rew in enumerate(all_rewards_VR):
-        if (rew in assistant_reward_idx) or (rew in manual_reward_idx):
-            rewards_to_remove.append(r)
+#     for r, rew in enumerate(all_rewards_VR):
+#         if (rew in assistant_reward_idx) or (rew in manual_reward_idx):
+#             rewards_to_remove.append(r)
 
-    reward_idx = np.delete(reward_idx, rewards_to_remove)
+#     reward_idx = np.delete(reward_idx, rewards_to_remove)
 
-    # Confirm number of rewards makes sense
-    if session['all_landmarks'][-1,1] < nidaq_data['position'][reward_idx[-1]]:  # ensure mouse has left last rewarded landmark 
-        reward_idx = reward_idx[0:-1]  
+#     # Confirm number of rewards makes sense
+#     if session['all_landmarks'][-1,1] < nidaq_data['position'][reward_idx[-1]]:  # ensure mouse has left last rewarded landmark 
+#         reward_idx = reward_idx[0:-1]  
+#     num_rewards = len(reward_idx)  
+
+#     session['reward_idx'] = reward_idx
+
+#     if print_output:
+#         print('Total rewards considered here: ', num_rewards)
+#         print('Total rewards not considered here: ', len(rewards_to_remove))
+#         print('Total assistant and manual rewards: ', len(assistant_reward_idx) + len(manual_reward_idx))
+
+#     return session
+
+def get_rewards(session, VR_data=None, nidaq_data=None, print_output=False):
+    '''Find the indices of lick-triggered rewards.'''
+
+    if nidaq_data is not None and VR_data is not None:
+        # Find different types of rewards from VR data
+        rewards_VR, assistant_reward_idx, manual_reward_idx = get_VR_rewards(VR_data)
+        all_rewards_VR = np.sort(np.concatenate([rewards_VR, assistant_reward_idx, manual_reward_idx]))
+
+        # Find rewards in NIDAQ data
+        reward_idx = np.where(nidaq_data['rewards'] == 1)[0]  
+
+        # Remove manual and assist rewards
+        rewards_to_remove = []
+        for r, rew in enumerate(all_rewards_VR):
+            if (rew in assistant_reward_idx) or (rew in manual_reward_idx):
+                rewards_to_remove.append(r)
+
+        reward_idx = np.delete(reward_idx, rewards_to_remove)
+
+        # Confirm number of rewards makes sense
+        if session['all_landmarks'][-1,1] < nidaq_data['position'][reward_idx[-1]]:  # ensure mouse has left last rewarded landmark 
+            reward_idx = reward_idx[0:-1]  
+
+    else:
+        # Find different types of rewards from VR data
+        reward_idx = session['rewards']
+        assistant_reward_idx = session['assist_rewards']
+        manual_reward_idx = session['manual_rewards']
+
+        all_rewards_VR = np.sort(np.concatenate([reward_idx, assistant_reward_idx, manual_reward_idx]))
+        
+        # Collect manual and assist rewards
+        rewards_to_remove = []
+        for r, rew in enumerate(all_rewards_VR):
+            if (rew in assistant_reward_idx) or (rew in manual_reward_idx):
+                rewards_to_remove.append(r)
+
+        # Confirm number of rewards makes sense
+        if session['all_landmarks'][-1,1] < session['position'][reward_idx[-1]]:  # ensure mouse has left last rewarded landmark 
+            reward_idx = reward_idx[0:-1]  
+
     num_rewards = len(reward_idx)  
 
     session['reward_idx'] = reward_idx
@@ -1042,14 +1141,32 @@ def get_events_in_surrounding_landmarks(session, events, time_around, funcimg_fr
 
     return
 
-def get_licks(nidaq_data, session, print_output=False):
+# def get_licks(nidaq_data, session, print_output=False):
+#     '''Find the indices of licks in the nidaq logging file.'''
+
+#     # Find licks in NIDAQ data
+#     lick_idx = np.where(nidaq_data['licks'] >= 1)[0]  
+
+#     # Confirm number of rewards makes sense
+#     if session['all_landmarks'][-1,1] < nidaq_data['position'][lick_idx[-1]]:  # TODO ensure mouse has left last licked landmark 
+#         lick_idx = lick_idx[0:-1]  
+#     num_licks = len(lick_idx)  
+
+#     session['lick_idx'] = lick_idx
+#     if print_output:
+#         print('Total licks considered here: ', num_licks)
+        
+#     return session
+
+def get_licks(session, print_output=False):
     '''Find the indices of licks in the nidaq logging file.'''
 
-    # Find licks in NIDAQ data
-    lick_idx = np.where(nidaq_data['licks'] >= 1)[0]  
+    # Find licks in the data
+    lick_idx = session['licks'] # TODO change this once the definition of licks changes 
+    # lick_idx = np.where(session['licks'] >= 1)[0]  
 
     # Confirm number of rewards makes sense
-    if session['all_landmarks'][-1,1] < nidaq_data['position'][lick_idx[-1]]:  # TODO ensure mouse has left last licked landmark 
+    if session['all_landmarks'][-1,1] < session['position'][lick_idx[-1]]:  # TODO ensure mouse has left last licked landmark 
         lick_idx = lick_idx[0:-1]  
     num_licks = len(lick_idx)  
 
@@ -1059,28 +1176,39 @@ def get_licks(nidaq_data, session, print_output=False):
         
     return session
 
-def threshold_nidaq_licks(nidaq_data, session):
-    """Threshold which licks are considered based on the animal's speed."""
+# def calculate_frame_lick_rate(nidaq_data, session):
+#     """Get lick rate per frame as a sliding window - similar to calculate_lick_rate"""
     
-    lick_threshold = session['lick_threshold']
-    threshold_licks = session['lick_idx'][np.where(nidaq_data['speed'][session['lick_idx']] < lick_threshold)[0]]
+#     # Threshold licks
+#     session = threshold_nidaq_licks(nidaq_data, session)
 
-    session['thresholded_lick_idx'] = threshold_licks
+#     # Calculate lick rate as the mean number of licks over sliding window
+#     window = 100 # frames
+#     lick_rate = np.zeros(len(nidaq_data['position']))
+#     for i in range(len(nidaq_data['position'])-window):
+#         if 'thresholded_lick_idx' in session:
+#             lick_num = len(np.where((session['thresholded_lick_idx'] > i) & (session['thresholded_lick_idx'] < i+window))[0])
+#         else:
+#             lick_num = len(np.where((session['lick_idx'] > i) & (session['lick_idx'] < i+window))[0])
+#         lick_rate[i] = lick_num / window
+    
+#     session['frame_lick_rate'] = lick_rate
 
-    return session
+#     return session
 
-def calculate_frame_lick_rate(nidaq_data, session):
+def calculate_frame_lick_rate(session):
     """Get lick rate per frame as a sliding window - similar to calculate_lick_rate"""
     
     # Threshold licks
-    session = threshold_nidaq_licks(nidaq_data, session)
+    session = threshold_licks(session)
+    # session = threshold_nidaq_licks(session)
 
     # Calculate lick rate as the mean number of licks over sliding window
     window = 100 # frames
-    lick_rate = np.zeros(len(nidaq_data['position']))
-    for i in range(len(nidaq_data['position'])-window):
-        if 'thresholded_lick_idx' in session:
-            lick_num = len(np.where((session['thresholded_lick_idx'] > i) & (session['thresholded_lick_idx'] < i+window))[0])
+    lick_rate = np.zeros(len(session['position']))
+    for i in range(len(session['position'])-window):
+        if 'thresholded_licks' in session:
+            lick_num = len(np.where((session['thresholded_licks'] > i) & (session['thresholded_licks'] < i+window))[0])
         else:
             lick_num = len(np.where((session['lick_idx'] > i) & (session['lick_idx'] < i+window))[0])
         lick_rate[i] = lick_num / window
@@ -1089,15 +1217,33 @@ def calculate_frame_lick_rate(nidaq_data, session):
 
     return session
 
-def get_smoothed_lick_rate(nidaq_data, session):
+# def get_smoothed_lick_rate(nidaq_data, session):
+#     """Get lick rate per frame as a sliding window - similar to calculate_lick_rate"""
+    
+#     # Threshold licks
+#     session = threshold_nidaq_licks(nidaq_data, session)
+
+#     # Calculate smoothed lick rate 
+#     binary_licks = np.zeros_like(nidaq_data['position'], dtype=int)
+#     binary_licks[session['thresholded_lick_idx']] = 1
+
+#     lick_rate = gaussian_filter1d(binary_licks.astype(float), sigma=1.5)
+#     lick_rate = lick_rate.reshape(1,-1)
+
+#     session['smooth_lick_rate'] = lick_rate
+
+#     return session
+
+def get_smoothed_lick_rate(session):
     """Get lick rate per frame as a sliding window - similar to calculate_lick_rate"""
     
     # Threshold licks
-    session = threshold_nidaq_licks(nidaq_data, session)
+    session = threshold_licks(session)
+    # session = threshold_nidaq_licks(session)
 
     # Calculate smoothed lick rate 
-    binary_licks = np.zeros_like(nidaq_data['position'], dtype=int)
-    binary_licks[session['thresholded_lick_idx']] = 1
+    binary_licks = np.zeros_like(session['position'], dtype=int)
+    binary_licks[session['thresholded_licks']] = 1
 
     lick_rate = gaussian_filter1d(binary_licks.astype(float), sigma=1.5)
     lick_rate = lick_rate.reshape(1,-1)
@@ -1106,7 +1252,38 @@ def get_smoothed_lick_rate(nidaq_data, session):
 
     return session
 
-def get_event_lick_rate(session, nidaq_data, event_idx, time_around=(-1,3), funcimg_frame_rate=45):
+# def get_event_lick_rate(session, nidaq_data, event_idx, time_around=(-1,3), funcimg_frame_rate=45):
+#     """Get lick rate per frame as a smoothed sliding window around an event"""
+    
+#     # Handle single int input as symmetric window
+#     if isinstance(time_around, (int, float)):
+#         start_time = -time_around
+#         end_time = time_around
+#     elif isinstance(time_around, (tuple, list)) and len(time_around) == 2:
+#         start_time, end_time = time_around
+#     else:
+#         raise ValueError("time_around must be a single number or a tuple/list of (start, end)")
+
+#     start_frames = int(np.floor(start_time * funcimg_frame_rate))
+#     end_frames = int(np.ceil(end_time * funcimg_frame_rate))
+
+#     # Get indices for each event
+#     window = np.arange(start_frames, end_frames)
+#     window_indices = np.add.outer(event_idx, window).astype(int)
+
+#     # Find licks within this window
+#     binary_licks = np.zeros_like(window_indices, dtype=int)
+#     mask = np.isin(window_indices, session['thresholded_lick_idx'])
+#     binary_licks[mask] = nidaq_data['licks'][window_indices[mask]]
+
+#     # Get smoothed lick rate 
+#     event_lick_rate = np.empty_like(window_indices, dtype=float)
+#     for i in range(window_indices.shape[0]):
+#         event_lick_rate[i,:] = gaussian_filter1d(binary_licks[i,:].astype(float), sigma=1.5)
+    
+#     return event_lick_rate
+
+def get_event_lick_rate(session, event_idx, time_around=(-1,3), funcimg_frame_rate=45):
     """Get lick rate per frame as a smoothed sliding window around an event"""
     
     # Handle single int input as symmetric window
@@ -1127,8 +1304,8 @@ def get_event_lick_rate(session, nidaq_data, event_idx, time_around=(-1,3), func
 
     # Find licks within this window
     binary_licks = np.zeros_like(window_indices, dtype=int)
-    mask = np.isin(window_indices, session['thresholded_lick_idx'])
-    binary_licks[mask] = nidaq_data['licks'][window_indices[mask]]
+    mask = np.isin(window_indices, session['thresholded_licks'])
+    binary_licks[mask] = session['licks'][window_indices[mask]]
 
     # Get smoothed lick rate 
     event_lick_rate = np.empty_like(window_indices, dtype=float)
@@ -1137,15 +1314,15 @@ def get_event_lick_rate(session, nidaq_data, event_idx, time_around=(-1,3), func
     
     return event_lick_rate
 
-def get_lm_lick_rate(nidaq_data, session, bins=16):  # TODO I really need to fix this and make it consistent across sessions
-    """Get lick rate per frame bin as the mean per bin for each landmark"""
+def get_lm_lick_rate(session, bins=16):  # TODO I really need to fix this and make it consistent across sessions
+    '''Get lick rate per frame bin as the mean per bin for each landmark'''
     
     # Get all datapoints within landmarks
-    session = get_data_lm_idx(nidaq_data, session)
+    session = get_data_lm_idx(session)
 
     # Create a binary lick map for the entire session 
-    binary_licks = np.zeros(len(nidaq_data['position']))
-    binary_licks[session['thresholded_lick_idx']] = nidaq_data['licks'][session['thresholded_lick_idx']] # (actually not binary)
+    binary_licks = np.zeros(len(session['position']))
+    binary_licks[session['thresholded_licks']] = 1 # (actually not binary)
 
     if ('stage' in session) and ('3' in session['stage'] or '4' in session['stage']):
         
@@ -1160,8 +1337,18 @@ def get_lm_lick_rate(nidaq_data, session, bins=16):  # TODO I really need to fix
             # calculate lick rate within each landmark (mean in each bin)
             lm_lick_rate[lm], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
 
+        # Reshape the data in goal - non-goal pairs
+        goal_lm_lick_rate = lm_lick_rate[session['goals_idx']]
+        non_goal_lm_lick_rate = lm_lick_rate[session['non_goals_idx']]
+
+        min_len = min(len(goal_lm_lick_rate), len(non_goal_lm_lick_rate))
+        goal_lm_lick_rate = goal_lm_lick_rate[:min_len, :]
+        non_goal_lm_lick_rate = non_goal_lm_lick_rate[:min_len, :]
+
+        lm_lick_rate = np.column_stack((goal_lm_lick_rate, non_goal_lm_lick_rate))
+        
     else:
-        lm_lick_rate = {}
+        lm_lick_rate_dict = {}
         for lap in range(session['num_laps']):
             for lm in range(len(session['all_lms'])):
                 key = (lap, lm)
@@ -1173,26 +1360,130 @@ def get_lm_lick_rate(nidaq_data, session, bins=16):  # TODO I really need to fix
                 lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
                 
                 # calculate lick rate within each landmark (mean in each bin)
-                lm_lick_rate[key], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+                lm_lick_rate_dict[key], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+    
+        # Check number of actual laps
+        num_lms_considered = int(np.round((len(session['all_landmarks']) // session['num_landmarks']) * session['num_landmarks']))
+        num_laps = int(num_lms_considered / session['num_landmarks'])
+
+        # Reshape the data in landmarks and laps
+        keys = sorted(lm_lick_rate_dict.keys())  
+        first_keys = set(k[0] for k in keys)
+
+        if len(first_keys) == 1:
+            lm_lick_rate = [[] for _ in range(num_laps)]
+            for lm_idx in range(num_lms_considered):
+                lap = lm_idx // session['num_landmarks']
+                key = (0, lm_idx)
+                if key in lm_lick_rate_dict:
+                    rate = lm_lick_rate_dict[key]
+                    lm_lick_rate[lap].extend(rate)
+        else:
+            lm_lick_rate = [[] for _ in range(num_laps)]
+            for i in range(num_laps):
+                for lm_idx in range(num_lms_considered):
+                    lap = lm_idx // session['num_landmarks']
+                    key = (i, lm_idx)
+                    if key in lm_lick_rate_dict:
+                        rate = lm_lick_rate_dict[key]
+                        lm_lick_rate[lap].extend(rate)
+
+        lm_lick_rate = np.array(lm_lick_rate)  # (num_laps, num_bins * num_landmarks)
 
     session['lm_lick_rate'] = lm_lick_rate
 
     return session
 
-def get_binned_lick_rate(nidaq_data, session):  # TODO
+# def get_lm_lick_rate(nidaq_data, session, bins=16):  # TODO I really need to fix this and make it consistent across sessions
+#     """Get lick rate per frame bin as the mean per bin for each landmark"""
+    
+#     # Get all datapoints within landmarks
+#     session = get_data_lm_idx(nidaq_data, session)
+
+#     # Create a binary lick map for the entire session 
+#     binary_licks = np.zeros(len(nidaq_data['position']))
+#     binary_licks[session['thresholded_lick_idx']] = nidaq_data['licks'][session['thresholded_lick_idx']] # (actually not binary)
+
+#     if ('stage' in session) and ('3' in session['stage'] or '4' in session['stage']):
+        
+#         lm_lick_rate = np.zeros((len(session['all_lms']), bins))
+#         for lm in range(len(session['all_lms'])):
+#             # datapoints within landmarks for each lap 
+#             lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
+
+#             # binary licks within landmark
+#             lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+            
+#             # calculate lick rate within each landmark (mean in each bin)
+#             lm_lick_rate[lm], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+
+#     else:
+#         lm_lick_rate = {}
+#         for lap in range(session['num_laps']):
+#             for lm in range(len(session['all_lms'])):
+#                 key = (lap, lm)
+
+#                 # datapoints within landmarks for each lap 
+#                 lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
+
+#                 # binary licks within landmark
+#                 lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+                
+#                 # calculate lick rate within each landmark (mean in each bin)
+#                 lm_lick_rate[key], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+
+#     session['lm_lick_rate'] = lm_lick_rate
+
+#     return session
+
+# def get_binned_lick_rate(nidaq_data, session):  # TODO
+#     """Get lick rate per frame bin as the mean per bin for each landmark and the gray zones before"""
+    
+#     # Threshold licks
+#     session = threshold_nidaq_licks(nidaq_data, session)
+
+#     # Get all datapoints within landmarks
+#     # session = get_data_lm_idx(nidaq_data, session)
+#     session = get_data_lm_idx(session)
+
+#     lm_lick_rate = {}
+
+#     # Create a binary lick map for the entire session
+#     binary_licks = np.zeros(len(nidaq_data['position']))
+#     binary_licks[session['thresholded_lick_idx']] = nidaq_data['licks'][session['thresholded_lick_idx']] # (actually not binary)
+
+#     for lap in range(session['num_laps']):
+#         for lm in range(len(session['all_lms']) * 2):
+#             key = (lap, lm)
+
+#             # datapoints within landmarks for each lap 
+#             lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
+
+#             # binary licks within landmark
+#             lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+            
+#             # calculate lick rate within each landmark (mean in each bin)
+#             lm_lick_rate[key], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=16)
+
+#     session['lm_lick_rate'] = lm_lick_rate
+
+#     return session
+
+def get_binned_lick_rate(session):  # TODO
     """Get lick rate per frame bin as the mean per bin for each landmark and the gray zones before"""
     
     # Threshold licks
-    session = threshold_nidaq_licks(nidaq_data, session)
+    session = threshold_licks(session)
+    # session = threshold_nidaq_licks(session)
 
     # Get all datapoints within landmarks
-    session = get_data_lm_idx(nidaq_data, session)
+    session = get_data_lm_idx(session)
 
     lm_lick_rate = {}
 
     # Create a binary lick map for the entire session
-    binary_licks = np.zeros(len(nidaq_data['position']))
-    binary_licks[session['thresholded_lick_idx']] = nidaq_data['licks'][session['thresholded_lick_idx']] # (actually not binary)
+    binary_licks = np.zeros(len(session['position']))
+    binary_licks[session['thresholded_licks']] = session['licks'][session['thresholded_licks']] # (actually not binary)
 
     for lap in range(session['num_laps']):
         for lm in range(len(session['all_lms']) * 2):
@@ -1211,11 +1502,12 @@ def get_binned_lick_rate(nidaq_data, session):  # TODO
 
     return session
 
-def get_binary_lick_map(nidaq_data, session):
+def get_binary_lick_map(session):
     """Create a binary map of licked landmarks - similar to get_licked_lms"""
     
     # Get all datapoints within landmarks
-    session = get_data_lm_idx(nidaq_data, session)
+    # session = get_data_lm_idx(nidaq_data, session)
+    session = get_data_lm_idx(session)
 
     licked_lms = np.empty((len(session['all_lms'])))
     for lm in range(len(session['all_lms'])):
@@ -1223,8 +1515,8 @@ def get_binary_lick_map(nidaq_data, session):
         lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
 
         # Find all licks within the landmark
-        if 'thresholded_lick_idx' in session:
-            target_licks = np.intersect1d(lm_idx, session['thresholded_lick_idx'])
+        if 'thresholded_licks' in session:
+            target_licks = np.intersect1d(lm_idx, session['thresholded_licks'])
         else:
             target_licks = np.intersect1d(lm_idx, session['lick_idx'])
         if len(target_licks) > 0:
@@ -1248,14 +1540,29 @@ def get_licks_per_lap(session):
 
     return session
 
-def get_data_lm_idx(nidaq_data, session):
-    """Get the landmark id of every data entry - similar to get_lm_idx"""
+# def get_data_lm_idx(nidaq_data, session):
+#     """Get the landmark id of every data entry - similar to get_lm_idx"""
+    
+#     # Find landmark entry and exit idx
+#     lm_entry, lm_exit = get_lm_entry_exit(session, nidaq_data['position'])
+
+#     # Find datapoints within a landmark
+#     lm_idx = np.zeros(len(nidaq_data['position']))
+#     for i in range(len(session['all_lms'])):
+#         lm_idx[lm_entry[i]:lm_exit[i]+1] = i+1
+
+#     session['data_lm_idx'] = lm_idx
+
+#     return session
+
+def get_data_lm_idx(session):
+    '''Get the landmark id of every data entry'''
     
     # Find landmark entry and exit idx
-    lm_entry, lm_exit = get_lm_entry_exit(session, nidaq_data['position'])
+    lm_entry, lm_exit = get_lm_entry_exit(session)
 
     # Find datapoints within a landmark
-    lm_idx = np.zeros(len(nidaq_data['position']))
+    lm_idx = np.zeros(len(session['position']))
     for i in range(len(session['all_lms'])):
         lm_idx[lm_entry[i]:lm_exit[i]+1] = i+1
 
@@ -1316,12 +1623,12 @@ def get_landmark_ids(session):
 
     return session
 
-def get_landmark_category_rew_idx(session, VR_data, nidaq_data):
+def get_landmark_category_rew_idx(session, VR_data=None, nidaq_data=None):
     '''Find indices also in non-goal landmarks corresponding to the same time after landmark entry as mean reward time lag.'''
     
-    session = get_rewards(VR_data, nidaq_data, session, print_output=True)
+    session = get_rewards(session, VR_data, nidaq_data, print_output=True)
 
-    rew_lm_entry_idx, miss_lm_entry_idx, nongoal_lm_entry_idx, test_lm_entry_idx = get_landmark_category_entries(VR_data, nidaq_data, session)
+    rew_lm_entry_idx, miss_lm_entry_idx, nongoal_lm_entry_idx, test_lm_entry_idx = get_landmark_category_entries(session, VR_data, nidaq_data)
     
     # Calculate time lag between landmark entry and reward delivery
     rew_time_lag = np.round(np.mean(session['reward_idx'] - rew_lm_entry_idx))
@@ -1339,16 +1646,37 @@ def get_landmark_category_rew_idx(session, VR_data, nidaq_data):
 
     return session
 
-def get_landmark_category_entries(VR_data, nidaq_data, session):
+# def get_landmark_category_entries(VR_data, nidaq_data, session):
+#     '''Find the indices of landmark entry for different types of landmarks: rewarded, miss, non-goal, test.'''
+    
+#     lm_entry_idx, _ = get_lm_entry_exit(session, positions=nidaq_data['position'])
+
+#     # Find category for each landmark 
+#     session = get_landmark_categories(session)
+
+#     # Find the rewarded landmarks 
+#     session = get_rewarded_landmarks(VR_data, nidaq_data, session)
+
+#     # Find landmark entry indices for each landmark category
+#     rew_lm_entry_idx = [lm_entry_idx[i] for i in session['rewarded_landmarks']]
+#     miss_lm_entry_idx = np.array([lm_entry_idx[i] for i in session['goals_idx'] if i not in session['rewarded_landmarks']])
+#     nongoal_lm_entry_idx = np.array([lm_entry_idx[i] for i in session['non_goals_idx']])
+#     test_lm_entry_idx = np.array([lm_entry_idx[i] for i in session['test_idx']]) if session['test_idx'] is not None else np.array([])
+
+#     assert len(rew_lm_entry_idx) + len(miss_lm_entry_idx) + len(nongoal_lm_entry_idx) + len(test_lm_entry_idx) == len(session['all_lms']), 'Some landmarks have not been considered.'
+
+#     return rew_lm_entry_idx, miss_lm_entry_idx, nongoal_lm_entry_idx, test_lm_entry_idx
+
+def get_landmark_category_entries(session, VR_data=None, nidaq_data=None):
     '''Find the indices of landmark entry for different types of landmarks: rewarded, miss, non-goal, test.'''
     
-    lm_entry_idx, _ = get_lm_entry_exit(session, positions=nidaq_data['position'])
+    lm_entry_idx, _ = get_lm_entry_exit(session)
 
     # Find category for each landmark 
     session = get_landmark_categories(session)
 
     # Find the rewarded landmarks 
-    session = get_rewarded_landmarks(VR_data, nidaq_data, session)
+    session = get_rewarded_landmarks(session, VR_data, nidaq_data)
 
     # Find landmark entry indices for each landmark category
     rew_lm_entry_idx = [lm_entry_idx[i] for i in session['rewarded_landmarks']]
@@ -1497,6 +1825,51 @@ def analyse_session_pre7(mouse, date):
 
     return session
 
+def analyse_session_pre7_behav(base_path, mouse, date, stage):
+    if '3' not in stage and '4' not in stage and '5' not in stage and '6' not in stage:
+        raise ValueError('This function only works for T3-T6.')
+    
+    # base_path = find_base_path(mouse, date)
+    data = load_session(base_path)
+    options = load_config(base_path)
+    session = create_session_struct(data, options)
+
+    session['mouse'] = mouse
+    session['date'] = date
+    session['stage'] = stage
+
+    session = get_num_landmarks(session, options)
+    session = get_lap_idx(session)
+    session = get_lm_idx(session)
+    session = threshold_licks(session)
+    session = get_licks_per_lap(session)
+    session = get_licked_lms(session)
+    session = get_rewarded_lms(session)
+    session = get_lms_visited(options, session)
+
+    session = get_AB_sequence(session, mouse, stage)
+    session = get_landmark_categories(session)
+    session = get_rewarded_landmarks(session)
+    session = get_landmark_category_rew_idx(session)
+    session = calculate_frame_lick_rate(session)
+    # session = calculate_frame_lick_rate(data, session)
+
+    session = calc_acceleration(session)
+    session = get_active_goal(session)
+    session = get_transition_prob(session)
+    session = get_all_transitions(session)
+    session = get_ideal_transitions(session)
+    session = get_sorted_transitions(session)
+    session = calc_laps_needed(session)
+    session = give_lap_state_id(session)
+    session = plot_licks_per_state(session)
+    session = calc_speed_per_lap_pre7(session)
+
+    plot_lick_maps(session)
+    plot_speed_profile(session)
+
+    return session
+
 def analyse_npz(mouse, date, stage, plot=True): 
     base_path = find_base_path_npz(mouse, date)
     data = load_session_npz(base_path)
@@ -1517,13 +1890,14 @@ def analyse_npz(mouse, date, stage, plot=True):
     
     session = get_rewarded_lms(session)
     session = get_lms_visited(options, session)
-    session = get_licks(data, session)
+    session = get_licks(session)
     session = get_active_goal(session)
 
     VR_data = load_session(base_path2)
-    session = get_rewarded_landmarks(VR_data, data, session)
+    session = get_rewarded_landmarks(session, VR_data, data)
     session = get_landmark_category_rew_idx(session, VR_data, data)
-    session = calculate_frame_lick_rate(data, session)
+    session = calculate_frame_lick_rate(session)
+    # session = calculate_frame_lick_rate(data, session)
 
     session = calc_acceleration(session)
     session = get_transition_prob(session)
@@ -1571,10 +1945,11 @@ def analyse_npz_pre7(mouse, date, stage, plot=False):
     VR_data = load_session(base_path2)
     session = get_AB_sequence(session, mouse, stage)
     session = get_landmark_categories(session)
-    session = get_licks(data, session)
-    session = get_rewarded_landmarks(VR_data, data, session)
+    session = get_licks(session)
+    session = get_rewarded_landmarks(session, VR_data, data)
     session = get_landmark_category_rew_idx(session, VR_data, data)
-    session = calculate_frame_lick_rate(data, session)
+    session = calculate_frame_lick_rate(session)
+    # session = calculate_frame_lick_rate(data, session)
 
     session = calc_acceleration(session)
     session = get_active_goal(session)
@@ -1588,7 +1963,7 @@ def analyse_npz_pre7(mouse, date, stage, plot=False):
     session = calc_speed_per_lap_pre7(session)
 
     plot_lick_maps(session)
-    plot_speed_profile(session, stage=int(stage[-1]))
+    plot_speed_profile(session)
 
     print('Number of laps = ', session['num_laps'])
     
@@ -1765,9 +2140,10 @@ def plot_ethogram(session, npz=False):
     plt.show()
 
 
-def plot_speed_profile(session, stage):
+def plot_speed_profile(session):
     import matplotlib.patches as patches
 
+    stage = extract_int(session['stage'])
     if stage == 3:
         color = '#325235'
     elif stage == 4:
@@ -1799,8 +2175,8 @@ def plot_speed_profile(session, stage):
     ax.set_ylabel('Speed (cm/s)')
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
-    plt.show()
 
+    fig.savefig(f'{session['mouse']}_{session['date']}_speed_profile.png')
 
 def plot_deceleration_profile(session, stage):
     import matplotlib.patches as patches
@@ -1838,16 +2214,132 @@ def plot_deceleration_profile(session, stage):
     ax.spines['right'].set_visible(False)
     plt.show()
 
+# def plot_lick_maps(session):
+
+#     # Load data
+#     base_path = find_base_path_npz(session['mouse'], session['date'])
+#     nidaq_data = load_session_npz(base_path)
+#     session = get_licks(nidaq_data, session, print_output=True)
+#     session = threshold_nidaq_licks(nidaq_data, session)
+
+#     # ------- Get binary lick map (laps x landmarks) ------- #
+#     session = get_binary_lick_map(nidaq_data, session)
+
+#     # Reshape if laps are not repeating
+#     # if np.array(session['binary_licked_lms']).ndim != 2:
+
+#     # Check number of actual laps
+#     num_lms_considered = int(np.round((len(session['all_landmarks']) // session['num_landmarks']) * session['num_landmarks']))
+#     num_laps = int(num_lms_considered / session['num_landmarks'])
+
+#     if '3' in session['stage'] or '4' in session['stage']:
+#         # The landmarks might not be in order so we need to be careful about binning 
+#         # Determine how many rows to keep
+#         min_len = min(len(session['goals_idx']), len(session['non_goals_idx']))
+#         goal_licked_lms = session['binary_licked_lms'][session['goals_idx'][:min_len]]
+#         non_goal_licked_lms = session['binary_licked_lms'][session['non_goals_idx'][:min_len]]
+
+#         goal_licked_lms = goal_licked_lms.reshape((num_laps, -1))        # -1 lets numpy figure out columns
+#         non_goal_licked_lms = non_goal_licked_lms.reshape((num_laps, -1))
+
+#         binary_licked_lms = np.column_stack((goal_licked_lms, non_goal_licked_lms))
+#     else: 
+#         # the landmarks are in order so we can simply reshape
+#         # binary_licked_lms = np.array(session['binary_licked_lms'][0][:num_lms_considered]).reshape((num_laps, session['num_landmarks']))
+#         binary_licked_lms = np.array(session['binary_licked_lms'][:num_lms_considered]).reshape((num_laps, session['num_landmarks']))
+    
+#         # else:
+#         #     # binary_licked_lms = np.array(session['binary_licked_lms'][0])
+#         #     binary_licked_lms = np.array(session['binary_licked_lms'])
+
+#     # ------- Get lick rate map (laps x landmarks) ------- #
+#     session = get_lm_lick_rate(nidaq_data, session)
+
+#     if '3' in session['stage'] or '4' in session['stage']:
+#         goal_lm_lick_rate = session['lm_lick_rate'][session['goals_idx']]
+#         non_goal_lm_lick_rate = session['lm_lick_rate'][session['non_goals_idx']]
+
+#         min_len = min(len(goal_lm_lick_rate), len(non_goal_lm_lick_rate))
+#         goal_lm_lick_rate = goal_lm_lick_rate[:min_len, :]
+#         non_goal_lm_lick_rate = non_goal_lm_lick_rate[:min_len, :]
+
+#         lm_lick_rate = np.column_stack((goal_lm_lick_rate, non_goal_lm_lick_rate))
+        
+#     else: # TODO
+#         keys = sorted(session['lm_lick_rate'].keys())  
+#         first_keys = set(k[0] for k in keys)
+
+#         if len(first_keys) == 1:
+#             lm_lick_rate = [[] for _ in range(num_laps)]
+#             for lm_idx in range(num_lms_considered):
+#                 lap = lm_idx // session['num_landmarks']
+#                 key = (0, lm_idx)
+#                 if key in session['lm_lick_rate']:
+#                     rate = session['lm_lick_rate'][key]
+#                     lm_lick_rate[lap].extend(rate)
+#         else:
+#             lm_lick_rate = [[] for _ in range(num_laps)]
+#             for i in range(num_laps):
+#                 for lm_idx in range(num_lms_considered):
+#                     lap = lm_idx // session['num_landmarks']
+#                     key = (i, lm_idx)
+#                     if key in session['lm_lick_rate']:
+#                         rate = session['lm_lick_rate'][key]
+#                         lm_lick_rate[lap].extend(rate)
+
+#         lm_lick_rate = np.array(lm_lick_rate)  # (num_laps, num_bins * num_landmarks)
+
+#     # Plotting
+#     tm_palette = palettes.met_brew('Tam', n=123, brew_type="continuous")
+#     tm_palette = tm_palette[::-1]
+
+#     tick_positions = [i * 16 + 16 // 2 for i in range(session['num_landmarks'])]
+#     tick_labels = np.arange(1, session['num_landmarks']+1)  
+    
+#     # Plot the binary and lick rate maps for each landmark 
+#     if session['num_landmarks'] == 2:
+#         fig, ax = plt.subplots(1,2, figsize=(8,3), sharex=False, sharey=False)
+#     else:
+#         fig, ax = plt.subplots(2, 1, figsize=(10,4), sharex=False, sharey=False)
+    
+#     ax = ax.ravel()
+
+#     # Plot binary licks  
+#     sns.heatmap(binary_licked_lms, ax=ax[0], cmap=[tm_palette[0], tm_palette[-1]], 
+#                 vmin=0, vmax=1, cbar_kws={"ticks": [0, 1]}, xticklabels=(tick_labels), 
+#                 yticklabels=[0, binary_licked_lms.shape[0]])
+
+#     # Plot lick rate
+#     max_lick_rate = np.round(np.nanmax(lm_lick_rate), 1)
+#     sns.heatmap(lm_lick_rate, ax=ax[1], cmap=tm_palette, vmin=0, vmax=max_lick_rate, 
+#                 cbar_kws={"ticks": [0, max_lick_rate]})
+#     for i in range(1, session['num_landmarks']):
+#         ax[1].axvline(i * 16, color='white', linestyle='--', linewidth=1)
+
+#     for axis in ax:
+#         axis.set_yticks([0, binary_licked_lms.shape[0]])
+#         axis.set_yticklabels([0, binary_licked_lms.shape[0]])
+#         axis.set_xlabel('Landmark')
+#         axis.set_ylabel('Lap')
+
+#     ax[0].set_title('Licked Landmarks')
+#     ax[1].set_title('Lick Rate')
+#     ax[1].set_xticks(tick_positions)
+#     ax[1].set_xticklabels(tick_labels, rotation=0)
+    
+#     # plt.tight_layout()
+
+#     return binary_licked_lms, lm_lick_rate
+
 def plot_lick_maps(session):
 
     # Load data
-    base_path = find_base_path_npz(session['mouse'], session['date'])
-    nidaq_data = load_session_npz(base_path)
-    session = get_licks(nidaq_data, session, print_output=True)
-    session = threshold_nidaq_licks(nidaq_data, session)
+    session = get_licks(session, print_output=True)
+    session = threshold_licks(session)
+    # session = threshold_nidaq_licks(session)
 
     # ------- Get binary lick map (laps x landmarks) ------- #
-    session = get_binary_lick_map(nidaq_data, session)
+    session = get_binary_lick_map(session)
 
     # Reshape if laps are not repeating
     # if np.array(session['binary_licked_lms']).ndim != 2:
@@ -1869,49 +2361,10 @@ def plot_lick_maps(session):
         binary_licked_lms = np.column_stack((goal_licked_lms, non_goal_licked_lms))
     else: 
         # the landmarks are in order so we can simply reshape
-        # binary_licked_lms = np.array(session['binary_licked_lms'][0][:num_lms_considered]).reshape((num_laps, session['num_landmarks']))
         binary_licked_lms = np.array(session['binary_licked_lms'][:num_lms_considered]).reshape((num_laps, session['num_landmarks']))
     
-        # else:
-        #     # binary_licked_lms = np.array(session['binary_licked_lms'][0])
-        #     binary_licked_lms = np.array(session['binary_licked_lms'])
-
     # ------- Get lick rate map (laps x landmarks) ------- #
-    session = get_lm_lick_rate(nidaq_data, session)
-
-    if '3' in session['stage'] or '4' in session['stage']:
-        goal_lm_lick_rate = session['lm_lick_rate'][session['goals_idx']]
-        non_goal_lm_lick_rate = session['lm_lick_rate'][session['non_goals_idx']]
-
-        min_len = min(len(goal_lm_lick_rate), len(non_goal_lm_lick_rate))
-        goal_lm_lick_rate = goal_lm_lick_rate[:min_len, :]
-        non_goal_lm_lick_rate = non_goal_lm_lick_rate[:min_len, :]
-
-        lm_lick_rate = np.column_stack((goal_lm_lick_rate, non_goal_lm_lick_rate))
-        
-    else: # TODO
-        keys = sorted(session['lm_lick_rate'].keys())  
-        first_keys = set(k[0] for k in keys)
-
-        if len(first_keys) == 1:
-            lm_lick_rate = [[] for _ in range(num_laps)]
-            for lm_idx in range(num_lms_considered):
-                lap = lm_idx // session['num_landmarks']
-                key = (0, lm_idx)
-                if key in session['lm_lick_rate']:
-                    rate = session['lm_lick_rate'][key]
-                    lm_lick_rate[lap].extend(rate)
-        else:
-            lm_lick_rate = [[] for _ in range(num_laps)]
-            for i in range(num_laps):
-                for lm_idx in range(num_lms_considered):
-                    lap = lm_idx // session['num_landmarks']
-                    key = (i, lm_idx)
-                    if key in session['lm_lick_rate']:
-                        rate = session['lm_lick_rate'][key]
-                        lm_lick_rate[lap].extend(rate)
-
-        lm_lick_rate = np.array(lm_lick_rate)  # (num_laps, num_bins * num_landmarks)
+    session = get_lm_lick_rate(session)
 
     # Plotting
     tm_palette = palettes.met_brew('Tam', n=123, brew_type="continuous")
@@ -1934,8 +2387,8 @@ def plot_lick_maps(session):
                 yticklabels=[0, binary_licked_lms.shape[0]])
 
     # Plot lick rate
-    max_lick_rate = np.round(np.nanmax(lm_lick_rate), 1)
-    sns.heatmap(lm_lick_rate, ax=ax[1], cmap=tm_palette, vmin=0, vmax=max_lick_rate, 
+    max_lick_rate = np.round(np.nanmax(session['lm_lick_rate']), 1)
+    sns.heatmap(session['lm_lick_rate'], ax=ax[1], cmap=tm_palette, vmin=0, vmax=max_lick_rate, 
                 cbar_kws={"ticks": [0, max_lick_rate]})
     for i in range(1, session['num_landmarks']):
         ax[1].axvline(i * 16, color='white', linestyle='--', linewidth=1)
@@ -1952,8 +2405,7 @@ def plot_lick_maps(session):
     ax[1].set_xticklabels(tick_labels, rotation=0)
     
     # plt.tight_layout()
-
-    return binary_licked_lms, lm_lick_rate
+    fig.savefig(f'{session['mouse']}_{session['date']}_lick_maps.png')
 
 def plot_licks_per_state(session):
     if session['laps_needed'] == 2:
@@ -2059,11 +2511,11 @@ def get_lick_types(session, VR_data, nidaq_data):
     lm_entry_idx, lm_exit_idx = get_lm_entry_exit(session)
 
     # Get lick indices
-    session = get_licks(nidaq_data, session)
+    session = get_licks(session)
     lick_idx = session['lick_idx']
 
     # Get rewarded landmarks
-    session = get_rewarded_landmarks(VR_data, nidaq_data, session)
+    session = get_rewarded_landmarks(session, VR_data, nidaq_data)
 
     # Collect all licks 
     licks = {id: {} for id in range(1,11)}
@@ -2180,7 +2632,7 @@ def get_first_licks(session, VR_data=None, nidaq_data=None):
     lm_entry_idx, lm_exit_idx = get_lm_entry_exit(session, nidaq_data['position'])
 
     # Get lick indices
-    session = get_licks(nidaq_data, session)
+    session = get_licks(session)
     lick_idx = session['lick_idx']
 
     # Get lick ids

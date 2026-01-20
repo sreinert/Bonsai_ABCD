@@ -1728,7 +1728,7 @@ def create_session_struct_npz(data, ses_settings, world):
     position = np.nan_to_num(data['position'], nan=0.0)
     rewards = np.where(data['rewards'])[0]
     speed = np.nan_to_num(data['speed'], nan=0.0)
-    licks = data['licks']
+    licks = data['licks'] # TODO licks has a different definition for cohort 2
     
     if world == 'stable':
         goal_ids, lm_ids = parse_stable_goal_ids(ses_settings)
@@ -1751,6 +1751,42 @@ def create_session_struct_npz(data, ses_settings, world):
     
     return session
 
+def create_session_struct(sess_dataframe, ses_settings, world):
+    print(sess_dataframe)
+
+    position = sess_dataframe['Position']
+    licks = sess_dataframe['Licks']
+    rewards = sess_dataframe['Rewards']
+    speed = sess_dataframe['Treadmill']
+    
+    # Use the Buffer as datapoint idx
+    
+    # position = np.nan_to_num(data['position'], nan=0.0)
+    # rewards = np.where(data['rewards'])[0]
+    # speed = np.nan_to_num(data['speed'], nan=0.0)
+    # licks = data['licks']
+    
+    # if world == 'stable':
+    #     goal_ids, lm_ids = parse_stable_goal_ids(ses_settings)
+    # elif world == 'random':
+    #     goal_ids, lm_ids = parse_random_goal_ids(ses_settings)
+    # num_landmarks = len(lm_ids) # unique number of lm ids
+
+    # tunnel_length = calculate_corr_length(ses_settings)
+    # lick_threshold = ses_settings['velocityThreshold']
+
+    # session = {'position': position,
+    #            'licks': licks, 
+    #            'rewards': rewards, 
+    #            'goal_ids': goal_ids, 
+    #            'lm_ids': lm_ids,
+    #            'num_landmarks': num_landmarks,
+    #            'tunnel_length': tunnel_length,
+    #            'lick_threshold': lick_threshold,
+    #            'speed': speed}
+    
+    # return session
+
 def get_behaviour(session, sess_dataframe, ses_settings):
     transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe, ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
@@ -1763,7 +1799,7 @@ def get_behaviour(session, sess_dataframe, ses_settings):
 
     if session['world'] == 'stable':
         _ = plot_lick_maps(session)
-        plot_speed_profile(session, stage=int(session['stage'][-1]))
+        plot_speed_profile(session)
     
     session['transition_prob'] = transition_prob
     session['control_prob'] = control_prob
@@ -1824,6 +1860,54 @@ def analyse_npz_pre7(mouse, session_id, root, stage, world='stable'):
     
     return session
 
+def analyse_session_pre7_behav(session_path, mouse, stage, world='stable'):
+    '''Wrapper for session analysis'''
+
+    if '3' not in stage and '4' not in stage and '5' not in stage and '6' not in stage:
+        raise ValueError('This function only works for T3-T6.')
+    
+    ses_settings, _ = load_settings(session_path)
+    sess_dataframe = load_data(session_path)
+
+    session = create_session_struct(sess_dataframe, ses_settings, world=world)
+    # session = get_landmark_positions(session, sess_dataframe, ses_settings)
+    # session = get_goal_positions(session, sess_dataframe, ses_settings)
+
+    # session['mouse'] = mouse
+    # session['session_id'] = session_id
+    # # session['date'] = date
+    # session['stage'] = stage
+    # session['world'] = world
+
+    # save_path = Path(session_path) / 'analysis'
+    # save_path.mkdir(parents=True, exist_ok=True)
+    # session['save_path'] = save_path
+    
+    # session = get_lap_idx(session)
+    # session = get_lm_idx(session)
+    # session = get_licks_idx(session) # thresholding is also performed here
+    # session = get_licks_per_lap(session)
+    # session = get_licked_lms(session)
+    # session = get_rewarded_lms(session)
+    # session = get_lms_visited(session, sess_dataframe, ses_settings)
+    # session = get_reward_idx(session)
+    # session = get_active_goal(session)
+    # session = calc_acceleration(session)
+    # session = calculate_frame_lick_rate(session)
+
+    # session = get_AB_sequence(session, world)
+    # session = get_landmark_categories(session)
+    # # session = get_licks(data, session)
+    # session = get_rewarded_landmarks(session)
+    # session = get_landmark_category_rew_idx(session)
+
+    # # Get behaviour
+    # session = get_behaviour(session, sess_dataframe, ses_settings)
+
+    # print('Number of laps = ', session['num_laps'])
+    
+    # return session
+    
 #%% ##### Plotting #####
 def plot_ethogram(sess_dataframe,ses_settings):
     lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
@@ -2403,10 +2487,11 @@ def plot_lick_maps(session):
 
     return binary_licked_lms, lm_lick_rate
 
-def plot_speed_profile(session, stage):
+def plot_speed_profile(session):
     '''Plot the speed profile per landmark'''
     session = calc_speed_per_lm(session)
 
+    stage = extract_int(session['stage'])
     if stage == 3:
         color = '#325235'
     elif stage == 4:
