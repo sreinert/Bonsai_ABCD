@@ -28,6 +28,41 @@ def find_base_path(mouse,date,root):
             base_path = folder
     return base_path
 
+def get_available_session_dates(root, mouse_id, start_date, end_date):
+    """Get available session dates for a mouse within a date range (YYYYMMDD format)."""
+    
+    # convert string dates to datetime objects
+    start = datetime.strptime(start_date, "%Y%m%d")
+    end = datetime.strptime(end_date, "%Y%m%d")
+    
+    # generate all dates in range
+    current = start
+    available_dates = []
+    
+    mouse_path = Path(root) / f"sub-{mouse_id}"
+    
+    if not mouse_path.exists():
+        print(f"Warning: Mouse path {mouse_path} does not exist")
+        return available_dates
+    
+    while current <= end:
+        date_str = current.strftime("%Y%m%d")
+        
+        # check if any folder contains this date
+        date_found = False
+        for folder in mouse_path.iterdir():
+            if folder.is_dir() and date_str in folder.name:
+                available_dates.append(date_str)
+                date_found = True
+                print(f"Found session: {date_str}")
+                break
+        
+        current += timedelta(days=1)
+    
+    print(f"\nTotal sessions found: {len(available_dates)}")
+    return available_dates
+
+
 def load_settings(base_path):
     settings_path = Path(base_path) / "behav/session-settings/"
     json_files = list(settings_path.glob("*.json")) or False # deal with first few sessions where config was saved as json
