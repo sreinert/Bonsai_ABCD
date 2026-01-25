@@ -68,7 +68,7 @@ def load_dF_session_data(base_path, mouse, stage, calculate_DF_F=False):
             np.save(DF_F_file, dF)
             
     # Get session data 
-    if stage in ['-t3','-t4','-t5', '-t6']:
+    if any(s in stage for s in ['t3', 't4', 't5', 't6']):
         session = parse_session_functions.analyse_npz_pre7(mouse, date2, stage, plot=False)
     else:
         session = parse_session_functions.analyse_npz(mouse, date2, stage, plot=True)
