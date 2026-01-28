@@ -54,7 +54,6 @@ def get_available_session_dates(root, mouse_id, start_date=None, end_date=None):
     
     available_dates = []
     
-    # If no date range specified, get all sessions
     if start_date is None and end_date is None:
         print(f"Finding all sessions for mouse {mouse_id}...")
         
@@ -69,8 +68,6 @@ def get_available_session_dates(root, mouse_id, start_date=None, end_date=None):
         available_dates.sort()
     
     else:
-        # If only start_date or only end_date provided, first find all sessions
-        # then filter them
         print(f"Finding sessions for mouse {mouse_id}...")
         all_session_dates = []
         
@@ -82,7 +79,6 @@ def get_available_session_dates(root, mouse_id, start_date=None, end_date=None):
         
         all_session_dates.sort()
         
-        # Apply filtering based on provided dates
         for date_str in all_session_dates:
             include = True
             
@@ -100,41 +96,6 @@ def get_available_session_dates(root, mouse_id, start_date=None, end_date=None):
     
     print(f"\nTotal sessions found: {len(available_dates)}")
     return available_dates
-
-# def get_available_session_dates(root, mouse_id, start_date, end_date):
-    """Get available session dates for a mouse within a date range (YYYYMMDD format)."""
-    
-    # convert string dates to datetime objects
-    start = datetime.strptime(start_date, "%Y%m%d")
-    end = datetime.strptime(end_date, "%Y%m%d")
-    
-    # generate all dates in range
-    current = start
-    available_dates = []
-    
-    mouse_path = Path(root) / f"sub-{mouse_id}"
-    
-    if not mouse_path.exists():
-        print(f"Warning: Mouse path {mouse_path} does not exist")
-        return available_dates
-    
-    while current <= end:
-        date_str = current.strftime("%Y%m%d")
-        
-        # check if any folder contains this date
-        date_found = False
-        for folder in mouse_path.iterdir():
-            if folder.is_dir() and date_str in folder.name:
-                available_dates.append(date_str)
-                date_found = True
-                print(f"Found session: {date_str}")
-                break
-        
-        current += timedelta(days=1)
-    
-    print(f"\nTotal sessions found: {len(available_dates)}")
-    return available_dates
-
 
 def load_settings(base_path):
     settings_path = Path(base_path) / "behav/session-settings/"
@@ -321,25 +282,49 @@ def plot_ethogram(sess_dataframe,ses_settings):
     plt.legend()
     plt.show()
 
-def calc_hit_fa(sess_dataframe,ses_settings):
+def calc_hit_fa(sess_dataframe, ses_settings):
     lm_size = ses_settings['trial']['landmarks'][0][0]['size']
 
     lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
 
     rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
 
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe, ses_settings)
 
+    # Find release times for targets and distractors
     licked_target = np.zeros(len(target_positions))
-    for idx, pos in enumerate(target_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
-            licked_target[idx] = 1
+    for idx, lm_pos in enumerate(target_positions):
+        # Find when this target was released (release_df['Position'] contains LM_Position)
+        release_time_idx = release_df.index[release_df['Position'] == lm_pos]
+        if len(release_time_idx) > 0:
+            release_time = release_time_idx[0]
+            # Convert LM_Position to actual Position for lick checking
+            try:
+                true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == lm_pos][0]
+                true_pos = sess_dataframe['Position'].loc[true_ix]
+                # Only licks after the release
+                licks_after_release = lick_position[lick_times >= release_time]
+                if np.any((licks_after_release > true_pos) & (licks_after_release < (true_pos + lm_size))):
+                    licked_target[idx] = 1
+            except IndexError:
+                continue
 
     licked_distractor = np.zeros(len(distractor_positions))
-    for idx, pos in enumerate(distractor_positions):
-        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
-            licked_distractor[idx] = 1
-
+    for idx, lm_pos in enumerate(distractor_positions):
+        # Find when this distractor was released (release_df['Position'] contains LM_Position)
+        release_time_idx = release_df.index[release_df['Position'] == lm_pos]
+        if len(release_time_idx) > 0:
+            release_time = release_time_idx[0]
+            # Convert LM_Position to actual Position for lick checking
+            try:
+                true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == lm_pos][0]
+                true_pos = sess_dataframe['Position'].loc[true_ix]
+                # Only licks after the release
+                licks_after_release = lick_position[lick_times >= release_time]
+                if np.any((licks_after_release > true_pos) & (licks_after_release < (true_pos + lm_size))):
+                    licked_distractor[idx] = 1
+            except IndexError:
+                continue
 
     licked_all = np.zeros(len(release_df))
     rewarded_all = np.zeros(len(release_df))
@@ -354,9 +339,10 @@ def calc_hit_fa(sess_dataframe,ses_settings):
         if np.any((rewards > (true_pos)) & (rewards < (true_pos + lm_size))):
             rewarded_all[idx] = 1
 
-    hit_rate = np.sum(licked_target) / len(licked_target) 
-    fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
-    #adjust hit rate and fa rate to avoid infinity in d-prime calculation
+    hit_rate = np.sum(licked_target) / len(licked_target) if len(licked_target) > 0 else 0
+    fa_rate = np.sum(licked_distractor) / len(licked_distractor) if len(licked_distractor) > 0 else 0
+    
+    # Adjust hit rate and fa rate to avoid infinity in d-prime calculation
     if hit_rate == 1:
         hit_rate = 0.99
     if hit_rate == 0:
@@ -368,7 +354,7 @@ def calc_hit_fa(sess_dataframe,ses_settings):
 
     d_prime = np.log10(hit_rate/(1-hit_rate)) - np.log10(fa_rate/(1-fa_rate))
 
-    return hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all
+    return hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all
 
 def extract_int(s: str) -> int:
     m = re.search(r'\d+', s)
