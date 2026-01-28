@@ -28,7 +28,80 @@ def find_base_path(mouse,date,root):
             base_path = folder
     return base_path
 
-def get_available_session_dates(root, mouse_id, start_date, end_date):
+def get_available_session_dates(root, mouse_id, start_date=None, end_date=None):
+    """
+    # Call ALL sessions for a mouse - only useful where folders exclude pretraining sessions
+    dates = get_available_session_dates(root, "003")
+
+    # Call sessions from a specific date onwards
+    dates = get_available_session_dates(root, "003", start_date="20260120")
+
+    # Call sessions up to a specific date
+    dates = get_available_session_dates(root, "003", end_date="20260122")
+
+    # Call sessions in a specific range 
+    dates = get_available_session_dates(root, "003", "20260120", "20260122")
+
+    """
+    from datetime import datetime, timedelta
+    import re
+    
+    mouse_path = Path(root) / f"sub-{mouse_id}"
+    
+    if not mouse_path.exists():
+        print(f"Warning: Mouse path {mouse_path} does not exist")
+        return []
+    
+    available_dates = []
+    
+    # If no date range specified, get all sessions
+    if start_date is None and end_date is None:
+        print(f"Finding all sessions for mouse {mouse_id}...")
+        
+        for folder in mouse_path.iterdir():
+            if folder.is_dir():
+                date_match = re.search(r'(\d{8})', folder.name)
+                if date_match:
+                    date_str = date_match.group(1)
+                    available_dates.append(date_str)
+                    print(f"Found session: {date_str}")
+        
+        available_dates.sort()
+    
+    else:
+        # If only start_date or only end_date provided, first find all sessions
+        # then filter them
+        print(f"Finding sessions for mouse {mouse_id}...")
+        all_session_dates = []
+        
+        for folder in mouse_path.iterdir():
+            if folder.is_dir():
+                date_match = re.search(r'(\d{8})', folder.name)
+                if date_match:
+                    all_session_dates.append(date_match.group(1))
+        
+        all_session_dates.sort()
+        
+        # Apply filtering based on provided dates
+        for date_str in all_session_dates:
+            include = True
+            
+            if start_date is not None:
+                if date_str < start_date:
+                    include = False
+            
+            if end_date is not None:
+                if date_str > end_date:
+                    include = False
+            
+            if include:
+                available_dates.append(date_str)
+                print(f"Found session: {date_str}")
+    
+    print(f"\nTotal sessions found: {len(available_dates)}")
+    return available_dates
+
+# def get_available_session_dates(root, mouse_id, start_date, end_date):
     """Get available session dates for a mouse within a date range (YYYYMMDD format)."""
     
     # convert string dates to datetime objects
