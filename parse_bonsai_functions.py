@@ -300,7 +300,10 @@ def calc_hit_fa(sess_dataframe, ses_settings):
             release_time = release_time_idx[0]
             # Convert LM_Position to actual Position for lick checking
             try:
-                true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == lm_pos][0]
+                if 'LM_Count' in sess_dataframe.columns:
+                    true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == lm_pos][0]
+                else:
+                    true_ix = sess_dataframe.index[sess_dataframe['Position'] == lm_pos][0]
                 true_pos = sess_dataframe['Position'].loc[true_ix]
                 # Only licks after the release
                 licks_after_release = lick_position[lick_times >= release_time]
@@ -317,7 +320,10 @@ def calc_hit_fa(sess_dataframe, ses_settings):
             release_time = release_time_idx[0]
             # Convert LM_Position to actual Position for lick checking
             try:
-                true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == lm_pos][0]
+                if 'LM_Count' in sess_dataframe.columns:
+                    true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == lm_pos][0]
+                else:
+                    true_ix = sess_dataframe.index[sess_dataframe['Position'] == lm_pos][0]
                 true_pos = sess_dataframe['Position'].loc[true_ix]
                 # Only licks after the release
                 licks_after_release = lick_position[lick_times >= release_time]
@@ -330,7 +336,10 @@ def calc_hit_fa(sess_dataframe, ses_settings):
     rewarded_all = np.zeros(len(release_df))
     release_positions = release_df['Position'].to_numpy()
     for idx, pos in enumerate(release_positions):
-        true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == pos][0]
+        if 'LM_Count' in sess_dataframe.columns:
+            true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == pos][0]
+        else:
+            true_ix = sess_dataframe.index[sess_dataframe['Position'] == pos][0]
         true_pos = sess_dataframe['Position'].loc[true_ix]
         licks = lick_position[lick_times >= release_df.index[idx]]
         rewards = reward_positions[reward_times >= release_df.index[idx]]
