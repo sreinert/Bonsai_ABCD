@@ -509,6 +509,8 @@ def calc_stable_conditional_matrix_new(sess_dataframe,ses_settings):
     for g in range(np.unique(goals).shape[0]):
         goal = goals[g]
         rewards = np.intersect1d(np.where(rewarded_all == 1)[0],np.where(all_lms == goal)[0])
+        #kick out last reward to avoid index error
+        rewards = rewards[:-1]
         list_ix = np.where(np.isin(licked_lm_ix,rewards))[0]
         control_ix = np.where(np.isin(controlled_lm_ix,rewards))[0]
         next_licks = lick_sequence[list_ix + 1]
@@ -534,6 +536,7 @@ def calc_stable_conditional_matrix_new(sess_dataframe,ses_settings):
         for g in range(np.unique(goals).shape[0]):
             goal = goals[g]
             rewards = np.intersect1d(np.where(rewarded_all == 1)[0],np.where(all_lms == goal)[0])
+            rewards = rewards[:-1]
             list_ix = np.where(np.isin(licked_lm_ix,rewards))[0]
             next_licks = lick_sequence[list_ix + 1]
             for next_lm in next_licks:
@@ -1312,6 +1315,49 @@ def plot_licks_per_state(sess_dataframe, ses_settings):
     plt.ylabel('Fraction of Licks')
     plt.legend()
     plt.title('Licks per State/Lap')
+    plt.show()
+
+def plot_polar_licks_per_state(sess_dataframe, ses_settings):
+    state_id = give_state_id(sess_dataframe,ses_settings)
+
+    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    if licked_all.shape[0] % 10 != 0:
+        #extend the array to make it divisible by 10
+        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
+
+    if laps_needed == 2:
+        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
+        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
+
+        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+
+    elif laps_needed == 3:
+        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
+        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
+        state3_laps = licked_all_reshaped[np.where(state_id == 2)[0],:]
+
+        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+        state3_hist = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
+
+    angles = np.linspace(0, 2 * np.pi, 10, endpoint=False)
+    angles = np.concatenate((angles, [angles[0]]))  # Complete the loop
+
+    plt.figure(figsize=(4,4))
+    ax = plt.subplot(111, polar=True)
+    ax.plot(angles, np.concatenate((state1_hist, [state1_hist[0]])), label='Lap1', color='g')
+    ax.plot(angles, np.concatenate((state2_hist, [state2_hist[0]])), label='Lap2', color='r')
+    if laps_needed == 3:
+        ax.plot(angles, np.concatenate((state3_hist, [state3_hist[0]])), label='Lap3', color='y')
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels([f'LM {i+1}' for i in range(10)])
+    ax.set_title('Polar Plot of Licks per State/Lap')
+    ax.set_theta_zero_location('N')
+    ax.set_theta_direction(-1)
+    ax.legend(loc='upper right')
     plt.show()
 
 def calc_speed_per_lap(sess_dataframe, ses_settings):
