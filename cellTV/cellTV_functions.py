@@ -3,17 +3,19 @@ import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import h5py
+from skimage.segmentation import find_boundaries
 from scipy.signal import find_peaks
-from barcode import barcode_util
-from barcode import extract_barcodes
+# from barcode import barcode_util
+# from barcode import extract_barcodes
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
 import pickle
-import parse_session_functions
 from suite2p.extraction import dcnv
 import scipy.stats as stats
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.patches as patches
 import scipy.cluster.hierarchy as sch
 import pandas as pd
+import parse_bonsai_functions
 #suppress the warnings
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -37,7 +39,106 @@ def get_session_folders(base_path,mouse,stage):
 
     return imaging_path, config_path, frame_ix, date1, date2
 
+def get_funcimg_path_cohort3(mouse, session_id, root):
+
+    mouse_id = f"sub-{mouse}"
+    mouse_path = os.path.join(root, mouse_id)
+    session_folder = [p for p in os.listdir(mouse_path)
+        if session_id in p][0]
+
+    imaging_path = os.path.join(mouse_path,session_folder,'funcimg/suite2p/plane0')
+
+    return imaging_path
+
 def load_img_data(imaging_path):
+    """
+    Load the imaging data (no spikes yet) from the specified path.
+    """
+    f = np.load(os.path.join(imaging_path, 'F.npy'))
+    fneu = np.load(os.path.join(imaging_path, 'Fneu.npy'))
+    iscell = np.load(os.path.join(imaging_path, 'iscell.npy'))
+    ops = np.load(os.path.join(imaging_path, 'ops.npy'), allow_pickle=True).item()
+    frame_rate = ops['fs']
+
+    funcimg_data = {
+        'f': f,
+        'fneu': fneu,
+        'iscell': iscell,
+        'ops': ops,
+        'frame_rate': frame_rate
+    }
+
+    # Check for red channel data 
+    f2_path = os.path.join(imaging_path, 'F_chan2.npy')
+    if os.path.exists(f2_path):
+        f2 = np.load(f2_path)
+        funcimg_data['f2'] = f2
+
+    fneu2_path = os.path.join(imaging_path, 'Fneu_chan2.npy')
+    if os.path.exists(fneu2_path):
+        fneu2 = np.load(fneu2_path)
+        funcimg_data['fneu2'] = fneu2
+
+    redcell_path = os.path.join(imaging_path, 'redcell.npy') # TODO what is this
+    if os.path.exists(redcell_path):
+        redcell = np.load(redcell_path)
+        funcimg_data['redcell'] = redcell
+
+    return funcimg_data
+
+def load_valid_frames(mouse, session_id, root):
+
+    mouse_id = f"sub-{mouse}"
+    mouse_path = os.path.join(root, mouse_id)
+    session_folder = [p for p in os.listdir(mouse_path)
+        if session_id in p][0]
+    
+    frame_ix = np.load(os.path.join(mouse_path,session_folder, 'valid_frames.npz'))
+
+    return frame_ix
+
+def load_dF_data(mouse, session_id, funcimg_root, behav_root, save_path, reload=False):
+
+    # Load funcimg data 
+    imaging_path = get_funcimg_path_cohort3(mouse, session_id, funcimg_root)
+    funcimg_data = load_img_data(imaging_path)
+
+    # Load valid frames
+    frame_ix = load_valid_frames(mouse, session_id, behav_root)
+
+    # Load or calculate dF
+    dF_path = os.path.join(save_path, 'DF_F0.npy')
+    if os.path.exists(dF_path) and not reload:
+        print('dF file found. Loading...')
+        dF = np.load(dF_path)
+    else:
+        dF = get_dff(funcimg_data, frame_ix, chan=1)
+        np.save(dF_path, dF)
+
+    # Check for red channel data
+    if 'f2' in funcimg_data:
+        dF2_path = os.path.join(save_path, 'DF_F02.npy')
+        if os.path.exists(dF2_path) and not reload:
+            print('dF2 file found. Loading...')
+            dFred = np.load(dF2_path)
+        else:
+            dFred = get_dff(funcimg_data, frame_ix, chan=2)
+            np.save(dF2_path, dFred)
+
+        dF_GR_path = os.path.join(save_path, 'DG_R.npy')
+        if os.path.exists(dF_GR_path) and not reload:
+            print('dF_GR file found. Loading...')
+            dF_GR = np.load(dF_GR_path)
+        else:
+            dF_GR = get_dff_GR(funcimg_data, frame_ix)
+            np.save(dF_GR_path, dF_GR)
+    else:
+        dFred = None
+        dF_GR = None
+        
+    return funcimg_data, dF, dFred, dF_GR
+
+def load_img_data_cohort2(imaging_path):
     """
     Load the imaging data (no spikes yet) from the specified path.
     """
@@ -50,7 +151,74 @@ def load_img_data(imaging_path):
 
     return f, fneu, iscell, ops, seg, frame_rate
 
-def get_dff(f,fneu, frame_ix, ops):
+def get_dff(funcimg_data, frame_ix, chan=1):
+    """
+    Calculate the dF/F for the imaging data (suite2p default method).
+    """
+    from suite2p.extraction import dcnv
+
+    ops = funcimg_data['ops']
+    if chan == 1:
+        print('Calculating dF using green channel')
+        f = funcimg_data['f']
+        fneu = funcimg_data['fneu']
+    elif chan == 2:
+        print('Calculating dF using red channel')
+        f = funcimg_data['f2']
+        fneu = funcimg_data['fneu2']
+        
+    all_f = f[:, frame_ix['valid_frames']]
+    all_fneu = fneu[:, frame_ix['valid_frames']]
+    all_cells_f_corr = all_f - all_fneu*0.7
+    dF = dcnv.preprocess(all_cells_f_corr, ops['baseline'], ops['win_baseline'], 
+                                    ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
+    
+    print(f"Calculated dF/F with the following parameters: "
+        f"baseline={ops['baseline']}, win_baseline={ops['win_baseline']}, "
+        f"sig_baseline={ops['sig_baseline']}, fs={ops['fs']},perctile_baseline={ops['prctile_baseline']}")
+
+    return dF
+
+def get_dff_GR(funcimg_data, frame_ix):
+    from suite2p.extraction import dcnv
+    from scipy.signal import medfilt
+
+    ops = funcimg_data['ops']
+    f = funcimg_data['f']
+    f2 = funcimg_data['f2']
+    fneu = funcimg_data['fneu']
+    fneu2 = funcimg_data['fneu2']
+
+    all_f = f[:, frame_ix['valid_frames']]
+    all_fneu = fneu[:, frame_ix['valid_frames']]
+    all_f2 = f2[:, frame_ix['valid_frames']]
+    all_fneu2 = fneu2[:, frame_ix['valid_frames']]
+
+    # Neuropil correction
+    f_corr = all_f - all_fneu * 0.7
+    f_corr2 = all_f2 - all_fneu2 * 0.7
+
+    # Median filter on each trace 
+    w = int(ops['fs'] * 0.25) | 1  # force odd
+    print(f'Smoothing both green and red channel data with a median filter of kernel size {w}')
+    f_corr = medfilt(f_corr, kernel_size=(1, w))
+    f_corr2 = medfilt(f_corr2, kernel_size=(1, w))
+
+    # ensure denominator is not too low, otehrwise the G/R ratio will blow up
+    f_corr2_floor = np.percentile(f_corr2, 5, axis=1, keepdims=True) 
+    f_corr2_floor = np.maximum(f_corr2_floor, 1e-3)
+
+    # Compute G/R ratio
+    f_ratio = f_corr / np.maximum(f_corr2, f_corr2_floor)
+    # f_ratio = f_corr / f_corr2
+
+    # Compute dG/R
+    dF_GR = dcnv.preprocess(f_ratio, ops['baseline'], ops['win_baseline'], 
+                                    ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
+    
+    return dF_GR
+
+def get_dff_cohort2(f,fneu, frame_ix, ops):
     """
     Calculate the dF/F for the imaging data (suite2p default method).
     """
@@ -67,7 +235,7 @@ def get_dff(f,fneu, frame_ix, ops):
 
 ## Displaying cell properties
 
-def show_fov(ops, seg):
+def show_fov_cohort2(ops, seg):
     """
     Show the field of view of the imaging data.
     """
@@ -84,7 +252,58 @@ def show_fov(ops, seg):
     plt.tight_layout()
     plt.show()
 
-def show_cell_fov(cell,ops,seg):
+def concat_masks(image_mask: pd.Series):
+    masks = np.zeros(image_mask.loc[0].shape)
+    for n in range(len(image_mask)):
+        tmp = image_mask.loc[n]
+
+        mask_bool = find_boundaries((tmp > 0).astype(int), mode='inner').astype(bool)
+        write_here = mask_bool & (masks == 0)
+        masks[write_here] = n + 1
+    return masks
+
+def show_cell_fov(cell:int, meanImg: np.array, mask: np.array):
+    """
+    Show the cell's field of view, as a zoom in and the full field of view.
+    """
+    mask_br = np.where(
+        mask == cell, 1.0,          # exact match
+        np.where(mask != 0, -1, 0) # nonzero but not match → 0.5, else 0
+    )
+    mask_bool = (mask_br != 0).astype(float)
+
+    #create a crop box around the cell
+    x, y = np.where(mask == cell)
+    x_min = max(0, x.min() - 10)
+    x_max = min(mask.shape[0], x.max() + 10)
+    y_min = max(0, y.min() - 10)
+    y_max = min(mask.shape[1], y.max() + 10)
+    crop_mask = meanImg[x_min:x_max, y_min:y_max]
+
+    fig, ax = plt.subplots(1,2, figsize=(10,5))
+    ax[0].imshow(crop_mask, cmap='gray')
+    ax[0].imshow(mask_br[x_min:x_max, y_min:y_max], alpha=mask_bool[x_min:x_max, y_min:y_max], cmap='bwr')
+    ax[0].set_title(f'Cell {cell} zoomed in')
+
+    ax[1].imshow(meanImg, cmap='gray')
+    ax[1].imshow(mask_br,alpha=mask_bool,cmap='bwr')
+    ax[1].set_title(f'Cell {cell} in full field of view')
+    plt.tight_layout()
+    plt.show()
+
+def show_fov(meanImg: np.array, mask: np.array):
+    """
+    Show the cell's field of view, as a zoom in and the full field of view.
+    """
+    mask_bool = (mask != 0).astype(float)
+
+    plt.figure(figsize=(5,5))
+    plt.imshow(meanImg, cmap='gray')
+    plt.imshow(mask,alpha=mask_bool,cmap='bwr')
+    plt.tight_layout()
+    plt.show()
+
+def show_cell_fov_cohort2(cell,ops,seg):
     """
     Show the cell's field of view, as a zoom in and the full field of view.
     """
@@ -131,12 +350,12 @@ def extract_cell_trace(dF,cell,plot=False,session=None,frame_range=None):
                 for r in session['rewards']:
                     if frame_range[0] <= r < frame_range[1]:
                         plt.axvline(r - frame_range[0], color='black', linestyle='--', label='Reward' if r == session['rewards'][0] else "")
-                for m1 in session['modd1']:
-                    if frame_range[0] <= m1 < frame_range[1]:
-                        plt.axvline(m1 - frame_range[0], color='orange', linestyle='--', label='Modulation 1', alpha=0.5 if m1 == session['modd1'][0] else 0.5)
-                for m2 in session['modd2']:
-                    if frame_range[0] <= m2 < frame_range[1]:
-                        plt.axvline(m2 - frame_range[0], color='purple', linestyle='--', label='Modulation 2', alpha=0.5 if m2 == session['modd2'][0] else 0.5)
+                # for m1 in session['modd1']:
+                #     if frame_range[0] <= m1 < frame_range[1]:
+                #         plt.axvline(m1 - frame_range[0], color='orange', linestyle='--', label='Modulation 1', alpha=0.5 if m1 == session['modd1'][0] else 0.5)
+                # for m2 in session['modd2']:
+                #     if frame_range[0] <= m2 < frame_range[1]:
+                #         plt.axvline(m2 - frame_range[0], color='purple', linestyle='--', label='Modulation 2', alpha=0.5 if m2 == session['modd2'][0] else 0.5)
                 plt.plot(session['position'][frame_range[0]:frame_range[1]], label='Position X', color='red', alpha=0.5)
                 #plot landmarks as dots on the position line
                 for l in session['landmarks']:
@@ -169,15 +388,23 @@ def extract_cell_trace(dF,cell,plot=False,session=None,frame_range=None):
 
 ## Basic tuning properties 
 
-def extract_lick_rate(dF, cell, session):
+def extract_lick_rate_cohort2(dF, cell, session):
     #extract licks to calculate lick rate
     licks = session['licks']
+    licks = licks.astype(int)
     #get lick rate around landmarks
     lick_rate = np.zeros(dF.shape[1])
     for lick in licks:
         if lick < dF.shape[1]:
             lick_rate[lick] += 1
     lick_rate = gaussian_filter1d(lick_rate, sigma=1.5)
+
+    return lick_rate
+
+def extract_lick_rate(dF, cell, session):
+    #extract licks to calculate lick rate
+    licks = session['licks']
+    lick_rate = gaussian_filter1d(licks, sigma=1.5)
 
     return lick_rate
 
@@ -248,7 +475,7 @@ def extract_reward_tuning(dF, cell, session, frame_rate=45 ,window_size = [-1,5]
         ax[1].set_title(f'Cell {cell} - All trials {cell_rewards.shape[0]}')
     return cell_rewards
 
-def extract_position_tuning(dF, cell, stage, session, frame_rate=45, bins=200, plot=False):
+def extract_position_tuning_cohort2(dF, cell, stage, session, frame_rate=45, bins=200, plot=False):
     """
     Extract the position tuning for a specific cell. 
     The plotting option shows the firing rate as a function of position (average and split into states if applicable).
@@ -315,6 +542,115 @@ def extract_position_tuning(dF, cell, stage, session, frame_rate=45, bins=200, p
         y_min, y_max = plt.ylim()
         for i in range(len(lm)):
                 ax.add_patch(patches.Rectangle((lm[i][0],0),lm[i][1]-lm[i][0],y_max,color='grey',alpha=0.3))
+        ax2 = ax.twinx()
+        ax2.plot(bin_edges[:-1], av_lr_per_bin, label='Lick Rate', color='orange')
+        ax2.fill_between(bin_edges[:-1], av_lr_per_bin-sem_lr_per_bin, av_lr_per_bin+sem_lr_per_bin, color='orange', alpha=0.2)
+        plt.title(f'Cell {cell} - Position Aligned')
+        plt.xlabel('Position (cm)')
+        plt.subplot(1, 3, 3)
+        ax = plt.gca()
+        if session['laps_needed'] > 1:
+            plt.plot(bin_edges[:-1], state1_av, label='State 1', color='blue')
+            plt.fill_between(bin_edges[:-1], state1_av-state1_sem, state1_av+state1_sem, color='blue', alpha=0.2)
+            plt.plot(bin_edges[:-1], state2_av, label='State 2', color='orange')
+            plt.fill_between(bin_edges[:-1], state2_av-state2_sem, state2_av+state2_sem, color='orange', alpha=0.2)
+            y_min, y_max = plt.ylim()
+            if session['laps_needed'] == 3:
+                plt.plot(bin_edges[:-1], state3_av, label='State 3', color='green')
+                plt.fill_between(bin_edges[:-1], state3_av-state3_sem, state3_av+state3_sem, color='green', alpha=0.2)
+                y_min, y_max = plt.ylim()
+                ax.add_patch(patches.Rectangle((lm[goal_a][0],0),lm[goal_a][1]-lm[goal_a][0],y_max,color='blue',alpha=0.3))
+                ax.add_patch(patches.Rectangle((lm[goal_b][0],0),lm[goal_b][1]-lm[goal_b][0],y_max,color='blue',alpha=0.3))
+                ax.add_patch(patches.Rectangle((lm[goal_c][0],0),lm[goal_c][1]-lm[goal_c][0],y_max,color='orange',alpha=0.3))
+                ax.add_patch(patches.Rectangle((lm[goal_d][0],0),lm[goal_d][1]-lm[goal_d][0],y_max,color='green',alpha=0.3))
+            else:
+                ax.add_patch(patches.Rectangle((lm[goal_a][0],0),lm[goal_a][1]-lm[goal_a][0],y_max,color='blue',alpha=0.3))
+                ax.add_patch(patches.Rectangle((lm[goal_b][0],0),lm[goal_b][1]-lm[goal_b][0],y_max,color='blue',alpha=0.3))
+                ax.add_patch(patches.Rectangle((lm[goal_c][0],0),lm[goal_c][1]-lm[goal_c][0],y_max,color='orange',alpha=0.3))
+                ax.add_patch(patches.Rectangle((lm[goal_d][0],0),lm[goal_d][1]-lm[goal_d][0],y_max,color='orange',alpha=0.3))
+        else:
+            plt.plot(bin_edges[:-1], av_fr_per_bin, label='Average', color='blue')
+            plt.fill_between(bin_edges[:-1], av_fr_per_bin-sem_fr_per_bin, av_fr_per_bin+sem_fr_per_bin, color='blue', alpha=0.2)
+            y_min, y_max = plt.ylim()
+            ax.add_patch(patches.Rectangle((lm[goal_a][0],0),lm[goal_a][1]-lm[goal_a][0],y_max,color='blue',alpha=0.3))
+            ax.add_patch(patches.Rectangle((lm[goal_b][0],0),lm[goal_b][1]-lm[goal_b][0],y_max,color='blue',alpha=0.3))
+            ax.add_patch(patches.Rectangle((lm[goal_c][0],0),lm[goal_c][1]-lm[goal_c][0],y_max,color='blue',alpha=0.3))
+            ax.add_patch(patches.Rectangle((lm[goal_d][0],0),lm[goal_d][1]-lm[goal_d][0],y_max,color='blue',alpha=0.3))
+        for i in range(len(lm)):
+                ax.add_patch(patches.Rectangle((lm[i][0],0),lm[i][1]-lm[i][0],y_max,color='grey',alpha=0.3))
+        plt.title(f'Cell {cell} - Position Aligned by State')
+        plt.xlabel('Position (cm)')
+    return fr_per_bin, bin_edges
+
+def extract_position_tuning(dF, cell, session, bins=200, plot=False):
+    """
+    Extract the position tuning for a specific cell. 
+    The plotting option shows the firing rate as a function of position (average and split into states if applicable).
+    """
+    assert session['num_laps'] > 1, 'This function has not been adapted to continuous corridors yet.'
+    
+    dF_cell = extract_cell_trace(dF, cell, plot=False, session=session)
+    lick_rate = extract_lick_rate(dF, cell, session)
+
+    lm = np.copy(session['landmarks'])
+    lm = lm[:10]
+    goal_a = session['goal_idx'][0]
+    goal_b = session['goal_idx'][1]
+    goal_c = session['goal_idx'][2]
+    goal_d = session['goal_idx'][3]
+
+
+    bins_pos = bins
+    bin_edges = np.linspace(0, session['tunnel_length'], bins_pos+1)
+
+    fr_per_bin = np.zeros((session['num_laps'], bins_pos))
+    lr_per_bin = np.zeros((session['num_laps'], bins_pos))
+
+    for i in range(session['num_laps']):
+        lap_idx = np.where(session['lap_idx'] == i)[0]
+        fr_per_lap = dF_cell[lap_idx]
+        lr_per_lap = lick_rate[lap_idx]
+        pos_discount = i*session['tunnel_length']
+        bin_ix = np.digitize(session['position'][lap_idx]-pos_discount, bin_edges)
+        for j in range(bins_pos):
+            fr_per_bin[i,j] = np.mean(fr_per_lap[bin_ix == j])
+            lr_per_bin[i,j] = np.mean(lr_per_lap[bin_ix == j])
+
+
+    av_fr_per_bin = np.nanmean(fr_per_bin, axis=0)
+    std_fr_per_bin = np.nanstd(fr_per_bin, axis=0)
+    sem_fr_per_bin = std_fr_per_bin/np.sqrt(session['num_laps'])
+    av_lr_per_bin = np.nanmean(lr_per_bin, axis=0)
+    std_lr_per_bin = np.nanstd(lr_per_bin, axis=0)
+    sem_lr_per_bin = std_lr_per_bin/np.sqrt(session['num_laps'])
+
+    if session['laps_needed'] > 1:
+        state1_av = np.nanmean(fr_per_bin[session['state_id'] == 0], axis=0)
+        state1_std = np.nanstd(fr_per_bin[session['state_id'] == 0], axis=0)
+        state1_sem = state1_std/np.sqrt(np.sum(session['state_id'] == 0))
+        state2_av = np.nanmean(fr_per_bin[session['state_id'] == 1], axis=0)
+        state2_std = np.nanstd(fr_per_bin[session['state_id'] == 1], axis=0)
+        state2_sem = state2_std/np.sqrt(np.sum(session['state_id'] == 1))
+        if session['laps_needed'] == 3:
+            state3_av = np.nanmean(fr_per_bin[session['state_id'] == 2], axis=0)
+            state3_std = np.nanstd(fr_per_bin[session['state_id'] == 2], axis=0)
+            state3_sem = state3_std/np.sqrt(np.sum(session['state_id'] == 2))
+    
+    if plot:
+        plt.figure(figsize=(15, 5))
+        plt.subplot(1, 3, 1)
+        plt.imshow(fr_per_bin, cmap='viridis', aspect='auto', interpolation='none')
+        plt.title(f'Cell {cell} - All Trials Aligned by Position')
+        plt.xlabel('Position (cm)')
+        plt.ylabel('Lap Number')
+        plt.subplot(1, 3, 2)
+        ax = plt.gca()
+        plt.plot(bin_edges[:-1], av_fr_per_bin, label='Average', color='blue')
+        plt.fill_between(bin_edges[:-1], av_fr_per_bin-sem_fr_per_bin, av_fr_per_bin+sem_fr_per_bin, color='blue', alpha=0.2)
+        #get y limits
+        y_min, y_max = plt.ylim()
+        for i in range(len(lm)):
+            ax.add_patch(patches.Rectangle((lm[i][0],0),lm[i][1]-lm[i][0],y_max,color='grey',alpha=0.3))
         ax2 = ax.twinx()
         ax2.plot(bin_edges[:-1], av_lr_per_bin, label='Lick Rate', color='orange')
         ax2.fill_between(bin_edges[:-1], av_lr_per_bin-sem_lr_per_bin, av_lr_per_bin+sem_lr_per_bin, color='orange', alpha=0.2)
@@ -866,11 +1202,13 @@ def calc_goal_tuningix(dF, cell, session, condition='goal',event_frames=None,n_g
         state_min[i] = np.min(av_binned[bins*i:bins*(i+1)])
         state_mean[i] = np.mean(av_binned[bins*i:bins*(i+1)])
         pref_phase[i] = np.where(av_binned[bins*i:bins*(i+1)] == state_max[i])[0][0] 
+    print(state_max)
     tuning_score = (state_max - state_min)/state_mean
     real_score = np.mean(tuning_score)
-    phase_preference = np.mean(pref_phase)
     state_preference = np.where(state_max == np.max(state_max))[0][0]  # Find the state with the maximum firing rate
-    print(f'Real score for cell {cell} is {real_score:.2f}, phase preference is {phase_preference:.2f}, state preference is {state_preference:.2f}')
+    phase_preference = pref_phase[state_preference.astype(int)]
+    state_score = (np.max(state_max)-np.min(state_max))/np.mean(state_max)
+    print(f'Real score for cell {cell} is {real_score:.2f}, phase preference is {phase_preference:.2f}, state preference is {state_preference:.2f}, state score is {state_score:.2f}')
 
     if shuffle:
         nreps = 100
@@ -910,7 +1248,7 @@ def calc_goal_tuningix(dF, cell, session, condition='goal',event_frames=None,n_g
         plt.legend()
         plt.show()
 
-    return real_score,shuffled_scores,phase_preference,state_preference
+    return real_score,shuffled_scores,phase_preference,state_preference,state_score
 
 ## Correlations with other cells
 
@@ -935,6 +1273,49 @@ def extract_cell_correlation(dF, cell, ops, seg, session, plot=False):
         bool = bool.astype(float)
         corr_mask = mask.copy()
         meanImg = ops['meanImg']
+
+        for c in range(dF.shape[0]):
+            #create a mask for the cell
+            corr_mask[np.where(mask == c+1)] = correlations[c]
+
+        corr_mask[np.where(mask == cell+1)] = np.nan  # Highlight the target cell in the mask
+
+        max_abs_corr = np.nanmax(np.abs(corr_mask))
+        plot_corrs = correlations.copy()
+        plot_corrs[cell] = np.nan  # Exclude the target cell from the histogram
+
+        plt.figure(figsize=(20, 10))
+        plt.subplot(1, 2, 1)
+        plt.imshow(meanImg, cmap='gray')
+        plt.imshow(corr_mask, alpha=bool, cmap='coolwarm', vmin=-max_abs_corr, vmax=max_abs_corr)
+        cbar = plt.colorbar()
+        plt.title(f'Correlation of Cell {cell} with all other cells')
+        plt.scatter(np.mean(np.where(mask == cell+1)[1]), np.mean(np.where(mask == cell+1)[0]), color='red', s=100, label=f'Cell {cell}')
+        plt.subplot(1, 2, 2)
+        plt.hist(plot_corrs, bins=50, color='blue', alpha=0.7)
+        plt.axvline(np.nanmean(plot_corrs), color='red', linestyle='dashed', linewidth=1, label='Mean Correlation')
+        plt.xlabel('Correlation Coefficient')
+        plt.ylabel('Frequency')
+
+def extract_cell_correlation(dF, cell, meanImg, mask, session, plot=False):
+    """
+    Extract the correlation of the cell's activity all other cells in that recording.
+    """
+    dF_cell = extract_cell_trace(dF, cell, plot=False, session=None)
+    correlations = np.zeros(dF.shape[0])
+    for i in range(dF.shape[0]):
+        correlations[i] = np.corrcoef(dF_cell, dF[i])[0, 1]
+    
+    highest_five_cells = np.argsort(correlations)[-5:]
+    lowest_five_cells = np.argsort(correlations)[:5]
+    print(f"Top 5 correlated cells: {highest_five_cells}, correlations: {correlations[highest_five_cells]}")
+    print(f"Bottom 5 correlated cells: {lowest_five_cells}, correlations: {correlations[lowest_five_cells]}")
+
+    if plot:
+        mask = mask.astype(float)
+        bool = mask > 0
+        bool = bool.astype(float)
+        corr_mask = mask.copy()
 
         for c in range(dF.shape[0]):
             #create a mask for the cell
