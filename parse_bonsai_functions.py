@@ -138,8 +138,14 @@ def load_data(base_path):
     buffer_data = aeon.load(Path(base_path), buffer_reader)
 
     if os.path.exists(Path(base_path) / "behav/current-landmark/"):
+        
         lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited"])
+        # lm_reader = Csv("behav/current-landmark/*", ["Seconds","Size","Texture","Odour","SequencePosition","Position","Visited","Unknown"])
         lm_data = aeon.load(Path(base_path), lm_reader)
+        #if datatype of 'Odour' is not string, reload the file
+        if lm_data['Odour'].dtype != object:
+            lm_reader = Csv("behav/current-landmark/*", ["Seconds","Size","Texture","Odour","SequencePosition","Position","Visited","Count"])
+            lm_data = aeon.load(Path(base_path), lm_reader)
         lm_data = lm_data[lm_data['Visited'] == False]
         sess_lm_data = lm_data.drop_duplicates(subset=['Position'], keep='first')
 
