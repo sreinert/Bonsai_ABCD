@@ -185,8 +185,24 @@ def align_analog_to_events(analog_data, sess_dataframe, plot=False):
 
 def load_session_npz(base_path):
     '''Load behaviour data for valid funcimg frames'''
-    data = np.load(base_path + '/behaviour_data.npz')
-    return data
+    data_path = base_path + '/behaviour_data.npz'
+    data = np.load(data_path)
+
+    if 'pd2' in data.files:
+        return data
+
+    if 'p2' not in data.files:
+        print(f'No p2 key in {data_path}')
+        return data
+    
+    fixed = dict(data)
+    fixed['pd2'] = fixed.pop('p2')
+
+    np.savez_compressed(data_path, **fixed)
+
+    print(f'fixed pd2 naming in {data_path}') 
+
+    return fixed 
 
 def load_dF(base_path):
     '''Load dF and valid frames and find valid neurons'''
@@ -1579,16 +1595,47 @@ def calculate_frame_lick_rate(session):
     return session
 
 #%% ##### Functions that work with NIDAQ data only (after funcimg alignment) #####
-def get_landmark_positions(session, sess_dataframe, ses_settings):
+def get_landmark_positions(session, sess_dataframe, ses_settings, data='pd'):
     '''Get the start and end of each landmark'''
-    result_df = estimate_release_events(sess_dataframe, ses_settings)
+    
     lm_size = ses_settings['trial']['landmarks'][0][0]['size']
 
-    release_positions = result_df['Position'].values
-    landmarks = np.zeros((len(release_positions), 2))
-    for lm, pos in enumerate(release_positions):
-        landmarks[lm,0] = pos
-        landmarks[lm,1] = pos + lm_size
+    if data == 'odour':
+        result_df = estimate_release_events(sess_dataframe, ses_settings)
+        release_positions = result_df['Position'].values
+        landmarks = np.zeros((len(release_positions), 2))
+        for lm, pos in enumerate(release_positions):
+            landmarks[lm,0] = pos
+            landmarks[lm,1] = pos + lm_size
+
+    elif data == 'pd':
+        lm_entry_idx1, lm_exit_idx1 = estimate_pd_entry_exit(ses_settings, session, pd='pd1')
+        lm_entry_idx2, lm_exit_idx2 = estimate_pd_entry_exit(ses_settings, session, pd='pd2')
+        
+        assert len(lm_entry_idx1) == len(lm_entry_idx2), 'The two photodiodes should have deteced the same number of events.'
+
+        # Find the mean position if the indices between the two PDs differ
+        lm_entry = []
+        for i, (idx1, idx2) in enumerate(zip(lm_entry_idx1, lm_entry_idx2)):
+            if idx1 != idx2:
+                lm_entry.append(np.mean([session['position'][idx1], session['position'][idx2]]))
+            else:
+                lm_entry.append(session['position'][idx1])
+        lm_entry = np.array(lm_entry)
+
+        lm_exit = []
+        for i, (idx1, idx2) in enumerate(zip(lm_exit_idx1, lm_exit_idx2)):
+            if idx1 != idx2:
+                lm_exit.append(np.mean([session['position'][idx1], session['position'][idx2]]))
+            else:
+                lm_exit.append(session['position'][idx1])
+        lm_exit = np.array(lm_exit)
+
+        # Store landmarks 
+        landmarks = np.zeros((len(lm_entry), 2))
+        for lm, (entry, exit) in enumerate(zip(lm_entry, lm_exit)):
+            landmarks[lm,0] = entry
+            landmarks[lm,1] = exit
 
     session['landmarks'] = landmarks
 
@@ -1608,8 +1655,46 @@ def get_goal_positions(session, sess_dataframe, ses_settings):
 
     return session
 
+def estimate_pd_entry_exit(ses_settings, session, pd='pd1'):
+    '''Estimate lm entry and exit indices using photodiode data'''
+    binary_pd = (session[pd] >= 100).astype(int)
+
+    all_lm_entry_idx = np.where(np.diff(binary_pd) == 1)[0] + 1
+    all_lm_exit_idx = np.where(np.diff(binary_pd) == -1)[0] + 1
+
+    # Filter out repeated lm visits
+    # offset = ses_settings['trial']['offsets'][0]
+    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    # min_expected_diff = offset + lm_size - 1
+    # pos_diff = np.where(np.diff(session['position'][all_lm_entry_idx]) < min_expected_diff)[0] 
+    pos_diff = np.where(session['position'][all_lm_exit_idx] - session['position'][all_lm_entry_idx] < lm_size-1)[0]
+
+    # Filter out re-entries - use earliest entry
+    removed = []
+    for i, idx in enumerate(all_lm_entry_idx):
+        if i == 0: # first lm might be weird
+            continue
+        if i in pos_diff:
+            removed.append(i)
+    lm_entry_idx = np.delete(all_lm_entry_idx, removed)
+
+    # Filter out re-exits - use latest exit
+    removed = []
+    for i, idx in enumerate(all_lm_exit_idx):
+        if i == 1: # first lm might be weird
+            if 0 in pos_diff:
+                continue
+        if i == 0: 
+            if 1 not in pos_diff:
+                continue
+        if i in pos_diff:
+            removed.append(i)
+    lm_exit_idx = np.delete(all_lm_exit_idx, removed)
+
+    return lm_entry_idx, lm_exit_idx
+
 def get_lm_entry_exit(session):
-    '''Find data idx closest to landmark entry and exit.'''
+    '''Find data idx closest to landmark entry and exit. The results should be similar to estimate_pd_entry_exit.'''
 
     positions = session['position']
 
@@ -1769,7 +1854,9 @@ def create_session_struct_npz(data, ses_settings, world):
     rewards = np.where(data['rewards'])[0]
     speed = np.nan_to_num(data['speed'], nan=0.0)
     licks = data['licks'] # TODO licks has a different definition for cohort 2
-    
+    pd1 = data['pd1']
+    pd2 = data['pd2']
+
     if world == 'stable':
         goal_ids, lm_ids = parse_stable_goal_ids(ses_settings)
     elif world == 'random':
@@ -1782,6 +1869,8 @@ def create_session_struct_npz(data, ses_settings, world):
     session = {'position': position,
                'licks': licks, 
                'rewards': rewards, 
+               'pd1': pd1,
+               'pd2': pd2,
                'goal_ids': goal_ids, 
                'lm_ids': lm_ids,
                'num_landmarks': num_landmarks,
@@ -1855,7 +1944,7 @@ def analyse_npz_pre7(mouse, session_id, root, stage, world='stable'):
         sess_dataframe = pickle.load(f)
 
     session = create_session_struct_npz(behav_data, ses_settings, world=world)
-    session = get_landmark_positions(session, sess_dataframe, ses_settings)
+    session = get_landmark_positions(session, sess_dataframe, ses_settings, data='pd')
     session = get_goal_positions(session, sess_dataframe, ses_settings)
 
     session['mouse'] = mouse
@@ -1903,7 +1992,7 @@ def analyse_session_pre7_behav(session_path, mouse, stage, world='stable'):
     sess_dataframe = load_data(session_path)
 
     session = create_session_struct(sess_dataframe, ses_settings, world=world)
-    session = get_landmark_positions(session, sess_dataframe, ses_settings)
+    session = get_landmark_positions(session, sess_dataframe, ses_settings, data='pd')
     session = get_goal_positions(session, sess_dataframe, ses_settings)
 
     session['mouse'] = mouse

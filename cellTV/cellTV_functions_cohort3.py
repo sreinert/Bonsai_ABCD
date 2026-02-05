@@ -150,10 +150,11 @@ def get_dff_GR(funcimg_data, frame_ix):
     # Median filter on each trace 
     w = int(ops['fs'] * 0.25) | 1  # force odd
     print(f'Smoothing both green and red channel data with a median filter of kernel size {w}')
+    # print(f'Smoothing only red channel data with a median filter of kernel size {w}')
     f_corr = medfilt(f_corr, kernel_size=(1, w))
     f_corr2 = medfilt(f_corr2, kernel_size=(1, w))
 
-    # ensure denominator is not too low, otehrwise the G/R ratio will blow up
+    # ensure denominator is not too low, otherwise the G/R ratio will blow up
     f_corr2_floor = np.percentile(f_corr2, 5, axis=1, keepdims=True) 
     f_corr2_floor = np.maximum(f_corr2_floor, 1e-3)
 
@@ -164,7 +165,7 @@ def get_dff_GR(funcimg_data, frame_ix):
     # Compute dG/R
     dF_GR = dcnv.preprocess(f_ratio, ops['baseline'], ops['win_baseline'], 
                                     ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
-    
+
     return dF_GR
 
 def get_funcimg_path(mouse, session_id, root):
