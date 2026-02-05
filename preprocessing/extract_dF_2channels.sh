@@ -20,12 +20,11 @@ source activate suite2p
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 # Path to animal_sessions.txt
-PAIR_FILE="${SCRIPT_DIR}/../analysis/sequence_compression/animal_sessions.txt"
+PAIR_FILE="$(realpath "${SCRIPT_DIR}/../analysis/sequence_compression/animals_sessions.txt")"
 
-PAIR=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$PAIR_FILE")
-animal=$(echo $PAIR | awk '{print $1}')
-session=$(echo $PAIR | awk '{print $2}')
-
-echo "Running animal=$animal session=$session"
-
-python extract_dF_2channels.py --animal "$animal" --session "$session"
+while read PAIR; do
+    animal=$(echo $PAIR | awk '{print $1}')
+    session=$(echo $PAIR | awk '{print $2}')
+    echo "Running animal=$animal session=$session"
+    python extract_dF_2channels.py --animal "$animal" --session "$session"
+done < "/nfs/nhome/live/athinaa/desktop/Bonsai_ABCD/analysis/sequence_compression/animals_sessions.txt"

@@ -36,4 +36,4 @@ for folder in mouse_path.iterdir():
             os.makedirs(save_path)
 
 # Load dF from green and red channels 
-funcimg_data, _, dFred, dF_GR = celltv.load_dF_data(animal, session, funcimg_root, behav_root, save_path, reload=False)
+funcimg_data, _, dFred, dF_GR = celltv.load_dF_data(animal, session, funcimg_root, behav_root, save_path, reload=True)

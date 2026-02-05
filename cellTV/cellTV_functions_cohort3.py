@@ -149,9 +149,9 @@ def get_dff_GR(funcimg_data, frame_ix):
 
     # Median filter on each trace 
     w = int(ops['fs'] * 0.25) | 1  # force odd
-    print(f'Smoothing both green and red channel data with a median filter of kernel size {w}')
-    # print(f'Smoothing only red channel data with a median filter of kernel size {w}')
-    f_corr = medfilt(f_corr, kernel_size=(1, w))
+    # print(f'Smoothing both green and red channel data with a median filter of kernel size {w}')
+    print(f'Smoothing only red channel data with a median filter of kernel size {w}')
+    # f_corr = medfilt(f_corr, kernel_size=(1, w))
     f_corr2 = medfilt(f_corr2, kernel_size=(1, w))
 
     # ensure denominator is not too low, otherwise the G/R ratio will blow up
