@@ -16,15 +16,30 @@
 module load mamba
 source activate suite2p 
 
-# Directory where THIS script lives
-SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+PAIRS=(
+    "004 full020 full030"
+    "006 full011 full014"
+    "007 full010 full012"
+    "008 full011 full014"
+    "010 full010 full012"
+    "011 full009 full013"
+    "012 full011 full017"
+    "013 full010 full014"
+    "001 2LM015"
+    "002 2LM016"
+    "003 2LM015"
+    "005 2LM009"
+    "009 2LM008"
+    "014 2LM011"
+)
 
-# Path to animal_sessions.txt
-PAIR_FILE="$(realpath "${SCRIPT_DIR}/../analysis/sequence_compression/animals_sessions.txt")"
+for PAIR in "${PAIRS[@]}"; do
+    animal=$(echo "$PAIR" | awk '{print $1}')
+    session=$(echo "$PAIR" | awk '{print $2}')
 
 while read PAIR; do
     animal=$(echo $PAIR | awk '{print $1}')
     session=$(echo $PAIR | awk '{print $2}')
     echo "Running animal=$animal session=$session"
     python extract_dF_2channels.py --animal "$animal" --session "$session"
-done < "/nfs/nhome/live/athinaa/desktop/Bonsai_ABCD/analysis/sequence_compression/animals_sessions.txt"
+done 
