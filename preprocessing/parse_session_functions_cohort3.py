@@ -1612,34 +1612,56 @@ def get_landmark_positions(session, sess_dataframe, ses_settings, data='pd'):
         lm_entry_idx1, lm_exit_idx1 = estimate_pd_entry_exit(ses_settings, session, pd='pd1')
         lm_entry_idx2, lm_exit_idx2 = estimate_pd_entry_exit(ses_settings, session, pd='pd2')
         
-        assert len(lm_entry_idx1) == len(lm_entry_idx2), 'The two photodiodes should have deteced the same number of events.'
+        entry_pos1 = session['position'][lm_entry_idx1]
+        entry_pos2 = session['position'][lm_entry_idx2]
+        exit_pos1  = session['position'][lm_exit_idx1]
+        exit_pos2  = session['position'][lm_exit_idx2]
 
-        # Find the mean position if the indices between the two PDs differ
-        lm_entry = []
-        for i, (idx1, idx2) in enumerate(zip(lm_entry_idx1, lm_entry_idx2)):
-            if idx1 != idx2:
-                lm_entry.append(np.mean([session['position'][idx1], session['position'][idx2]]))
-            else:
-                lm_entry.append(session['position'][idx1])
-        lm_entry = np.array(lm_entry)
+        lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+        tol = lm_size * 0.5
 
-        lm_exit = []
-        for i, (idx1, idx2) in enumerate(zip(lm_exit_idx1, lm_exit_idx2)):
-            if idx1 != idx2:
-                lm_exit.append(np.mean([session['position'][idx1], session['position'][idx2]]))
-            else:
-                lm_exit.append(session['position'][idx1])
-        lm_exit = np.array(lm_exit)
+        # Merge with "keep single" logic
+        lm_entry = merge_positions_keep_single(entry_pos1, entry_pos2, tol)
+        lm_exit  = merge_positions_keep_single(exit_pos1,  exit_pos2,  tol)
 
         # Store landmarks 
-        landmarks = np.zeros((len(lm_entry), 2))
-        for lm, (entry, exit) in enumerate(zip(lm_entry, lm_exit)):
-            landmarks[lm,0] = entry
-            landmarks[lm,1] = exit
+        landmarks = np.column_stack([lm_entry, lm_exit])
 
     session['landmarks'] = landmarks
 
     return session
+
+def merge_positions_keep_single(pos1, pos2, tol):
+    """
+    Merge two sorted position arrays.
+    - If positions are within tol → average
+    - If only one exists → keep it
+    """
+    i = j = 0
+    merged = []
+
+    while i < len(pos1) and j < len(pos2):
+        if abs(pos1[i] - pos2[j]) <= tol:
+            merged.append(np.mean([pos1[i], pos2[j]]))
+            i += 1
+            j += 1
+        elif pos1[i] < pos2[j]:
+            merged.append(pos1[i])
+            i += 1
+        else:
+            merged.append(pos2[j])
+            j += 1
+
+    # append leftovers
+    while i < len(pos1):
+        merged.append(pos1[i])
+        i += 1
+
+    while j < len(pos2):
+        merged.append(pos2[j])
+        j += 1
+
+    return np.array(merged)
 
 def get_goal_positions(session, sess_dataframe, ses_settings):
     '''Get the start and end of each goal landmark'''
@@ -1663,11 +1685,11 @@ def estimate_pd_entry_exit(ses_settings, session, pd='pd1'):
     all_lm_exit_idx = np.where(np.diff(binary_pd) == -1)[0] + 1
 
     # Filter out repeated lm visits
-    # offset = ses_settings['trial']['offsets'][0]
     lm_size = ses_settings['trial']['landmarks'][0][0]['size']
-    # min_expected_diff = offset + lm_size - 1
-    # pos_diff = np.where(np.diff(session['position'][all_lm_entry_idx]) < min_expected_diff)[0] 
-    pos_diff = np.where(session['position'][all_lm_exit_idx] - session['position'][all_lm_entry_idx] < lm_size-1)[0]
+    n = min(len(all_lm_entry_idx), len(all_lm_exit_idx))
+    entry_pos = session['position'][all_lm_entry_idx[:n]]
+    exit_pos  = session['position'][all_lm_exit_idx[:n]]
+    pos_diff = np.where(exit_pos - entry_pos < lm_size - 1)[0]
 
     # Filter out re-entries - use earliest entry
     removed = []

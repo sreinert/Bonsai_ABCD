@@ -2,9 +2,11 @@ import numpy as np
 from pathlib import Path
 import importlib
 import argparse
+import sys
 
 # sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
-SCRIPT_DIR = Path(__file__).resolve().parent
+ROOT_DIR = Path(__file__).resolve().parents[2]
+sys.path.append(str(ROOT_DIR))
 
 import neural_analysis_helpers
 

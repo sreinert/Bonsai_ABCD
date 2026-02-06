@@ -14,7 +14,7 @@
 # source ~/.bashrc
 
 module load mamba
-source activate suite2p 
+source activate bonsai_abcd 
 
 PAIRS=(
   "mouse=004 cohort=3 full020:t5 full030:t6"
