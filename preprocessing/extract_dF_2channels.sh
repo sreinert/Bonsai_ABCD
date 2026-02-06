@@ -34,12 +34,16 @@ PAIRS=(
 )
 
 for PAIR in "${PAIRS[@]}"; do
-    animal=$(echo "$PAIR" | awk '{print $1}')
-    session=$(echo "$PAIR" | awk '{print $2}')
+    # Split line into array
+    read -a FIELDS <<< "$PAIR"
 
-while read PAIR; do
-    animal=$(echo $PAIR | awk '{print $1}')
-    session=$(echo $PAIR | awk '{print $2}')
-    echo "Running animal=$animal session=$session"
-    python extract_dF_2channels.py --animal "$animal" --session "$session"
-done 
+    animal="${FIELDS[0]}"
+
+    # Loop over all sessions for this animal
+    for ((i=1; i<${#FIELDS[@]}; i++)); do
+        session="${FIELDS[$i]}"
+
+        echo "Running animal=$animal session=$session"
+        python extract_dF_2channels.py --animal "$animal" --session "$session"
+    done
+done
