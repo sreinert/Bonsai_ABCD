@@ -2,6 +2,7 @@ from aeon.io.reader import Csv, Reader
 import aeon.io.api as aeon
 from pathlib import Path
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import pandas as pd
 import numpy as np
 import datetime
@@ -44,7 +45,6 @@ def get_available_session_dates(root, mouse_id, start_date=None, end_date=None):
 
     """
     from datetime import datetime, timedelta
-    import re
     
     mouse_path = Path(root) / f"sub-{mouse_id}"
     
@@ -97,14 +97,16 @@ def get_available_session_dates(root, mouse_id, start_date=None, end_date=None):
     print(f"\nTotal sessions found: {len(available_dates)}")
     return available_dates
 
+
+
 def load_settings(base_path):
     settings_path = Path(base_path) / "behav/session-settings/"
-    json_files = list(settings_path.glob("*.json")) or False # deal with first few sessions where config was saved as json
+    json_files = list(settings_path.glob("*.json")) or False
     if json_files:
         settings_file = json_files[0]
     else:
         try:
-            settings_file = list(settings_path.glob("*.csv"))[0] # This still can be loaded with json.load(). wow.
+            settings_file = list(settings_path.glob("*.csv"))[0]
         except:
             raise FileNotFoundError(f"No valid JSON found in {settings_path}")
     with open(settings_file, 'r') as file:
@@ -116,6 +118,15 @@ def load_settings(base_path):
     with open(rig_file, 'r') as file:
         rig_settings = json.load(file)
     rig_settings = rig_settings["value"]
+    
+    # detect n_landmarks
+    if 'n_landmarks' not in ses_settings:
+        if 'trial' in ses_settings and 'landmarks' in ses_settings['trial']:
+            ses_settings['n_landmarks'] = len(ses_settings['trial']['landmarks'])
+        else:
+            # fallback to 10 LMs
+            ses_settings['n_landmarks'] = 10
+    
     return ses_settings, rig_settings
 
 def load_data(base_path):
@@ -255,7 +266,6 @@ def parse_stable_goal_ids(ses_settings):
                     if goal_counter >= num_goals:
                         break
     return goals, lm_ids
-
 
 def plot_ethogram(sess_dataframe,ses_settings):
     lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
@@ -850,19 +860,12 @@ def safe_divide(a, b):
 
     return out
 
-def calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
-
+def calc_stable_seq_fraction(sess_dataframe, ses_settings, test='transition'):
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
-    transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe,ses_settings)
-
-    if len(goals) != 4:
-        raise ValueError("Stable sequencing performance calculation is only implemented for 4 goals.")
+    transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe, ses_settings)
     
-    a = goals[0]
-    b = goals[1]
-    c = goals[2]
-    d = goals[3]
-
+    n_goals = len(goals)
+    
     if test == 'transition':
         test_prob = transition_prob
     elif test == 'control':
@@ -871,35 +874,21 @@ def calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
         test_prob = ideal_prob
     else:
         raise ValueError("Invalid test type. Choose from 'transition', 'control', or 'ideal'.")
+    
+   
+    perf_list = []
+    for i in range(n_goals):
+        next_goal_idx = (i + 1) % n_goals  # Wrap around to first goal
+        next_goal = goals[next_goal_idx]
+        
+        perf = safe_divide(test_prob[i, next_goal], np.sum(test_prob[i, :]))
+        perf_list.append(perf)
+    
+    performance = np.nanmean(perf_list)
+    
+    return performance, *perf_list  # Extract individual performances
 
-    ab_prob = test_prob[0,b]
-    ac_prob = test_prob[0,c]
-    ad_prob = test_prob[0,d]
-    bc_prob = test_prob[1,c]
-    ba_prob = test_prob[1,a]
-    bd_prob = test_prob[1,d]
-    ca_prob = test_prob[2,a]
-    cb_prob = test_prob[2,b]
-    cd_prob = test_prob[2,d]
-    dc_prob = test_prob[3,c]
-    db_prob = test_prob[3,b]
-    da_prob = test_prob[3,a]
-
-    #one performance metric is just comparing correct to incorrect (but relevant)
-    # perf_a = ab_prob / (ab_prob + ac_prob + ad_prob)
-    # perf_b = bc_prob / (bc_prob + ba_prob + bd_prob)
-    # perf_c = cd_prob / (ca_prob + cb_prob + cd_prob)
-    # perf_d = da_prob / (dc_prob + db_prob + da_prob)
-    #the other is comparing correct to all other transitions
-    perf_a = safe_divide(ab_prob, np.sum(test_prob[0,:]))
-    perf_b = safe_divide(bc_prob, np.sum(test_prob[1,:]))
-    perf_c = safe_divide(cd_prob, np.sum(test_prob[2,:]))
-    perf_d = safe_divide(da_prob, np.sum(test_prob[3,:]))
-
-    performance = np.nanmean([perf_a, perf_b, perf_c, perf_d])
-
-    return performance, perf_a, perf_b, perf_c, perf_d
-
+# Did not adapt Calc- or Plot- _stable_seq_fraction_NEW < functions yet for number of landmarks in different corrs as they may be restructured
 def calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='transition'):
 
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
@@ -952,22 +941,60 @@ def calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='transition'):
 
     return performance, perf_a, perf_b, perf_c, perf_d
 
-def plot_stable_seq_fraction(sess_dataframe,ses_settings,test='transition'):
-
-    performance, perf_a, perf_b, perf_c, perf_d = calc_stable_seq_fraction(sess_dataframe,ses_settings,test='transition')
-    perf_ctrl, perf_a_ctrl, perf_b_ctrl, perf_c_ctrl, perf_d_ctrl = calc_stable_seq_fraction(sess_dataframe,ses_settings,test='control')
-
-    plt.figure(figsize=(6, 4))
-    plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a, perf_b, perf_c, perf_d], color=['blue', 'orange', 'green', 'purple'])
-    #add a dashed bar plot for control
-    plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a_ctrl, perf_b_ctrl, perf_c_ctrl, perf_d_ctrl], color=['blue', 'orange', 'green', 'purple'], alpha=0.3, hatch='//')
+def plot_stable_seq_fraction(sess_dataframe, ses_settings, test='transition'):
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    n_goals = len(goals)
+    
+    # True perf
+    perf_results = calc_stable_seq_fraction(sess_dataframe, ses_settings, test='transition')
+    performance = perf_results[0]
+    perf_individual = perf_results[1:]
+    
+    # Chance perf
+    perf_ctrl_results = calc_stable_seq_fraction(sess_dataframe, ses_settings, test='control')
+    perf_ctrl = perf_ctrl_results[0]
+    perf_ctrl_individual = perf_ctrl_results[1:]
+    
+    # Create labels dynamically based on number of goals
+    if n_goals == 3:
+        labels = ['A→B', 'B→C', 'C→A']
+        colors = ['blue', 'orange', 'green']
+    elif n_goals == 4:
+        labels = ['A→B', 'B→C', 'C→D', 'D→A']
+        colors = ['blue', 'orange', 'green', 'purple']
+    else:
+        # For any other number, use generic labels
+        goal_names = [chr(65 + i) for i in range(n_goals)]  # A, B, C, D, E, ...
+        labels = [f'{goal_names[i]}→{goal_names[(i+1) % n_goals]}' for i in range(n_goals)]
+        colors = plt.cm.tab10(np.linspace(0, 1, n_goals))  # Use colormap for many goals
+    
+    plt.figure(figsize=(min(10, 2 * n_goals), 4))
+    x_pos = np.arange(n_goals)
+    
+    plt.bar(x_pos, perf_individual, color=colors, label='Licked')
+    plt.bar(x_pos, perf_ctrl_individual, color=colors, alpha=0.3, hatch='//', label='Control')
+    
+    plt.xticks(x_pos, labels)
     plt.ylim(0, 1)
     plt.ylabel('Fraction of Correct Transitions')
     plt.title('Sequencing Performance per Transition')
-    plt.show()
+    
+    perf_proxy = mpatches.Patch(facecolor="white", edgecolor="black", label="True")
+    perf_ctrl_proxy = mpatches.Patch(facecolor="white", edgecolor="black", hatch="//", label="Control")
 
-    print(f'Sequencing Performance: {performance*100:.2f}%, ({perf_a*100:.2f}%, {perf_b*100:.2f}%, {perf_c*100:.2f}%, {perf_d*100:.2f}%)')
-    print(f'Control Performance: {perf_ctrl*100:.2f}%, ({perf_a_ctrl*100:.2f}%, {perf_b_ctrl*100:.2f}%, {perf_c_ctrl*100:.2f}%, {perf_d_ctrl*100:.2f}%)')
+    plt.legend(handles=[perf_proxy,  perf_ctrl_proxy],
+    facecolor="white",
+    edgecolor="black",
+    framealpha=1
+    )
+    plt.tight_layout()
+    plt.show()
+    
+    # Print results
+    perf_str = ', '.join([f'{p*100:.2f}%' for p in perf_individual])
+    ctrl_str = ', '.join([f'{p*100:.2f}%' for p in perf_ctrl_individual])
+    print(f'True Sequencing Performance: {performance*100:.2f}%, ({perf_str})')
+    print(f'Control Performance: {perf_ctrl*100:.2f}%, ({ctrl_str})')
 
 def plot_stable_seq_fraction_new(sess_dataframe,ses_settings):
 
@@ -1110,34 +1137,30 @@ def plot_lick_lm(sess_dataframe,ses_settings):
     plt.show()
 
 def plot_full_corr(sess_dataframe,ses_settings):
-
+    n_landmarks = ses_settings.get('n_landmarks', 10)  # ADD THIS LINE
+    
     hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
-    #for the length of licked_all, repeat the lm_ids to fill the array
     all_lms = np.concatenate([lm_ids]* (licked_all.shape[0] // lm_ids.shape[0] + 1))[:licked_all.shape[0]]
     was_target = np.zeros_like(all_lms)
     for i in range(all_lms.shape[0]):
         if all_lms[i] in goals:
             match_id = goals.index(all_lms[i])
-            was_target[i] = match_id + 1  #start from 1
+            was_target[i] = match_id + 1
 
-    #reshape licked_all into 10 columns and the appropriate number of rows
-    if licked_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
-    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
-    if rewarded_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        rewarded_all = np.pad(rewarded_all, (0, 10 - (rewarded_all.shape[0] % 10)), 'constant')
-    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / 10).astype(int), 10)
-    if was_target.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        was_target = np.pad(was_target, (0, 10 - (was_target.shape[0] % 10)), 'constant')
-    was_target_reshaped = was_target.reshape(np.round(was_target.shape[0] / 10).astype(int), 10)
-    if all_lms.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        all_lms = np.pad(all_lms, (0, 10 - (all_lms.shape[0] % 10)), 'constant')
-    all_lms_reshaped = all_lms.reshape(np.round(all_lms.shape[0] / 10).astype(int), 10)
+    # Replaced instances harcoded for 10 LMs with n_landmarks 
+    if licked_all.shape[0] % n_landmarks != 0:
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+    if rewarded_all.shape[0] % n_landmarks != 0:
+        rewarded_all = np.pad(rewarded_all, (0, n_landmarks - (rewarded_all.shape[0] % n_landmarks)), 'constant')
+    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+    if was_target.shape[0] % n_landmarks != 0:
+        was_target = np.pad(was_target, (0, n_landmarks - (was_target.shape[0] % n_landmarks)), 'constant')
+    was_target_reshaped = was_target.reshape(np.round(was_target.shape[0] / n_landmarks).astype(int), n_landmarks)
+    if all_lms.shape[0] % n_landmarks != 0:
+        all_lms = np.pad(all_lms, (0, n_landmarks - (all_lms.shape[0] % n_landmarks)), 'constant')
+    all_lms_reshaped = all_lms.reshape(np.round(all_lms.shape[0] / n_landmarks).astype(int), n_landmarks)
 
     plt.figure(figsize=(10,6))
     plt.subplot(3, 1, 1)
@@ -1219,19 +1242,19 @@ def calc_laps_needed(ses_settings):
     return laps_needed
 
 def give_state_id(sess_dataframe,ses_settings):
-
+    n_landmarks = ses_settings.get('n_landmarks', 10)  # ADD THIS LINE
+    
     goals,lm_ids = parse_stable_goal_ids(ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
     hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
-    if rewarded_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        rewarded_all = np.pad(rewarded_all, (0, 10 - (rewarded_all.shape[0] % 10)), 'constant')
-    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / 10).astype(int), 10)
+    
+    # Replaced instances harcoded for 10 LMs with n_landmarks
+    if rewarded_all.shape[0] % n_landmarks != 0:
+        rewarded_all = np.pad(rewarded_all, (0, n_landmarks - (rewarded_all.shape[0] % n_landmarks)), 'constant')
+    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / n_landmarks).astype(int), n_landmarks)
 
     num_lms = len(lm_ids)
-
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
-
     state_id = np.zeros(len(rewarded_all_reshaped), dtype=int)
     state_id[0] = 0
 
@@ -1250,7 +1273,6 @@ def give_state_id(sess_dataframe,ses_settings):
         for i in range(0,num_laps-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
-
             if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
                 state_id[i+1] = 0
             elif state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 0:
@@ -1273,7 +1295,6 @@ def give_state_id(sess_dataframe,ses_settings):
         for i in range(0,num_laps-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
-
             if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
                 state_id[i+1] = 2
             elif state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 0:
@@ -1287,27 +1308,26 @@ def give_state_id(sess_dataframe,ses_settings):
 
 
 def plot_licks_per_state(sess_dataframe, ses_settings):
+    n_landmarks = ses_settings.get('n_landmarks', 10)  
+    
     state_id = give_state_id(sess_dataframe,ses_settings)
-
     hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
-    if licked_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
-    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
+    
+    # Replaced instances harcoded for 10 LMs with n_landmarks
+    if licked_all.shape[0] % n_landmarks != 0:
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
 
     if laps_needed == 2:
         state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
         state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
-
         state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
         state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
-
     elif laps_needed == 3:
         state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
         state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
         state3_laps = licked_all_reshaped[np.where(state_id == 2)[0],:]
-
         state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
         state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
         state3_hist = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
@@ -1324,33 +1344,33 @@ def plot_licks_per_state(sess_dataframe, ses_settings):
     plt.show()
 
 def plot_polar_licks_per_state(sess_dataframe, ses_settings):
+    n_landmarks = ses_settings.get('n_landmarks', 10)  # ADD THIS LINE
+    
     state_id = give_state_id(sess_dataframe,ses_settings)
-
     hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
-    if licked_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
-    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
+    
+    # Replaced instances harcoded for 10 LMs with n_landmarks
+    if licked_all.shape[0] % n_landmarks != 0:
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
 
     if laps_needed == 2:
         state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
         state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
-
         state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
         state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
-
     elif laps_needed == 3:
         state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
         state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
         state3_laps = licked_all_reshaped[np.where(state_id == 2)[0],:]
-
         state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
         state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
         state3_hist = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
 
-    angles = np.linspace(0, 2 * np.pi, 10, endpoint=False)
-    angles = np.concatenate((angles, [angles[0]]))  # Complete the loop
+    # Replaced instances harcoded for 10 LMs with n_landmarks
+    angles = np.linspace(0, 2 * np.pi, n_landmarks, endpoint=False)
+    angles = np.concatenate((angles, [angles[0]]))
 
     plt.figure(figsize=(4,4))
     ax = plt.subplot(111, polar=True)
@@ -1359,7 +1379,7 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings):
     if laps_needed == 3:
         ax.plot(angles, np.concatenate((state3_hist, [state3_hist[0]])), label='Lap3', color='y')
     ax.set_xticks(angles[:-1])
-    ax.set_xticklabels([f'LM {i+1}' for i in range(10)])
+    ax.set_xticklabels([f'LM {i+1}' for i in range(n_landmarks)])  # Replace 10 with n_landmarks
     ax.set_title('Polar Plot of Licks per State/Lap')
     ax.set_theta_zero_location('N')
     ax.set_theta_direction(-1)
@@ -1428,52 +1448,53 @@ def plot_speed_per_state(sess_dataframe, ses_settings):
 
 
 def calc_sw_state_ratio(sess_dataframe, ses_settings):
-    state_id = give_state_id(sess_dataframe,ses_settings)
+    n_landmarks = ses_settings.get('n_landmarks', 10)
+    
+    state_id = give_state_id(sess_dataframe, ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
-    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
-    if licked_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
-    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
+    
+    if licked_all.shape[0] % n_landmarks != 0:
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+    
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
-
-
-
+    n_goals = len(goals)
+    
+    window = 10
+    
     if laps_needed == 2:
-        window = 10
-        state1_sw = np.zeros([num_laps,10])
-        state2_sw = np.zeros([num_laps,10])
-        state_diff_1 = np.zeros([num_laps,10])
+        state1_sw = np.zeros([num_laps, n_landmarks])
+        state2_sw = np.zeros([num_laps, n_landmarks])
+        state_diff_1 = np.zeros([num_laps, n_landmarks])
+        
         for i in range(num_laps):
             if i < window:
                 state1_sw[i] = np.nan
                 state2_sw[i] = np.nan
                 state_diff_1[i] = np.nan
-
             else:
                 lap_range = range(i-window, i)
                 laps = licked_all_reshaped[lap_range]
-                state1_laps = laps[np.where(state_id[lap_range] == 0)[0],:]
-                state2_laps = laps[np.where(state_id[lap_range] == 1)[0],:]
-
-                state1_sw[i] = safe_divide(np.sum(state1_laps,axis=0), state1_laps.shape[0])
-                state2_sw[i] = safe_divide(np.sum(state2_laps,axis=0), state2_laps.shape[0])
-                state_diff_1[i] = abs(state1_sw[i]-state2_sw[i])
-
-        sw_state_ratio_a = state_diff_1[:,goals[0]]
-        sw_state_ratio_b = state_diff_1[:,goals[1]]
-        sw_state_ratio_c = state_diff_1[:,goals[2]]
-        sw_state_ratio_d = state_diff_1[:,goals[3]]
-
+                state1_laps = laps[np.where(state_id[lap_range] == 0)[0], :]
+                state2_laps = laps[np.where(state_id[lap_range] == 1)[0], :]
+                
+                state1_sw[i] = safe_divide(np.sum(state1_laps, axis=0), state1_laps.shape[0])
+                state2_sw[i] = safe_divide(np.sum(state2_laps, axis=0), state2_laps.shape[0])
+                state_diff_1[i] = abs(state1_sw[i] - state2_sw[i])
+        
+        # Dynamically create switch-stay ratios for each goal
+        sw_state_ratios = [state_diff_1[:, goals[i]] for i in range(n_goals)]
+    
     elif laps_needed == 3:
-        window = 10
-        state1_sw = np.zeros([num_laps,10])
-        state2_sw = np.zeros([num_laps,10])
-        state3_sw = np.zeros([num_laps,10])
-        state_diff_1 = np.zeros([num_laps,10])
-        state_diff_2 = np.zeros([num_laps,10])
-        state_diff_3 = np.zeros([num_laps,10])
+        state1_sw = np.zeros([num_laps, n_landmarks])
+        state2_sw = np.zeros([num_laps, n_landmarks])
+        state3_sw = np.zeros([num_laps, n_landmarks])
+        state_diff_1 = np.zeros([num_laps, n_landmarks])
+        state_diff_2 = np.zeros([num_laps, n_landmarks])
+        state_diff_3 = np.zeros([num_laps, n_landmarks])
+        
         for i in range(num_laps):
             if i < window:
                 state1_sw[i] = np.nan
@@ -1482,42 +1503,62 @@ def calc_sw_state_ratio(sess_dataframe, ses_settings):
                 state_diff_1[i] = np.nan
                 state_diff_2[i] = np.nan
                 state_diff_3[i] = np.nan
-
             else:
                 lap_range = range(i-window, i)
                 laps = licked_all_reshaped[lap_range]
-                state1_laps = laps[np.where(state_id[lap_range] == 0)[0],:]
-                state2_laps = laps[np.where(state_id[lap_range] == 1)[0],:]
-                state3_laps = laps[np.where(state_id[lap_range] == 2)[0],:]
-
-                state1_sw[i] = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
-                state2_sw[i] = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
-                state3_sw[i] = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
-                state_diff_1[i] = abs(state1_sw[i]-state2_sw[i])
-                state_diff_2[i] = abs(state2_sw[i]-state3_sw[i])
-                state_diff_3[i] = abs(state1_sw[i]-state3_sw[i])
-
-        sw_state_ratio_a = (state_diff_1[:,goals[0]]+state_diff_3[:,goals[0]])/2
-        sw_state_ratio_b = (state_diff_1[:,goals[1]]+state_diff_3[:,goals[1]])/2
-        sw_state_ratio_c = (state_diff_1[:,goals[2]]+state_diff_2[:,goals[2]])/2
-        sw_state_ratio_d = (state_diff_2[:,goals[3]]+state_diff_3[:,goals[3]])/2
-
-    sw_state_ratio = np.nanmean([sw_state_ratio_a,sw_state_ratio_b,sw_state_ratio_c,sw_state_ratio_d],axis=0)
-
-    return sw_state_ratio, sw_state_ratio_a, sw_state_ratio_b, sw_state_ratio_c, sw_state_ratio_d
+                state1_laps = laps[np.where(state_id[lap_range] == 0)[0], :]
+                state2_laps = laps[np.where(state_id[lap_range] == 1)[0], :]
+                state3_laps = laps[np.where(state_id[lap_range] == 2)[0], :]
+                
+                state1_sw[i] = np.sum(state1_laps, axis=0) / state1_laps.shape[0]
+                state2_sw[i] = np.sum(state2_laps, axis=0) / state2_laps.shape[0]
+                state3_sw[i] = np.sum(state3_laps, axis=0) / state3_laps.shape[0]
+                state_diff_1[i] = abs(state1_sw[i] - state2_sw[i])
+                state_diff_2[i] = abs(state2_sw[i] - state3_sw[i])
+                state_diff_3[i] = abs(state1_sw[i] - state3_sw[i])
+        
+        # Dynamically create switch-stay ratios for each goal
+        sw_state_ratios = [(state_diff_1[:, goals[i]] + state_diff_3[:, goals[i]]) / 2 for i in range(n_goals)]
+    
+    else:
+        # If laps_needed is something other than 2 or 3, return empty arrays
+        sw_state_ratios = [np.array([]) for _ in range(n_goals)]
+    
+    # Calculate overall ratio
+    sw_state_ratio = np.nanmean(sw_state_ratios, axis=0)
+    
+    # Return overall ratio plus individual ratios
+    return sw_state_ratio, *sw_state_ratios
 
 def plot_sw_state_ratio(sess_dataframe, ses_settings):
-
-    sw_state_ratio, sw_state_ratio_a, sw_state_ratio_b, sw_state_ratio_c, sw_state_ratio_d = calc_sw_state_ratio(sess_dataframe, ses_settings)
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    n_goals = len(goals)
+    
+    # Get results
+    results = calc_sw_state_ratio(sess_dataframe, ses_settings)
+    sw_state_ratio = results[0]
+    sw_state_ratios_individual = results[1:]
+    
     print(f'Average Switch-Stay Ratio: {np.nanmean(sw_state_ratio):.2f}')
-
-    plt.figure(figsize=(10,4))
+    
+    if n_goals == 3:
+        colors = ['b', 'g', 'r']
+        labels = ['A', 'B', 'C']
+    elif n_goals == 4:
+        colors = ['b', 'g', 'r', 'm']
+        labels = ['A', 'B', 'C', 'D']
+    else:
+        colors = plt.cm.tab10(np.linspace(0, 1, n_goals))
+        labels = [chr(65 + i) for i in range(n_goals)]  # A, B, C, D, E, ...
+    
+    plt.figure(figsize=(10, 4))
     plt.plot(sw_state_ratio, label='Average', color='k')
-    plt.plot(sw_state_ratio_a, label='A', color='b')
-    plt.plot(sw_state_ratio_b, label='B', color='g')
-    plt.plot(sw_state_ratio_c, label='C', color='r')
-    plt.plot(sw_state_ratio_d, label='D', color='m')
-    plt.hlines(np.nanmean(sw_state_ratio),0,len(sw_state_ratio),colors='k',linestyles='dashed',label='Mean')
+    
+    # Plot switch-stay ratio per goal
+    for i in range(n_goals):
+        plt.plot(sw_state_ratios_individual[i], label=labels[i], color=colors[i])
+    
+    plt.hlines(np.nanmean(sw_state_ratio), 0, len(sw_state_ratio), colors='k', linestyles='dashed', label='Mean')
     plt.ylim(0, 1)
     plt.xlabel('Lap')
     plt.ylabel('Switch-Stay Ratio')
@@ -1713,20 +1754,23 @@ def find_closest_events(
     return chosen_idx, chosen_event, odour, chosen_pos
 
 def sanity_check_parsing(sess_dataframe, ses_settings):
-
     lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
     event_ids = release_df["Odour"].to_numpy(dtype=int)
-    n_ids = len(event_ids) - (len(event_ids) % 10)
+    
+    # load number of LMs from settings (default to 10 for backward compatibility)
+    n_landmarks = ses_settings.get('n_landmarks', 10)
+    
+    n_ids = len(event_ids) - (len(event_ids) % n_landmarks)
     event_ids = event_ids[:n_ids]
-    #reshape ids to have 10 columns (one for each target)
-    event_ids_reshaped = event_ids.reshape(-1, 10)
-    event_ids_reshaped
-
-    plt.figure(figsize=(10,4))
+    
+    # reshape to have n_landmarks columns (one for each target)
+    event_ids_reshaped = event_ids.reshape(-1, n_landmarks)
+    
+    plt.figure(figsize=(10, 4))
     plt.imshow(event_ids_reshaped, aspect='auto', cmap='viridis_r', interpolation='none')
     plt.clim(0, np.max(event_ids))
     plt.colorbar()
-    plt.title('Released Odour IDs')
+    plt.title(f'Released Odour IDs ({n_landmarks} landmarks)')
     plt.xlabel('Landmark Index')
     plt.ylabel('Lap')
     plt.show()
