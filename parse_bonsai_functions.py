@@ -355,7 +355,13 @@ def calc_hit_fa(sess_dataframe, ses_settings):
         if 'LM_Count' in sess_dataframe.columns:
             true_ix = sess_dataframe.index[sess_dataframe['LM_Position'] == pos][0]
         else:
-            true_ix = sess_dataframe.index[sess_dataframe['Position'] == pos][0]
+            if pos == 0:
+                true_ix = sess_dataframe.index[0]  # handle case where first release is at position 0
+            else:
+                if pos == 0:
+                    true_ix = sess_dataframe.index[0]  # handle case where first release is at position 0
+                else:
+                    true_ix = sess_dataframe.index[sess_dataframe['Position'] == pos][0]
         true_pos = sess_dataframe['Position'].loc[true_ix]
         licks = lick_position[lick_times >= release_df.index[idx]]
         rewards = reward_positions[reward_times >= release_df.index[idx]]
@@ -1360,6 +1366,10 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings):
         state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
         state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
         state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+        state1_hist = np.append(state1_hist,state1_hist[0])
+        state2_hist = np.append(state2_hist,state2_hist[0])
+        state1_hist = np.interp(np.linspace(0,len(state1_hist)-1,100),np.arange(len(state1_hist)),state1_hist)
+        state2_hist = np.interp(np.linspace(0,len(state2_hist)-1,100),np.arange(len(state2_hist)),state2_hist)
     elif laps_needed == 3:
         state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
         state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
@@ -1367,18 +1377,24 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings):
         state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
         state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
         state3_hist = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
+        state1_hist = np.append(state1_hist,state1_hist[0])
+        state2_hist = np.append(state2_hist,state2_hist[0])
+        state3_hist = np.append(state3_hist,state3_hist[0])
+        state1_hist = np.interp(np.linspace(0,len(state1_hist)-1,100),np.arange(len(state1_hist)),state1_hist)
+        state2_hist = np.interp(np.linspace(0,len(state2_hist)-1,100),np.arange(len(state2_hist)),state2_hist)
+        state3_hist = np.interp(np.linspace(0,len(state3_hist)-1,100),np.arange(len(state3_hist)),state3_hist)
 
     # Replaced instances harcoded for 10 LMs with n_landmarks
-    angles = np.linspace(0, 2 * np.pi, n_landmarks, endpoint=False)
+    angles = np.linspace(0, 2 * np.pi, len(state1_hist)-1, endpoint=False)
     angles = np.concatenate((angles, [angles[0]]))
 
     plt.figure(figsize=(4,4))
     ax = plt.subplot(111, polar=True)
-    ax.plot(angles, np.concatenate((state1_hist, [state1_hist[0]])), label='Lap1', color='g')
-    ax.plot(angles, np.concatenate((state2_hist, [state2_hist[0]])), label='Lap2', color='r')
+    ax.plot(angles, state1_hist, label='Lap1', color='g')
+    ax.plot(angles, state2_hist, label='Lap2', color='r')
     if laps_needed == 3:
-        ax.plot(angles, np.concatenate((state3_hist, [state3_hist[0]])), label='Lap3', color='y')
-    ax.set_xticks(angles[:-1])
+        ax.plot(angles, state3_hist, label='Lap3', color='y')
+    ax.set_xticks(range(n_landmarks))  # Replace 10 with n_landmarks
     ax.set_xticklabels([f'LM {i+1}' for i in range(n_landmarks)])  # Replace 10 with n_landmarks
     ax.set_title('Polar Plot of Licks per State/Lap')
     ax.set_theta_zero_location('N')
