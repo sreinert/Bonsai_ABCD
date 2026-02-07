@@ -1394,7 +1394,7 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings):
     ax.plot(angles, state2_hist, label='Lap2', color='r')
     if laps_needed == 3:
         ax.plot(angles, state3_hist, label='Lap3', color='y')
-    ax.set_xticks(range(n_landmarks))  # Replace 10 with n_landmarks
+    ax.set_xticks(np.linspace(0, 2*np.pi, n_landmarks,endpoint=False))  # Replace 10 with n_landmarks
     ax.set_xticklabels([f'LM {i+1}' for i in range(n_landmarks)])  # Replace 10 with n_landmarks
     ax.set_title('Polar Plot of Licks per State/Lap')
     ax.set_theta_zero_location('N')
