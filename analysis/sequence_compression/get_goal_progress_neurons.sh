@@ -25,12 +25,6 @@ PAIRS=(
   "mouse=011 cohort=3 full009:t5 full013:t6"
   "mouse=012 cohort=3 full011:t5 full017:t6"
   "mouse=013 cohort=3 full010:t5 full014:t6"
-  "mouse=001 cohort=3 2LM015:t3"
-  "mouse=002 cohort=3 2LM016:t3"
-  "mouse=003 cohort=3 2LM015:t3"
-  "mouse=005 cohort=3 2LM009:t3"
-  "mouse=009 cohort=3 2LM008:t3"
-  "mouse=014 cohort=3 2LM011:t3"
 )
 
 for ENTRY in "${PAIRS[@]}"; do

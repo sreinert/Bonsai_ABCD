@@ -224,9 +224,9 @@ def load_dF(base_path, red_chan=False):
         dF = dF_all[valid_frames,:].T
 
     else:
+        print('Loading dG/R instead of dF')
         # Load data 
         dF_GR_path = os.path.join(base_path, 'funcimg', 'DG_R.npy')
-        print(dF_GR_path)
         if os.path.exists(dF_GR_path):
             dF = np.load(dF_GR_path)
         else:
@@ -1625,13 +1625,40 @@ def get_landmark_positions(session, sess_dataframe, ses_settings, data='pd'):
         entry_pos2 = session['position'][lm_entry_idx2]
         exit_pos1  = session['position'][lm_exit_idx1]
         exit_pos2  = session['position'][lm_exit_idx2]
-
+        
+        # print(entry_pos1[:50])
+        # print(entry_pos2[:50])
+        # print(exit_pos1[:50])
+        # print(exit_pos2[:50])
         lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+        offset = ses_settings['trial']['offsets'][0]
         tol = lm_size * 0.5
 
         # Merge with "keep single" logic
-        lm_entry = merge_positions_keep_single(entry_pos1, entry_pos2, tol)
-        lm_exit  = merge_positions_keep_single(exit_pos1,  exit_pos2,  tol)
+        all_lm_entry = merge_positions_keep_single(entry_pos1, entry_pos2, tol, offset)
+        all_lm_exit  = merge_positions_keep_single(exit_pos1,  exit_pos2,  tol, offset)
+
+        # Fix last lm 
+        if session['position'][-1] - all_lm_exit[-1] < lm_size:
+            all_lm_exit = all_lm_exit[:-1]
+        
+        # Fix first lm 
+        first_entries = all_lm_entry < offset
+        first_exits  = all_lm_exit  < offset
+        first_entry = all_lm_entry[first_entries][0] 
+        first_exit = all_lm_exit[first_exits][-1]
+        
+        # Concatenate all landmarks 
+        lm_entry = np.concatenate([[first_entry], all_lm_entry[~first_entries]])
+        lm_exit = np.concatenate([[first_exit], all_lm_exit[~first_exits]])
+
+        if len(lm_entry) != len(lm_exit):
+            if len(lm_entry) - len(lm_exit) == 1:
+                # Session ended before the mouse exited the last landmark 
+                n = len(lm_exit)
+                lm_entry = lm_entry[:n]
+            else:
+                raise ValueError(f'Something is wrong with landmark parsing using the photodiode data in {session['mouse']} {session['stage']}')
 
         # Store landmarks 
         landmarks = np.column_stack([lm_entry, lm_exit])
@@ -1640,7 +1667,7 @@ def get_landmark_positions(session, sess_dataframe, ses_settings, data='pd'):
 
     return session
 
-def merge_positions_keep_single(pos1, pos2, tol):
+def merge_positions_keep_single(pos1, pos2, tol, offset):
     """
     Merge two sorted position arrays.
     - If positions are within tol → average
@@ -1650,6 +1677,16 @@ def merge_positions_keep_single(pos1, pos2, tol):
     merged = []
 
     while i < len(pos1) and j < len(pos2):
+        if pos1[i] < offset:
+            merged.append(pos1[i])
+            i += 1
+            continue
+
+        if pos2[j] < offset:
+            merged.append(pos2[j])
+            j += 1
+            continue
+
         if abs(pos1[i] - pos2[j]) <= tol:
             merged.append(np.mean([pos1[i], pos2[j]]))
             i += 1
@@ -1673,14 +1710,14 @@ def merge_positions_keep_single(pos1, pos2, tol):
     return np.array(merged)
 
 def get_goal_positions(session, sess_dataframe, ses_settings):
-    '''Get the start and end of each goal landmark'''
+    '''Get the start and end of each goal landmark using odour release events to find targets'''
     target_positions, _, _, _, _, _ = find_targets_distractors(sess_dataframe, ses_settings)
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
 
     goals = np.zeros((len(target_positions), 2))
     for i, pos in enumerate(np.sort(target_positions)):
-        goals[i,0] = pos
-        goals[i,1] = pos + lm_size
+        # Find lm closest to release position
+        closest_lm = np.argmin(np.abs(session['landmarks'][:,0] - pos))
+        goals[i] = session['landmarks'][closest_lm]
     
     session['goals'] = goals
 
@@ -1692,35 +1729,64 @@ def estimate_pd_entry_exit(ses_settings, session, pd='pd1'):
 
     all_lm_entry_idx = np.where(np.diff(binary_pd) == 1)[0] + 1
     all_lm_exit_idx = np.where(np.diff(binary_pd) == -1)[0] + 1
+    if binary_pd[0] == 1:
+        all_lm_entry_idx = np.insert(all_lm_entry_idx, 0, 0)
+    
+    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    offset = ses_settings['trial']['offsets'][0]
 
     # Filter out repeated lm visits
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
-    n = min(len(all_lm_entry_idx), len(all_lm_exit_idx))
-    entry_pos = session['position'][all_lm_entry_idx[:n]]
-    exit_pos  = session['position'][all_lm_exit_idx[:n]]
-    pos_diff = np.where(exit_pos - entry_pos < lm_size - 1)[0]
+    # n = min(len(all_lm_entry_idx), len(all_lm_exit_idx))
+    # entry_pos = session['position'][all_lm_entry_idx[:n]]
+    # exit_pos  = session['position'][all_lm_exit_idx[:n]]
+    entry_pos = session['position'][all_lm_entry_idx]
+    exit_pos  = session['position'][all_lm_exit_idx]
+    # pos_diff = np.where(exit_pos - entry_pos < lm_size - 1)[0]
 
-    # Filter out re-entries - use earliest entry
+    if offset == lm_size: # TODO bad fix 
+        tol = 0
+    else:
+        tol = 1
+
+    # Filter out re-entries - use earliest idx
+    consecutive_diff = np.where(np.diff(entry_pos) < lm_size + tol)[0] + 1
     removed = []
     for i, idx in enumerate(all_lm_entry_idx):
-        if i == 0: # first lm might be weird
-            continue
-        if i in pos_diff:
+        if i in consecutive_diff:
+            if session['position'][idx] < offset:
+                continue
             removed.append(i)
     lm_entry_idx = np.delete(all_lm_entry_idx, removed)
 
-    # Filter out re-exits - use latest exit
+    # Filter out re-exits - use latest idx
+    consecutive_diff = np.where(np.diff(exit_pos) < lm_size + tol)[0] 
     removed = []
     for i, idx in enumerate(all_lm_exit_idx):
-        if i == 1: # first lm might be weird
-            if 0 in pos_diff:
+        if i in consecutive_diff:
+            if session['position'][idx] < offset:
                 continue
-        if i == 0: 
-            if 1 not in pos_diff:
-                continue
-        if i in pos_diff:
             removed.append(i)
     lm_exit_idx = np.delete(all_lm_exit_idx, removed)
+
+    # # Filter out re-entries - use earliest entry
+    # removed = []
+    # for i, idx in enumerate(all_lm_entry_idx):
+    #     if i in pos_diff:
+    #         # Check position of first outlier
+    #         if session['position'][idx] < offset:
+    #             continue
+    #         removed.append(i)
+    # lm_entry_idx = np.delete(all_lm_entry_idx, removed)
+
+    # # Filter out re-exits - use latest exit
+    # removed = []
+    # for i, idx in enumerate(all_lm_exit_idx):
+    #     if i in pos_diff:
+    #         # Check position of first outlier
+    #         if session['position'][idx] < offset:
+    #             continue
+    #         removed.append(i)
+    # lm_exit_idx = np.delete(all_lm_exit_idx, removed)
 
     return lm_entry_idx, lm_exit_idx
 
@@ -1850,7 +1916,7 @@ def get_rewarded_landmarks(session):
 
     rewarded_landmarks = [i for i, (start, end) in enumerate(zip(np.floor(session['position'][lm_entry_idx]), np.ceil(session['position'][lm_exit_idx]))) 
                             if np.any((np.ceil(reward_positions) >= start) & (np.floor(reward_positions) <= end))] 
-    
+
     session['rewarded_landmarks'] = rewarded_landmarks
 
     return session

@@ -36,10 +36,15 @@ root = f"/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preproc
 session_path = parse_session_functions.find_base_path(mouse, session_id, root)
 
 # Load dF and valid neurons
-dF, neurons = parse_session_functions.load_dF(session_path)
+if int(cohort) == 3:
+    dF, neurons = parse_session_functions.load_dF(session_path, red_chan=True)
 
 # Create session struct
-session = parse_session_functions.analyse_npz_pre7(mouse, session_id, root, stage)
+if stage == 't3':
+    world = 'random'
+else:
+    world = 'stable'
+session = parse_session_functions.analyse_npz_pre7(mouse, session_id, root, stage, world)
 event_idx = np.sort(np.concatenate([session['rewards'], session['miss_rew_idx'], session['test_rew_idx']])).astype(int)
 
 # Get goal progress neurons
