@@ -206,8 +206,9 @@ def load_data(base_path):
     with pd.option_context("future.no_silent_downcasting", True):
         sess_dataframe['Licks'] = sess_dataframe['Licks'].fillna(False).astype(bool) 
 
-    #crop sess_dataframe to when Buffer starts being non-zero
-    sess_dataframe = sess_dataframe[sess_dataframe['Buffer'] >= 0]
+    #crop sess_dataframe to when Buffer starts being non-zero if buffer data is available, otherwise keep all data
+    if 'Buffer' in sess_dataframe.columns and not sess_dataframe['Buffer'].isna().all():
+        sess_dataframe = sess_dataframe[sess_dataframe['Buffer'] >= 0]
 
     return sess_dataframe
 
@@ -900,9 +901,8 @@ def calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='transition'):
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
     transition_prob, control_prob,random_prob_all, ideal_prob = calc_stable_conditional_matrix_new(sess_dataframe,ses_settings)
 
-    if len(goals) != 4:
-        raise ValueError("Stable sequencing performance calculation is only implemented for 4 goals.")
-    
+    n_goals = len(goals)
+
     if test == 'transition':
         test_prob = transition_prob
     elif test == 'control':
@@ -914,38 +914,17 @@ def calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='transition'):
     else:
         raise ValueError("Invalid test type. Choose from 'transition', 'control', 'random', or 'ideal'.")
 
-    a = goals[0]
-    b = goals[1]
-    c = goals[2]
-    d = goals[3]
+    perf_list = []
+    for i in range(n_goals):
+        next_goal_idx = (i + 1) % n_goals  # Wrap around to first goal
+        next_goal = goals[next_goal_idx]
+        
+        perf = safe_divide(test_prob[i, next_goal], np.sum(test_prob[i, :]))
+        perf_list.append(perf)
+    
+    performance = np.nanmean(perf_list)
 
-    ab_prob = test_prob[0,b]
-    ac_prob = test_prob[0,c]
-    ad_prob = test_prob[0,d]
-    bc_prob = test_prob[1,c]
-    ba_prob = test_prob[1,a]
-    bd_prob = test_prob[1,d]
-    ca_prob = test_prob[2,a]
-    cb_prob = test_prob[2,b]
-    cd_prob = test_prob[2,d]
-    dc_prob = test_prob[3,c]
-    db_prob = test_prob[3,b]
-    da_prob = test_prob[3,a]
-
-    #one performance metric is just comparing correct to incorrect (but relevant)
-    # perf_a = ab_prob / (ab_prob + ac_prob + ad_prob)
-    # perf_b = bc_prob / (bc_prob + ba_prob + bd_prob)
-    # perf_c = cd_prob / (ca_prob + cb_prob + cd_prob)
-    # perf_d = da_prob / (dc_prob + db_prob + da_prob)
-    #the other is comparing correct to all other transitions
-    perf_a = safe_divide(ab_prob, np.sum(test_prob[0,:]))
-    perf_b = safe_divide(bc_prob, np.sum(test_prob[1,:]))
-    perf_c = safe_divide(cd_prob, np.sum(test_prob[2,:]))
-    perf_d = safe_divide(da_prob, np.sum(test_prob[3,:]))
-
-    performance = np.nanmean([perf_a, perf_b, perf_c, perf_d])
-
-    return performance, perf_a, perf_b, perf_c, perf_d
+    return performance, *perf_list
 
 def plot_stable_seq_fraction(sess_dataframe, ses_settings, test='transition'):
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
@@ -1004,24 +983,56 @@ def plot_stable_seq_fraction(sess_dataframe, ses_settings, test='transition'):
 
 def plot_stable_seq_fraction_new(sess_dataframe,ses_settings):
 
-    performance, perf_a, perf_b, perf_c, perf_d = calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='transition')
-    perf_ctrl, perf_a_ctrl, perf_b_ctrl, perf_c_ctrl, perf_d_ctrl = calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='control')
-    perf_rand, perf_a_rand, perf_b_rand, perf_c_rand, perf_d_rand = calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='random')
+    n_goals = len(parse_stable_goal_ids(ses_settings)[0])
 
-    plt.figure(figsize=(6, 4))
-    plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a, perf_b, perf_c, perf_d], color=['blue', 'orange', 'green', 'purple'])
-    #add a dashed bar plot for control
-    plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a_ctrl, perf_b_ctrl, perf_c_ctrl, perf_d_ctrl], color=['blue', 'orange', 'green', 'purple'], alpha=0.3, hatch='//')
-    #add a dotted bar plot for random
-    plt.bar(['A->B', 'B->C', 'C->D', 'D->A'], [perf_a_rand, perf_b_rand, perf_c_rand, perf_d_rand], color=['blue', 'orange', 'green', 'purple'], alpha=0.2, hatch='..')
+    # True perf
+    perf_results = calc_stable_seq_fraction_new(sess_dataframe, ses_settings, test='transition')
+    performance = perf_results[0]
+    perf_individual = perf_results[1:]
+    
+    # Chance perf
+    perf_ctrl_results = calc_stable_seq_fraction_new(sess_dataframe, ses_settings, test='control')
+    perf_ctrl = perf_ctrl_results[0]
+    perf_ctrl_individual = perf_ctrl_results[1:]
+
+    # Random perf
+    perf_rand_results = calc_stable_seq_fraction_new(sess_dataframe, ses_settings, test='random')
+    perf_rand = perf_rand_results[0]
+    perf_rand_individual = perf_rand_results[1:]
+    
+    # Create labels dynamically based on number of goals
+    if n_goals == 3:
+        labels = ['A→B', 'B→C', 'C→A']
+        colors = ['blue', 'orange', 'green']
+    elif n_goals == 4:
+        labels = ['A→B', 'B→C', 'C→D', 'D→A']
+        colors = ['blue', 'orange', 'green', 'purple']
+    else:
+        # For any other number, use generic labels
+        goal_names = [chr(65 + i) for i in range(n_goals)]  # A, B, C, D, E, ...
+        labels = [f'{goal_names[i]}→{goal_names[(i+1) % n_goals]}' for i in range(n_goals)]
+        colors = plt.cm.tab10(np.linspace(0, 1, n_goals))  # Use colormap for many goals
+    
+    plt.figure(figsize=(min(10, 2 * n_goals), 4))
+    x_pos = np.arange(n_goals)
+    
+    plt.bar(x_pos, perf_individual, color=colors, label='Licked')
+    plt.bar(x_pos, perf_ctrl_individual, color=colors, alpha=0.3, hatch='//', label='Control')
+    plt.bar(x_pos, perf_rand_individual, color=colors, alpha=0.2, hatch='..', label='Random')
+    
+    plt.xticks(x_pos, labels)
     plt.ylim(0, 1)
     plt.ylabel('Fraction of Correct Transitions')
     plt.title('Sequencing Performance per Transition')
-    plt.show()
 
-    print(f'Sequencing Performance: {performance*100:.2f}%, ({perf_a*100:.2f}%, {perf_b*100:.2f}%, {perf_c*100:.2f}%, {perf_d*100:.2f}%)')
-    print(f'Control Performance: {perf_ctrl*100:.2f}%, ({perf_a_ctrl*100:.2f}%, {perf_b_ctrl*100:.2f}%, {perf_c_ctrl*100:.2f}%, {perf_d_ctrl*100:.2f}%)')
-    print(f'Random Order Performance: {perf_rand*100:.2f}%, ({perf_a_rand*100:.2f}%, {perf_b_rand*100:.2f}%, {perf_c_rand*100:.2f}%, {perf_d_rand*100:.2f}%)')    
+
+    # Print results
+    perf_str = ', '.join([f'{p*100:.2f}%' for p in perf_individual])
+    ctrl_str = ', '.join([f'{p*100:.2f}%' for p in perf_ctrl_individual])
+    rand_str = ', '.join([f'{p*100:.2f}%' for p in perf_rand_individual])
+    print(f'True Sequencing Performance: {performance*100:.2f}%, ({perf_str})')
+    print(f'Control Performance: {perf_ctrl*100:.2f}%, ({ctrl_str})')
+    print(f'Random Performance: {perf_rand*100:.2f}%, ({rand_str})')
 
 def plot_switch_stay_AB(sess_dataframe,ses_settings):
 
