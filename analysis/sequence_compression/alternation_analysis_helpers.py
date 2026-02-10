@@ -678,6 +678,35 @@ def temporal_bin_lm_firing(lm, cell, dF, bins=90):
 
     return binned_phase_firing
 
+def temporal_bin_lm_firing_reward_aligned(event, cell, dF, bins_pre=45, bins_post=45):
+    """
+    Reward-aligned temporal binning.
+    Reward always lands at bin bins_pre.
+    """
+    start = event["start"]
+    reward = event["reward"]
+    end = event["end"]
+
+    binned_phase_firing = np.zeros((bins_pre) + (bins_post))
+
+    pre_idx = np.arange(start, reward + 1)
+    post_idx = np.arange(reward, end + 1)
+
+    pre_bins = np.linspace(0, bins_pre, len(pre_idx))
+    post_bins = np.linspace(bins_pre, bins_pre + bins_post, len(post_idx))
+
+    idx = np.concatenate([pre_idx, post_idx[1:]])
+    bins = np.concatenate([pre_bins, post_bins[1:]])
+
+    phase_firing = dF[cell, idx]
+
+    bin_edges = np.linspace(0, bins_pre + bins_post, bins_pre + bins_post + 1)
+    binned_phase_firing, _, _ = stats.binned_statistic(bins, phase_firing, bins=bin_edges)
+
+    return binned_phase_firing
+
+    # return binned
+
 def get_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='ABB', plot=True):
     '''Binning of neural activity inside a XYY patch from the beginning to the end of each landmark in the the patch.'''
     
@@ -746,6 +775,98 @@ def get_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=
         ax1.set_yticks([0, len(neurons)-1])
         ax1.set_yticklabels([0, len(neurons)])
         ax1.set_ylabel('Neurons', labelpad=-5)
+
+    # Collect all data into a dict - maintain similar structure to get_spatial_and_temporal_ABB_binning
+    binned_XYY_phase_activity = {}
+    binned_XYY_phase_activity['temporal_ABB_firing'] = binned_XYY_phase_firing
+    binned_XYY_phase_activity['avg_temporal_ABB_firing'] = avg_binned_XYY_phase_firing
+    binned_XYY_phase_activity['zscored_sorted_temporal'] = sorted_zscored_avg_binned_XYY
+
+    return binned_XYY_phase_activity
+
+
+def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='ABB', plot=True):
+    '''Binning of neural activity inside a XYY patch from the beginning to the end of each landmark in the the patch.'''
+    
+    # Collect all landmark pair binnings for all patches
+    binned_XYY_phase_firing = {cell: [] for cell in neurons}
+ 
+    n_lms = len(XYY_patches[0]) - 1
+
+    for n, cell in enumerate(neurons):
+        for patch in XYY_patches:
+            if condition == 'BB' or condition == 'AA':
+                # Assume that lm entry and exit, and YY midpoint indices are provided
+                assert n_lms == 2, 'Each patch should have 3 landmarks - XYY'
+                patch_bin_list = [temporal_bin_lm_firing_reward_aligned(event_idx[lm], cell, dF, bins_pre=bins//2, bins_post=bins//2) for lm in patch[1:]]
+            else:
+                assert n_lms == 3, 'Each patch should have 4 landmarks - XYYX'
+                patch_bin_list = [temporal_bin_lm_firing([event_idx[lm], event_idx[lm+1]], cell, dF, bins=bins) for lm in patch[:-1]]
+
+            linear_patch_binned = np.concatenate(patch_bin_list)  # convert list to array and flatten
+            binned_XYY_phase_firing[cell].append(linear_patch_binned)
+
+    for cell in neurons:
+        binned_XYY_phase_firing[cell] = np.array(binned_XYY_phase_firing[cell])
+
+    # Average across patches
+    avg_binned_XYY_phase_firing = np.empty((len(neurons), bins * n_lms))
+    for n, cell in enumerate(neurons):
+        avg_binned_XYY_phase_firing[n] = np.nanmean(binned_XYY_phase_firing[cell], axis=0)
+
+    # Z-score
+    zscored_avg_binned_XYY_phase_firing = stats.zscore(avg_binned_XYY_phase_firing, axis=1)
+    vmax = np.nanmax(np.abs(zscored_avg_binned_XYY_phase_firing))
+    vmin = -vmax
+
+    # Sort according to max firing 
+    peak_bins = np.argmax(zscored_avg_binned_XYY_phase_firing, axis=1)
+    sort_order = np.argsort(peak_bins)
+    sorted_zscored_avg_binned_XYY = zscored_avg_binned_XYY_phase_firing[sort_order]
+
+    # Plotting
+    if plot:
+        fig, axes = plt.subplots(1, 2, figsize=(4, 3), sharey=True)
+
+        lm_data = [
+            sorted_zscored_avg_binned_XYY[:, :bins],
+            sorted_zscored_avg_binned_XYY[:, bins:]
+        ]
+
+        reward_bin = bins // 2
+
+        if condition == 'AA':
+            titles = ['A1', 'A2']
+        elif condition == 'BB':
+            titles = ['B1', 'B2']
+        else:
+            titles = ['Y1', 'Y2']
+
+        for ax, data, title in zip(axes, lm_data, titles):
+            im = ax.imshow(data, aspect='auto', cmap='viridis', vmin=vmin, vmax=vmax, interpolation='none')
+            ax.axvline(reward_bin, linestyle='--', color='white', linewidth=1)
+
+            ax.set_xticks([0, bins - 1])
+            ax.set_xticklabels(['entry', 'exit'], rotation=0)
+            # ax.set_xticklabels([f'{title} entry', f'{title} exit'], rotation=0)
+
+            ax.set_title(title)
+            # ax.set_xlabel('Time bins')
+
+        # Y axis (shared)
+        axes[0].set_ylabel('Neurons', labelpad=-5)
+        axes[0].set_yticks([0, len(neurons) - 1])
+        axes[0].set_yticklabels([0, len(neurons)])
+
+        # Single colorbar
+        cax = fig.add_axes([0.97, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+        cb = fig.colorbar(im, cax=cax)
+        cb.set_label('z-scored dF/F')
+        cb.set_ticks([vmin, 0, vmax])
+        cb.set_ticklabels([np.round(vmin,1), 0, np.round(vmax,1)])
+
+
+        fig.tight_layout()
 
     # Collect all data into a dict - maintain similar structure to get_spatial_and_temporal_ABB_binning
     binned_XYY_phase_activity = {}

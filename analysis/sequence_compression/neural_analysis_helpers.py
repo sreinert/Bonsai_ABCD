@@ -2023,20 +2023,20 @@ def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoal
             else:
                 if (real_scores[cell] > 1) & (np.abs(real_scores[cell] - np.median(shuffled_scores[cell])) > 0.5):
                     goal_progress_tuned.append(cell)
-
-        # Plot firing rates for goal progress tuned cells
-        if plot:
-            for cell in goal_progress_tuned:
-                _ = cellTV.extract_arb_progress(dF, cell, session, event_frames, ngoals=ngoals, 
-                                                bins=bins, period=period, stage=t, 
-                                                plot=plot, shuffle=False)
-
+        
         # Save these neurons
         np.savez(os.path.join(save_path, filename), 
                  goal_progress_tuned=np.array(goal_progress_tuned), 
                  real_scores=np.array(real_scores), 
                  shuffled_scores=np.array(shuffled_scores),
                  allow_pickle=True)
+
+    # Plot firing rates for goal progress tuned cells
+    if plot:
+        for cell in goal_progress_tuned:
+            _ = cellTV.extract_arb_progress(dF, cell, session, event_frames, ngoals=ngoals, 
+                                            bins=bins, period=period, stage=t, 
+                                            plot=plot, shuffle=False)
 
     print(f"{len(goal_progress_tuned)} out of {len(neurons)} tracked neurons are goal progress tuned in T{t}")
 

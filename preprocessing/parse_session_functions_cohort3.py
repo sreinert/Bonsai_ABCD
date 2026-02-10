@@ -19,6 +19,7 @@ np.set_printoptions(suppress=True, precision=2)
 
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
 import parse_nwb_functions as parse_nwb_functions
+importlib.reload(parse_nwb_functions)
 
 '''This is a copy of parse_bonsai_functions with new functions added.'''
 
@@ -802,6 +803,149 @@ def calc_speed_per_lap(sess_dataframe, ses_settings):
     sem_speed_per_bin = std_speed_per_bin/np.sqrt(num_laps)
 
     return speed_per_bin
+
+def calc_accel_per_lap_pre7(session, dt=1/45):
+    actual_num_laps = np.round((len(session['all_lms']) // session['num_landmarks']))
+    _, lm_exit_idx = get_lm_entry_exit(session)
+    lap_change_idx = lm_exit_idx[session['num_landmarks']-1::session['num_landmarks']]
+
+    x = 0
+    if '3' in session['stage'] or '4' in session['stage']:
+        bins = 15
+        binned_lms = []
+        binned_goals = []
+
+        # acceleration per lm
+        accel_per_bin = np.zeros((len(session['all_lms']), bins))
+        for i, idx in enumerate(lm_exit_idx):
+            lm_idx = np.arange(x, idx+1)
+
+            speed_per_lm = session['speed'][lm_idx]
+            pos_per_lm = session['position'][lm_idx]
+
+            # acceleration (speed derivative / dt)
+            accel = np.gradient(speed_per_lm) / dt
+            
+            accel_per_bin[i, :], bin_edges, _ = stats.binned_statistic(pos_per_lm, accel, bins=bins)
+            
+            # Bin goals and landmarks (as before)
+            if session['goals_idx'][0] == i:
+                binned_goals.append(np.digitize(session['goals'][0], bin_edges))
+            if i <= 1:
+                lm_bin = np.digitize(session['landmarks'][i], bin_edges)
+                lm_bin_shifted = lm_bin + i * bins
+                binned_lms.append(lm_bin_shifted)
+
+            x = idx + 1
+
+        # Split binned acceleration into goal and non-goal
+        min_len = min(len([session['goals_idx']][0]), len([session['non_goals_idx']][0]))
+        goal_accel = accel_per_bin[session['goals_idx'][:min_len], :]
+        non_goal_accel = accel_per_bin[session['non_goals_idx'][:min_len], :]
+        accel_per_bin = np.column_stack((goal_accel, non_goal_accel))
+
+    else:
+        bins = 120
+        accel_per_bin = np.zeros((actual_num_laps, bins))
+
+        for i, idx in enumerate(lap_change_idx):
+            lap_idx = np.arange(x, idx+1)
+
+            speed_per_lap = session['speed'][lap_idx]
+            pos_per_lap = session['position'][lap_idx] 
+
+            # acceleration
+            accel = np.gradient(speed_per_lap) / dt
+            accel_per_bin[i, :], bin_edges, _ = stats.binned_statistic(pos_per_lap, accel, bins=bins)
+        
+            x = idx + 1
+
+    av_accel_per_bin = np.nanmean(accel_per_bin, axis=0)
+    std_accel_per_bin = np.nanstd(accel_per_bin, axis=0)
+    sem_accel_per_bin = std_accel_per_bin / np.sqrt(actual_num_laps)
+
+    session['accel_per_bin'] = av_accel_per_bin
+    session['sem_accel_per_bin'] = sem_accel_per_bin
+
+    return session
+
+def calc_decel_per_lap_pre7(session, dt=1/45):
+    # TODO this doens't work as it should
+    actual_num_laps = np.round((len(session['all_lms']) // session['num_landmarks']))
+    _, lm_exit_idx = get_lm_entry_exit(session)
+    lap_change_idx = lm_exit_idx[session['num_landmarks']-1::session['num_landmarks']]
+
+    x = 0
+    if '3' in session['stage'] or '4' in session['stage']:
+        bins = 15
+        binned_lms = []
+        binned_goals = []
+
+        # decel per lm
+        decel_per_bin = np.zeros((len(session['all_lms']), bins))
+        for i, idx in enumerate(lm_exit_idx):
+            lm_idx = np.arange(x, idx+1)
+
+            speed_per_lm = session['speed'][lm_idx]
+            pos_per_lm = session['position'][lm_idx]
+
+            # acceleration (speed derivative / dt)
+            accel = np.gradient(speed_per_lm) / dt
+            # keep only deceleration (negative accel)
+            decel = np.where(accel < 0, accel, np.nan)
+
+            decel_per_bin[i, :], bin_edges, _ = stats.binned_statistic(pos_per_lm, decel, bins=bins)
+            
+            # Bin goals and landmarks (as before)
+            if session['goals_idx'][0] == i:
+                binned_goals.append(np.digitize(session['goals'][0], bin_edges))
+            if i <= 1:
+                lm_bin = np.digitize(session['landmarks'][i], bin_edges)
+                lm_bin_shifted = lm_bin + i * bins
+                binned_lms.append(lm_bin_shifted)
+
+            x = idx + 1
+
+        # Split binned decel into goal and non-goal
+        min_len = min(len([session['goals_idx']][0]), len([session['non_goals_idx']][0]))
+        goal_decel = decel_per_bin[session['goals_idx'][:min_len], :]
+        non_goal_decel = decel_per_bin[session['non_goals_idx'][:min_len], :]
+        decel_per_bin = np.column_stack((goal_decel, non_goal_decel))
+
+    else:
+        bins = 120
+        bin_edges = np.linspace(0, session['position'].max(), bins+1)
+        decel_per_bin = np.zeros((actual_num_laps, bins))
+
+        for i, idx in enumerate(lap_change_idx):
+            lap_idx = np.arange(x, idx+1)
+
+            speed_per_lap = session['speed'][lap_idx]
+            pos_per_lap = session['position'][lap_idx] 
+
+            # acceleration
+            decel = np.gradient(speed_per_lap) / dt
+
+            bin_ix = np.digitize(pos_per_lap, bin_edges)
+            for j in range(bins):
+                # Average speed per bin
+                # Average deceleration per bin (negative values)
+                decel_per_bin[i, j] = np.nanmean(decel[bin_ix == j])
+        
+            # decel = np.where(decel < 0, -decel, np.nan)
+
+            # decel_per_bin[i, :], bin_edges, _ = stats.binned_statistic(pos_per_lap, decel, bins=bins)
+        
+            x = idx + 1
+
+    av_decel_per_bin = np.nanmean(decel_per_bin, axis=0)
+    std_decel_per_bin = np.nanstd(decel_per_bin, axis=0)
+    sem_decel_per_bin = std_decel_per_bin / np.sqrt(actual_num_laps)
+
+    session['decel_per_bin'] = av_decel_per_bin
+    session['sem_decel_per_bin'] = sem_decel_per_bin
+
+    return session
 
 def calc_speed_per_lm(session):
     '''Calculate average speed per landmark'''
@@ -1962,6 +2106,9 @@ def create_session_struct_npz(data, ses_settings, world):
 
     tunnel_length = calculate_corr_length(ses_settings)
     lick_threshold = ses_settings['velocityThreshold']
+    # transform bonsai speed to that computed using analog position
+    bonsai_speed_factor = 0.10 # TODO compute here 
+    lick_threshold = lick_threshold / bonsai_speed_factor
 
     session = {'position': position,
                'licks': licks, 
@@ -2006,19 +2153,20 @@ def create_session_struct(sess_dataframe, ses_settings, world):
     
     return session
 
-def get_behaviour(session, sess_dataframe, ses_settings):
+def get_behaviour(session, sess_dataframe, ses_settings, plot=True):
     transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe, ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
     state_id = give_state_id(sess_dataframe, ses_settings)
 
-    if int(session['stage'][-1]) > 6:
-        print('Plotting the lick and speed profile for the 2 and 3 lap sequences.')
-        plot_licks_per_state(sess_dataframe, ses_settings)
-        plot_speed_per_state(sess_dataframe, ses_settings)
+    if plot:
+        if int(session['stage'][-1]) > 6:
+            print('Plotting the lick and speed profile for the 2 and 3 lap sequences.')
+            plot_licks_per_state(sess_dataframe, ses_settings)
+            plot_speed_per_state(sess_dataframe, ses_settings)
 
-    if session['world'] == 'stable':
-        _ = plot_lick_maps(session)
-        plot_speed_profile(session)
+        if session['world'] == 'stable':
+            _ = plot_lick_maps(session)
+            _ = plot_speed_profile(session)
     
     session['transition_prob'] = transition_prob
     session['control_prob'] = control_prob
@@ -2028,7 +2176,7 @@ def get_behaviour(session, sess_dataframe, ses_settings):
 
     return session
 
-def analyse_npz_pre7(mouse, session_id, root, stage, world='stable'):
+def analyse_npz_pre7(mouse, session_id, root, stage, world='stable', plot=True):
     '''Wrapper for session analysis'''
 
     if '3' not in stage and '4' not in stage and '5' not in stage and '6' not in stage:
@@ -2073,13 +2221,13 @@ def analyse_npz_pre7(mouse, session_id, root, stage, world='stable'):
     session = get_landmark_category_rew_idx(session)
 
     # Get behaviour
-    session = get_behaviour(session, sess_dataframe, ses_settings)
+    session = get_behaviour(session, sess_dataframe, ses_settings, plot)
 
     print('Number of laps = ', session['num_laps'])
     
     return session
 
-def analyse_session_pre7_behav(session_path, mouse, stage, world='stable'):
+def analyse_session_pre7_behav(session_path, mouse, stage, world='stable', plot=True):
     '''Wrapper for session analysis using behaviour data'''
 
     if '3' not in stage and '4' not in stage and '5' not in stage and '6' not in stage:
@@ -2089,7 +2237,7 @@ def analyse_session_pre7_behav(session_path, mouse, stage, world='stable'):
     sess_dataframe = load_data(session_path)
 
     session = create_session_struct(sess_dataframe, ses_settings, world=world)
-    session = get_landmark_positions(session, sess_dataframe, ses_settings, data='pd')
+    session = get_landmark_positions(session, sess_dataframe, ses_settings, data='odour')
     session = get_goal_positions(session, sess_dataframe, ses_settings)
 
     session['mouse'] = mouse
@@ -2118,7 +2266,7 @@ def analyse_session_pre7_behav(session_path, mouse, stage, world='stable'):
     session = get_landmark_category_rew_idx(session)
 
     # Get behaviour
-    session = get_behaviour(session, sess_dataframe, ses_settings)
+    session = get_behaviour(session, sess_dataframe, ses_settings, plot)
 
     print('Number of laps = ', session['num_laps'])
     
@@ -2662,7 +2810,7 @@ def plot_lick_maps(session):
     
     plt.tight_layout()
 
-def plot_speed_profile(session):
+def plot_speed_profile(session, plot_threshold=False):
     '''Plot the speed profile per landmark'''
     session = calc_speed_per_lm(session)
 
@@ -2672,31 +2820,143 @@ def plot_speed_profile(session):
     elif stage == 4:
         color = '#9E664C'
     elif stage == 5:
-        color = 'blue'
+        color = ['darkgreen', 'yellowgreen'] #'blue'
     elif stage == 6:
-        color = 'orange'
+        color = ['darkred', 'tomato'] #'orange'
     elif stage == 8:
         color = 'red'
     else: 
         color = 'black'
 
     if session['num_landmarks'] == 2:
-        _, ax = plt.subplots(1, 1, figsize=(8,3), sharex=False, sharey=False)
+        fig, ax = plt.subplots(1, 1, figsize=(8,3), sharex=False, sharey=False)
     else:
-        _, ax = plt.subplots(1, 1, figsize=(10,3))
-    ax.plot(session['speed_per_bin'], color=color)
+        fig, ax = plt.subplots(1, 1, figsize=(10,3))
+    ax.plot(session['speed_per_bin'], color=color[0], label='speed')
     ax.fill_between(range(len(session['speed_per_bin'])),
                     session['speed_per_bin'] - session['sem_speed_per_bin'],
                     session['speed_per_bin'] + session['sem_speed_per_bin'],
-                    color=color, alpha=0.3)
+                    color=color[0], alpha=0.3)
+
+    if plot_threshold:
+        ax.axhline(session['lick_threshold'], color='grey', linestyle='--', linewidth=2, label='speed threshold')
+        ax.legend(loc='lower right')
 
     for lm in session['binned_lms']:
-        ax.add_patch(patches.Rectangle((lm[0],0), np.diff(lm)[0], ax.get_ylim()[1], color='grey', alpha=0.3))
+        ax.axvspan(lm[0], lm[1], color='grey', alpha=0.3)
     for goal in session['binned_goals']:
-        ax.add_patch(patches.Rectangle((goal[0],0), np.diff(goal)[0], ax.get_ylim()[1], color='grey', alpha=0.5))
-    ax.set_xlabel('Landmark')
-    ax.set_ylabel('Speed (cm/s)')
+        ax.axvspan(goal[0], goal[1], color='grey', alpha=0.5)
+    ax.set_xlabel('Landmark', fontsize=10)
+    ax.set_ylabel('Speed (cm/s)', fontsize=10)
+
+    tick_labels = np.arange(1,11)
+    tick_positions = [(lm[0] + (lm[1]-lm[0])/2) for lm in session['binned_lms']]
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels, rotation=0, fontsize=10)
+    for i, label in enumerate(ax.get_xticklabels()):
+        if i in [1,3,5,7]:  
+            label.set_color('#1E2985')
+        elif i in [0,2,4,6,8]:
+            label.set_color('#9D1DA3')
+        elif i == 9:
+            label.set_color('darkorange')
+            
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
+    plt.tight_layout()
 
-    return
+    return fig
+
+def plot_acceleration_profile(session, data='acceleration'):
+
+    if data == 'acceleration':
+        if 'accel_per_bin' not in session:
+            session = calc_accel_per_lap_pre7(session)
+        avg_data = session['accel_per_bin']
+        sem_data = session['sem_accel_per_bin']
+        label = 'Acceleration (cm/s^2)'
+
+    elif data == 'deceleration':
+        if 'decel_per_bin' not in session:
+            session = calc_decel_per_lap_pre7(session)
+        avg_data = session['decel_per_bin']
+        sem_data = session['sem_decel_per_bin']
+        label = 'Deceleration (cm/s^2)'
+
+    elif data == 'both':
+        if 'accel_per_bin' not in session:
+            session = calc_accel_per_lap_pre7(session)
+        if 'decel_per_bin' not in session:
+            session = calc_decel_per_lap_pre7(session)
+        avg_data1 = session['accel_per_bin']
+        sem_data1 = session['sem_accel_per_bin']
+        avg_data2 = session['decel_per_bin']
+        sem_data2 = session['sem_decel_per_bin']
+        label1 = 'Acceleration (cm/s^2)'
+        label2 = 'Deceleration (cm/s^2)'
+
+    stage = extract_int(session['stage'])
+    if stage == 3:
+        color = '#325235'
+    elif stage == 4:
+        color = '#9E664C'
+    elif stage == 5:
+        color = ['darkgreen', 'yellowgreen'] #'blue'
+    elif stage == 6:
+        color = ['darkred', 'tomato'] #'orange'
+    elif stage == 8:
+        color = 'red'
+    else: 
+        color = 'black'
+
+    if session['num_landmarks'] == 2:
+        fig, ax = plt.subplots(1, 1, figsize=(8,3), sharex=False, sharey=False)
+    else:
+        fig, ax = plt.subplots(1, 1, figsize=(10,3))
+
+    if data == 'both':
+        ax.plot(avg_data1, color=color[0], label=label1)
+        ax.plot(avg_data2, color=color[1], label=label2)
+        ax.fill_between(range(len(avg_data1)),
+                        avg_data1 - sem_data1,
+                        avg_data1 + sem_data1,
+                        color=color[0], alpha=0.3)
+        ax.fill_between(range(len(avg_data2)),
+                        avg_data2 - sem_data2,
+                        avg_data2 + sem_data2,
+                        color=color[1], alpha=0.3)
+    else:
+        ax.plot(avg_data, color=color[0])
+        ax.axhline(y=0, color='grey', linestyle='--', linewidth=2)
+        ax.fill_between(range(len(avg_data)),
+                        avg_data - sem_data,
+                        avg_data + sem_data,
+                        color=color[0], alpha=0.3)
+
+    for lm in session['binned_lms']:
+        ax.axvspan(lm[0], lm[1], color='grey', alpha=0.3)
+    for goal in session['binned_goals']:
+        ax.axvspan(goal[0], goal[1], color='grey', alpha=0.5)
+    ax.set_xlabel('Landmark', fontsize=10)
+    if data != 'both':
+        ax.set_ylabel(label, fontsize=10)
+    else:
+        ax.legend(loc='upper left')
+
+    tick_labels = np.arange(1,11)
+    tick_positions = [(lm[0] + (lm[1]-lm[0])/2) for lm in session['binned_lms']]
+    ax.set_xticks(tick_positions)
+    ax.set_xticklabels(tick_labels, rotation=0, fontsize=10)
+    for i, label in enumerate(ax.get_xticklabels()):
+        if i in [1,3,5,7]:  
+            label.set_color('#1E2985')
+        elif i in [0,2,4,6,8]:
+            label.set_color('#9D1DA3')
+        elif i == 9:
+            label.set_color('darkorange')
+
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    plt.tight_layout()
+
+    return fig

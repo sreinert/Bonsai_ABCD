@@ -23,7 +23,7 @@ def get_session_folders(base_path,mouse,stage):
     Get the session folders for a given mouse and state.
     """
     mouse_path = os.path.join(base_path, mouse)
-    session_folder = [f for f in os.listdir(mouse_path) if stage in f][0]
+    session_folder = [f for f in os.listdir(mouse_path) if stage in f and 'ses' in f][0]
     session_path = os.path.join(mouse_path, session_folder)
     date = session_folder.split('_')[1]
     date1 = date[7:]
