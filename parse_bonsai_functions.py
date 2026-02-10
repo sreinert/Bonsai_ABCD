@@ -1360,12 +1360,14 @@ def plot_licks_per_state(sess_dataframe, ses_settings):
     plt.title('Licks per State/Lap')
     plt.show()
 
-def plot_polar_licks_per_state(sess_dataframe, ses_settings):
+def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
     n_landmarks = ses_settings.get('n_landmarks', 10)  # ADD THIS LINE
     
     state_id = give_state_id(sess_dataframe,ses_settings)
     hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
+
+    state_output = {}
     
     # Replaced instances harcoded for 10 LMs with n_landmarks
     if licked_all.shape[0] % n_landmarks != 0:
@@ -1381,6 +1383,8 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings):
         state2_hist = np.append(state2_hist,state2_hist[0])
         state1_hist = np.interp(np.linspace(0,len(state1_hist)-1,100),np.arange(len(state1_hist)),state1_hist)
         state2_hist = np.interp(np.linspace(0,len(state2_hist)-1,100),np.arange(len(state2_hist)),state2_hist)
+        state_output['Lap1'] = state1_hist
+        state_output['Lap2'] = state2_hist
     elif laps_needed == 3:
         state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
         state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
@@ -1394,24 +1398,31 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings):
         state1_hist = np.interp(np.linspace(0,len(state1_hist)-1,100),np.arange(len(state1_hist)),state1_hist)
         state2_hist = np.interp(np.linspace(0,len(state2_hist)-1,100),np.arange(len(state2_hist)),state2_hist)
         state3_hist = np.interp(np.linspace(0,len(state3_hist)-1,100),np.arange(len(state3_hist)),state3_hist)
+        state_output['Lap1'] = state1_hist
+        state_output['Lap2'] = state2_hist
+        state_output['Lap3'] = state3_hist
 
     # Replaced instances harcoded for 10 LMs with n_landmarks
     angles = np.linspace(0, 2 * np.pi, len(state1_hist)-1, endpoint=False)
     angles = np.concatenate((angles, [angles[0]]))
+    
+    if plot:
+        plt.figure(figsize=(4,4))
+        ax = plt.subplot(111, polar=True)
+        ax.plot(angles, state1_hist, label='Lap1', color='g')
+        ax.plot(angles, state2_hist, label='Lap2', color='r')
+        if laps_needed == 3:
+            ax.plot(angles, state3_hist, label='Lap3', color='y')
+        ax.set_xticks(np.linspace(0, 2*np.pi, n_landmarks,endpoint=False))  # Replace 10 with n_landmarks
+        ax.set_xticklabels([f'LM {i+1}' for i in range(n_landmarks)])  # Replace 10 with n_landmarks
+        ax.set_title('Polar Plot of Licks per State/Lap')
+        ax.set_theta_zero_location('N')
+        ax.set_theta_direction(-1)
+        ax.legend(loc='upper right')
+    
+        plt.show()
 
-    plt.figure(figsize=(4,4))
-    ax = plt.subplot(111, polar=True)
-    ax.plot(angles, state1_hist, label='Lap1', color='g')
-    ax.plot(angles, state2_hist, label='Lap2', color='r')
-    if laps_needed == 3:
-        ax.plot(angles, state3_hist, label='Lap3', color='y')
-    ax.set_xticks(np.linspace(0, 2*np.pi, n_landmarks,endpoint=False))  # Replace 10 with n_landmarks
-    ax.set_xticklabels([f'LM {i+1}' for i in range(n_landmarks)])  # Replace 10 with n_landmarks
-    ax.set_title('Polar Plot of Licks per State/Lap')
-    ax.set_theta_zero_location('N')
-    ax.set_theta_direction(-1)
-    ax.legend(loc='upper right')
-    plt.show()
+    return state_output
 
 def calc_speed_per_lap(sess_dataframe, ses_settings):
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
