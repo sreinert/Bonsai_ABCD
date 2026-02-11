@@ -17,8 +17,8 @@ module load mamba
 source activate bonsai_abcd 
 
 PAIRS=(
-    "mouse=TAA0000059, cohort=2 t3:t3 t4:t4"
-    "mouse=TAA0000066, cohort=2 t3:t3 t4:t4"
+    "mouse=TAA0000059 cohort=2 t3:t3 t4:t4"
+    "mouse=TAA0000066 cohort=2 t3:t3 t4:t4"
 )
 
 for ENTRY in "${PAIRS[@]}"; do
@@ -32,9 +32,9 @@ for ENTRY in "${PAIRS[@]}"; do
         session="${session_t%%:*}"
         stage="${session_t##*:}"
 
-        echo "Extracting goal progress for mouse=$mouse session=$session stage=$stage cohort=$cohort"
+        echo "Fitting CPA for mouse=$mouse session=$session stage=$stage cohort=$cohort"
 
-        python get_goal_progress_neurons.py \
+        python fit_cpa_yy_diff.py \
             --mouse "$mouse" \
             --session "$session" \
             --stage "$stage" \
