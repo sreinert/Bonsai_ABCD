@@ -755,6 +755,75 @@ def give_state_id(sess_dataframe, ses_settings):
 
     return state_id
 
+def give_state_id_npz(session,ses_settings):
+    goals = session['goal_ids']
+    laps_needed = calc_laps_needed(ses_settings)
+    rewarded_all = session['rewarded_lms']
+    n_landmarks = session['num_landmarks']
+    if rewarded_all.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by n_landmarks
+        rewarded_all = np.pad(rewarded_all, (0, n_landmarks - (rewarded_all.shape[0] % n_landmarks)), 'constant')
+    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+
+    num_laps = session['num_laps']
+
+    state_id = np.zeros(len(rewarded_all_reshaped), dtype=int)
+    state_id[0] = 0
+
+    if laps_needed == 2:
+        flips = np.where(np.diff(goals) < 0)[0]
+        if len(flips) == 2:
+            defining_goal_1 = goals[flips[0]]
+            defining_goal_2 = goals[flips[1]]
+        else:
+            defining_goal_1 = goals[flips[0]]
+            if goals[-1] - goals[0] > 0:
+                defining_goal_2 = goals[-1]
+            else:
+                defining_goal_2 = goals[2]
+
+        for i in range(0,num_laps-1):
+            if rewarded_all_reshaped[i,defining_goal_1] == 1:
+                state_id[i+1] = 1
+
+            if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
+                state_id[i+1] = 0
+            elif state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 0:
+                state_id[i+1] = state_id[i]
+
+    elif laps_needed == 3:
+        flips = np.where(np.diff(goals) < 0)[0]
+        if len(flips) == 3:
+            defining_goal_1 = goals[flips[0]]
+            defining_goal_2 = goals[flips[1]]
+            defining_goal_3 = goals[flips[2]]
+        else:
+            defining_goal_1 = goals[flips[0]]
+            defining_goal_2 = goals[flips[1]]
+            if goals[-1] - goals[0] > 0:
+                defining_goal_3 = goals[-1]
+            else:
+                defining_goal_3 = goals[2]
+
+        for i in range(0,num_laps-1):
+            if rewarded_all_reshaped[i,defining_goal_1] == 1:
+                state_id[i+1] = 1
+
+            if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
+                state_id[i+1] = 2
+            elif state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 0:
+                state_id[i+1] = state_id[i]
+            elif state_id[i]==2 and rewarded_all_reshaped[i,defining_goal_3] == 1:
+                state_id[i+1] = 0
+            elif state_id[i]==2 and rewarded_all_reshaped[i,defining_goal_3] == 0:
+                state_id[i+1] = state_id[i]
+
+    session['laps_needed'] = laps_needed
+    session['state_id'] = state_id
+    session['num_laps'] = len(state_id)
+
+    return session
+
 def calc_speed_per_lap(sess_dataframe, ses_settings):
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
     # max position is the max of all positions where lap id is 0
@@ -1273,19 +1342,20 @@ def get_licks_per_lap(session):
 
 def get_licked_lms(session):
     # Get licked landmarks
-    licked_lms = np.zeros((session['num_laps'], len(session['landmarks'])))
-    
+    licked_lms = np.zeros((session['num_laps'], session['num_landmarks']))
+    if 'thresholded_licks' in session:
+        licks = np.where(session['thresholded_licks']>0)[0]
+    else:
+        licks = np.where(session['licks']>0)[0]
+        
     for i in range(session['num_laps']):
         lap_idx = np.where(session['lap_idx'] == i)[0]
-        for j in range(len(session['landmarks'])):
-            lm = np.where(session['lm_idx'] == j+1)[0]
+        for j in range(session['num_landmarks']):
+            lm = np.where(session['lm_idx'] == j+1+session['num_landmarks']*i)[0]
             target_ix = np.intersect1d(lap_idx, lm)
             # if session['thresholded_licks'] exists, use that
-            if 'thresholded_licks' in session:
-                target_licks = np.intersect1d(target_ix, session['thresholded_licks'])
-            # otherwise use all licks
-            else:
-                target_licks = np.intersect1d(target_ix, session['licks'])
+            target_licks = np.intersect1d(target_ix, licks)
+
             if len(target_licks) > 0:
                 licked_lms[i,j] = 1
             else:
@@ -1295,14 +1365,43 @@ def get_licked_lms(session):
 
     return session
 
+def get_licks_rewards_npz(session):
+    licked_lms = np.zeros(len(session['all_lms']))
+    rewarded_lms = np.zeros(len(session['all_lms']))
+    if 'thresholded_licks' in session:
+        licks = np.where(session['thresholded_licks']>0)[0]
+    else:
+        licks = np.where(session['licks']>0)[0]
+    rewards = session['rewards']
+    for i in range(len(session['all_lms'])):
+        lm = np.where(session['lm_idx'] == i+1)[0]
+        target_ix = lm
+        target_licks = np.intersect1d(target_ix, licks)
+        target_rewards = np.intersect1d(target_ix, rewards)
+
+        if len(target_licks) > 0:
+            licked_lms[i] = 1
+        else:
+            licked_lms[i] = 0
+
+        if len(target_rewards) > 0:
+            rewarded_lms[i] = 1
+        else:
+            rewarded_lms[i] = 0
+
+    session['licked_lms'] = licked_lms
+    session['rewarded_lms'] = rewarded_lms
+
+    return session
+
 def get_rewarded_lms(session):
     # Get rewarded landmarks
-    rewarded_lms = np.zeros((session['num_laps'], len(session['landmarks'])))
+    rewarded_lms = np.zeros((session['num_laps'], session['num_landmarks']))
     
     for i in range(session['num_laps']):
         lap_idx = np.where(session['lap_idx'] == i)[0]
-        for j in range(len(session['landmarks'])):
-            lm = np.where(session['lm_idx'] == j+1)[0]
+        for j in range(session['num_landmarks']):
+            lm = np.where(session['lm_idx'] == j+1+session['num_landmarks']*i)[0]
             target_ix = np.intersect1d(lap_idx, lm)
             target_rewards = np.intersect1d(target_ix, session['rewards'])
             if len(target_rewards) > 0:
@@ -1762,6 +1861,49 @@ def get_reward_idx(session):
 
     return session 
 
+def calc_conditional_probs_npz(session):
+
+    lm_ids = session['all_lms']
+    goals = session['goal_ids']
+    licked_all = session['licked_lms']
+    rewarded_all = session['rewarded_lms']
+
+    transition_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+    control_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+    ideal_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+    licked_lm_ix = np.where(licked_all == 1)[0]
+    all_lms = np.concatenate([lm_ids]* (licked_all.shape[0] // lm_ids.shape[0] + 1))[:licked_all.shape[0]]
+    controlled_lm_ix = np.where(np.isin(all_lms, goals))[0]
+    was_target = np.zeros_like(all_lms)
+    for i in range(all_lms.shape[0]):
+        if all_lms[i] in goals:
+            match_id = goals.index(all_lms[i])
+            was_target[i] = match_id + 1  #start from 1
+
+    for g in range(np.unique(goals).shape[0]):
+        goal = goals[g]
+        rewards = np.intersect1d(np.where(rewarded_all == 1)[0],np.where(all_lms == goal)[0])
+        for i,reward in enumerate(rewards):
+            if i == len(rewards)-1:
+                break
+            next_lick_index = licked_lm_ix[licked_lm_ix > reward][0]
+            next_control_index = controlled_lm_ix[controlled_lm_ix > reward][0]
+            next_lm = all_lms[next_lick_index].astype(int)
+            next_control_lm = all_lms[next_control_index].astype(int)
+            transition_prob[g,next_lm] += 1
+            control_prob[g,next_control_lm] += 1
+
+    for g in range(np.unique(goals).shape[0]):
+        next_goal = goals[g+1] if g+1 < len(goals) else goals[0]
+        ideal_prob[g,next_goal] += 1
+    
+    session['transition_prob'] = transition_prob
+    session['control_prob'] = control_prob
+    session['ideal_prob'] = ideal_prob
+
+    return session
+
+
 #%% ##### Analysis wrappers #####
 def create_session_struct_npz(data, ses_settings, world):
 
@@ -1840,6 +1982,49 @@ def get_behaviour(session, sess_dataframe, ses_settings):
     session['laps_needed'] = laps_needed
     session['state_id'] = state_id
 
+    return session
+
+def analyse_npz_sequences(mouse,session_id, behav_root, stage, world='stable'):
+    '''Wrapper for session analysis for sequence sessions (>T6)'''
+
+    session_path = parse_nwb_functions.find_base_path(mouse, session_id, behav_root)
+    ses_settings, _ = parse_nwb_functions.load_settings(session_path)
+    behav_data = load_session_npz(str(session_path))
+    with open(list((session_path / 'behav').glob('*.pkl'))[0], 'rb') as f:
+        sess_dataframe = pickle.load(f)
+
+    session = create_session_struct_npz(behav_data, ses_settings, world=world)
+    session = get_landmark_positions(session, sess_dataframe, ses_settings)
+    session = get_goal_positions(session, sess_dataframe, ses_settings)
+
+    session['mouse'] = mouse
+    session['session_id'] = session_id
+    # session['date'] = date
+    session['stage'] = stage
+    session['world'] = world
+
+    save_path = Path(session_path) / 'analysis'
+    save_path.mkdir(parents=True, exist_ok=True)
+    session['save_path'] = save_path
+    
+    session = get_lap_idx(session)
+    session = get_lm_idx(session)
+    session = get_licks_idx(session, lick_threshold=False) # thresholding is also performed here
+    session = get_licks_per_lap(session)
+    session = get_lms_visited(session, sess_dataframe, ses_settings)
+    session = get_licks_rewards_npz(session)
+    session = get_reward_idx(session)
+    session = calc_acceleration(session)
+    session = calculate_frame_lick_rate(session)
+    session['lm_entry'],session['lm_exit'] = get_lm_entry_exit(session)
+    session = calc_conditional_probs_npz(session)
+    session = give_state_id_npz(session,ses_settings)
+
+    # # Get behaviour
+    # session = get_behaviour(session, sess_dataframe, ses_settings)
+
+    print('Number of laps = ', session['num_laps'])
+    
     return session
 
 def analyse_npz_pre7(mouse, session_id, root, stage, world='stable'):
@@ -1969,6 +2154,118 @@ def plot_ethogram(sess_dataframe,ses_settings):
     plt.title('Session Data Overview')
     plt.legend()
     plt.show()
+
+
+def plot_ethogram_npz(session):
+    position = session['position']
+    speed = session['speed']
+    licks = session['licks']
+    rewards = session['rewards']
+    lms = session['lm_entry']
+    lap = session['lap_idx']
+
+    plt.figure(figsize=(12, 6))
+    plt.plot(position/np.max(position), label='Position', color='blue')
+    plt.plot(speed/np.max(speed), label='Treadmill Speed', color='purple')
+    plt.plot(lms, position[lms]/np.max(position), marker='o', linestyle='', label='Landmark Entries', color='red')
+    plt.plot(np.where(licks > 0)[0], position[licks > 0]/np.max(position), marker='o', linestyle='', label='Licks', color='orange')
+    plt.plot(rewards, position[rewards]/np.max(position), marker='o', linestyle='', label='Rewards', color='green')
+    plt.plot(lap/np.max(lap), label='Laps', color='brown')
+
+    plt.xlabel('Time (frames)')
+    plt.ylabel('Value')
+    plt.title('Session Data Overview')
+    plt.legend()
+    plt.show()
+
+def plot_binary_licks_npz(session):
+    n_landmarks = session['num_landmarks']
+    binary_licks = session['licked_lms']
+
+    if binary_licks.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by n_landmarks
+        binary_licks = np.pad(binary_licks, (0, n_landmarks - (binary_licks.shape[0] % n_landmarks)), 'constant')
+    binary_licks_reshaped = binary_licks.reshape(np.round(binary_licks.shape[0] / n_landmarks).astype(int), n_landmarks)
+
+    binary_rewards = session['rewarded_lms']
+    
+    if binary_rewards.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by n_landmarks
+        binary_rewards = np.pad(binary_rewards, (0, n_landmarks - (binary_rewards.shape[0] % n_landmarks)), 'constant')
+    binary_rewards_reshaped = binary_rewards.reshape(np.round(binary_rewards.shape[0] / n_landmarks).astype(int), n_landmarks)
+
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 2, 1)
+    sns.heatmap(binary_licks_reshaped, cmap='Reds', cbar_kws={'label': 'Licked (1) or Not (0)'})
+    plt.xlabel('Landmark ID')
+    plt.ylabel('Lap')
+    plt.title('Binary Lick Map (Licked Landmarks per Lap)')
+    plt.subplot(1, 2, 2)
+    sns.heatmap(binary_rewards_reshaped, cmap='Greens', cbar_kws={'label': 'Rewarded (1) or Not (0)'})
+    plt.xlabel('Landmark ID')
+    plt.ylabel('Lap')
+    plt.title('Binary Reward Map (Rewarded Landmarks per Lap)')
+    plt.tight_layout()
+    plt.show()
+
+def plot_cond_matrix_npz(session):
+    transition_prob = session['transition_prob']
+    transition_prob = transition_prob / np.sum(transition_prob, axis=1, keepdims=True)
+    control_prob = session['control_prob']
+    control_prob = control_prob / np.sum(control_prob, axis=1, keepdims=True)
+    ideal_prob = session['ideal_prob']
+
+    max_val = max(np.max(transition_prob), np.max(control_prob), np.max(ideal_prob))
+    n_goals = transition_prob.shape[0]
+    n_lms = transition_prob.shape[1]
+    if n_goals == 3:
+        y_labels = ['A', 'B', 'C']
+        x_labels = [str(i) for i in range(n_lms)]
+    elif n_goals == 4:
+        y_labels = ['A', 'B', 'C', 'D']
+        x_labels = [str(i) for i in range(n_lms)]
+    else:
+        y_labels = [str(i) for i in range(n_goals)]
+        x_labels = [str(i) for i in range(n_lms)]
+
+    plt.figure(figsize=(12, 5))
+    plt.subplot(1, 3, 1)
+    im = plt.imshow(transition_prob, cmap='viridis', interpolation='none')
+    plt.colorbar(im,fraction=0.02, pad=0.04)
+    plt.clim(0, max_val)
+    plt.title('Transition Probability Matrix (Licked)')
+    plt.xlabel('Next Landmark ID')
+    plt.xticks([i for i in range(n_lms)], x_labels)
+    plt.yticks([i for i in range(n_goals)], y_labels)
+    plt.ylabel('Goal ID')
+
+    plt.subplot(1, 3, 2)
+    im = plt.imshow(control_prob, cmap='viridis', interpolation='none')
+    plt.colorbar(im,fraction=0.02, pad=0.04)
+    plt.clim(0, max_val)
+    plt.title('Control Probability Matrix (All Targets)')
+    plt.xlabel('Next Landmark ID')
+    plt.xticks([i for i in range(n_lms)], x_labels)
+    plt.yticks([i for i in range(n_goals)], y_labels)
+    plt.ylabel('Goal ID')
+
+    plt.subplot(1, 3, 3)
+    im = plt.imshow(ideal_prob, cmap='viridis', interpolation='none')
+    plt.colorbar(im,fraction=0.02, pad=0.04)
+    plt.clim(0, max_val)
+    plt.title('Ideal Probability Matrix')
+    plt.xlabel('Next Landmark ID')
+    plt.xticks([i for i in range(n_lms)], x_labels)
+    plt.yticks([i for i in range(n_goals)], y_labels)
+    plt.ylabel('Goal ID')
+
+def plot_summary_npz(session):
+    plot_ethogram_npz(session)
+    plot_binary_licks_npz(session)
+    plot_speed_profile(session)
+    plot_cond_matrix_npz(session)
+    plot_licks_per_state_npz(session)
+
 
 def plot_transition_matrix(sess_dataframe,ses_settings):
 
@@ -2372,6 +2669,59 @@ def plot_licks_per_state(sess_dataframe, ses_settings):
     plt.legend()
     plt.title('Licks per State/Lap')
     plt.show()
+
+def plot_licks_per_state_npz(session):
+    state_id = session['state_id']
+    licked_all = session['licked_lms'].flatten()
+    n_landmarks = session['num_landmarks']
+
+    laps_needed = session['laps_needed']
+    if licked_all.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by 10
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+
+    if laps_needed == 2:
+        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
+        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
+
+        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+        state1_hist = np.append(state1_hist,state1_hist[0])
+        state2_hist = np.append(state2_hist,state2_hist[0])
+        state1_hist = np.interp(np.linspace(0,len(state1_hist)-1,100),np.arange(len(state1_hist)),state1_hist)
+        state2_hist = np.interp(np.linspace(0,len(state2_hist)-1,100),np.arange(len(state2_hist)),state2_hist)
+
+    elif laps_needed == 3:
+        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
+        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
+        state3_laps = licked_all_reshaped[np.where(state_id == 2)[0],:]
+
+        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+        state3_hist = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
+        state1_hist = np.append(state1_hist,state1_hist[0])
+        state2_hist = np.append(state2_hist,state2_hist[0])
+        state3_hist = np.append(state3_hist,state3_hist[0])
+        state1_hist = np.interp(np.linspace(0,len(state1_hist)-1,100),np.arange(len(state1_hist)),state1_hist)
+        state2_hist = np.interp(np.linspace(0,len(state2_hist)-1,100),np.arange(len(state2_hist)),state2_hist)
+        state3_hist = np.interp(np.linspace(0,len(state3_hist)-1,100),np.arange(len(state3_hist)),state3_hist)
+    
+    angles = np.linspace(0, 2 * np.pi, len(state1_hist)-1, endpoint=False)
+    angles = np.concatenate((angles, [angles[0]]))
+
+    plt.figure(figsize=(4,4))
+    ax = plt.subplot(111, polar=True)
+    ax.plot(angles, state1_hist, label='Lap1', color='g')
+    ax.plot(angles, state2_hist, label='Lap2', color='r')
+    if laps_needed == 3:
+        ax.plot(angles, state3_hist, label='Lap3', color='y')
+    ax.set_xticks(np.linspace(0, 2*np.pi, n_landmarks,endpoint=False))  # Replace 10 with n_landmarks
+    ax.set_xticklabels([f'LM {i+1}' for i in range(n_landmarks)])  # Replace 10 with n_landmarks
+    ax.set_title('Polar Plot of Licks per State/Lap')
+    ax.set_theta_zero_location('N')
+    ax.set_theta_direction(-1)
+    ax.legend(loc='upper right')
 
 def plot_speed_per_state(sess_dataframe, ses_settings):
 
