@@ -1,10 +1,9 @@
 # Bonsai_ABCD
 
-Small repo for parsing and plotting Bonsai VR behavioural sessions in the style of ABCD tasks.
+Small repo for parsing and plotting Bonsai VR behavioural sessions in the style of ABC/ABCD tasks.
 
-## Installation
-
-I recommend using the environment.yml file to create a new conda environment that directly copies mine. 
+## Installation (tested compatibility for use in Win and Mac OS)
+I recommend using the environment.yml file to create a new conda environment 
 
 ```console
 conda env create -f environment.yml
@@ -16,11 +15,25 @@ to activate the environment, run
 conda activate bonsai_abcd
 ```
 
-Alternatively, use the requirements.txt file to pip install the necessary packages.
+### Alternatively, 
+create a blank environment and install python 3.12:
 
 ```console
-python -m pip install -r requirements.txt
+conda create --name bonsai_abcd python=3.12
 ```
+
+activate it:
+
+```console
+conda activate bonsai_abcd
+```
+
+then use the requirements.txt file to pip install the necessary packages  
+
+```console
+pip install -r requirements.txt
+```
+
 
 ## Use
 
