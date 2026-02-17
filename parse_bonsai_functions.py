@@ -165,6 +165,7 @@ def load_data(base_path):
     sess_treadmill_data = treadmill_data[~treadmill_data.index.duplicated(keep='first')]
     sess_position_data = position_data[~position_data.index.duplicated(keep='first')]
     sess_reward_data = rewards_data[~rewards_data.index.duplicated(keep='first')]
+    sess_reward_data = sess_reward_data[sess_reward_data['Value'] != 'ManualReward']  # exclude experimenter-triggered rewards
     sess_buffer_data = buffer_data[~buffer_data.index.duplicated(keep='first')]
 
     if os.path.exists(Path(base_path) / "behav/current-landmark/"):
