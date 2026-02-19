@@ -19,6 +19,13 @@ class AnalogData(Reader):
         data = np.fromfile(file, dtype=np.float64)
         data = np.reshape(data, (-1, self.channels))
         return pd.DataFrame(data, columns=self.columns)
+    
+def get_trial_settings(ses_settings):
+    """Handle both old (dict) and new (list of dicts) trial settings format."""
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        return trial[0]['trial']
+    return trial
 
 def find_base_path(mouse,date,root):
     mouse_path = Path(root) / f"sub-{mouse}" 
@@ -121,13 +128,19 @@ def load_settings(base_path):
     
     # detect n_landmarks
     if 'n_landmarks' not in ses_settings:
-        if 'trial' in ses_settings and 'landmarks' in ses_settings['trial']:
-            ses_settings['n_landmarks'] = len(ses_settings['trial']['landmarks'])
+        if 'trial' in ses_settings:
+            trial = get_trial_settings(ses_settings)
+            if 'landmarks' in trial:
+                ses_settings['n_landmarks'] = len(trial['landmarks'])
+            else:
+                # fallback to 10 LMs
+                ses_settings['n_landmarks'] = 10
         else:
             # fallback to 10 LMs
             ses_settings['n_landmarks'] = 10
     
     return ses_settings, rig_settings
+
 
 def load_data(base_path):
     events_reader = Csv("behav/experiment-events/*", ["Seconds", "Value"])
@@ -228,13 +241,15 @@ def get_event_parsed(sess_dataframe, ses_settings):
     return lick_position, lick_times, reward_times, reward_positions, release_df
 
 def parse_rew_lms(ses_settings):
+    trial = get_trial_settings(ses_settings)
+
     rew_odour = []
     rew_texture = []
     non_rew_odour = []
     non_rew_texture = []
     index = []
 
-    for i in ses_settings['trial']['landmarks']:
+    for i in trial['landmarks']:
         for j in i:
             if j['rewardSequencePosition'] > -1:
                 if not np.isin(j['rewardSequencePosition'], index): # avoid double counting of odours
@@ -254,14 +269,16 @@ def parse_rew_lms(ses_settings):
     return rew_odour, rew_texture, non_rew_odour, non_rew_texture
 
 def parse_stable_goal_ids(ses_settings):
-    num_lms = len(ses_settings['trial']['landmarks'])
+    trial = get_trial_settings(ses_settings)
+
+    num_lms = len(trial['landmarks'])
     num_goals = ses_settings['availableRewardPositions']
     lm_ids = np.arange(num_lms)
     goal_counter = 0
     goals = []
     while goal_counter < num_goals:
         for i in range(num_lms):
-            for j in ses_settings['trial']['landmarks'][i]:
+            for j in trial['landmarks'][i]:
                 if j['rewardSequencePosition'] == goal_counter:
                     goals.append(i)
                     goal_counter += 1
@@ -301,7 +318,8 @@ def plot_ethogram(sess_dataframe,ses_settings):
     plt.show()
 
 def calc_hit_fa(sess_dataframe, ses_settings):
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    trial = get_trial_settings(ses_settings)
+    lm_size = trial['landmarks'][0][0]['size']
 
     lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
 
@@ -1222,9 +1240,10 @@ def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
     plt.show()
 
 def calculate_corr_length(ses_settings):
-    landmarks = ses_settings['trial']['landmarks']
-    if len(ses_settings['trial']['offsets']) == 1:
-        offset = ses_settings['trial']['offsets'][0]
+    trial = get_trial_settings(ses_settings)
+    landmarks = trial['landmarks']
+    if len(trial['offsets']) == 1:
+        offset = trial['offsets'][0]
     else:
         print("Cannot compute corridor lengths when offsets are randomised")
 
@@ -1606,8 +1625,9 @@ def plot_sw_state_ratio(sess_dataframe, ses_settings):
     plt.show()
 
 def estimate_release_events(sess_dataframe, ses_settings):
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
-    lm_gap = lm_size + ses_settings['trial']['offsets'][0]
+    trial = get_trial_settings(ses_settings)
+    lm_size = trial['landmarks'][0][0]['size']
+    lm_gap = lm_size + trial['offsets'][0]
 
     tmp = sess_dataframe.reset_index(drop=False, inplace=False)
     release_subset = tmp[tmp['Events'].str.contains('release', na=False) & ~tmp['Events'].str.contains('odour0', na=False)][['Events', 'Position']]
@@ -1686,7 +1706,7 @@ def estimate_release_events(sess_dataframe, ses_settings):
 
     # Step 7: Add the first odour stimulus that VR ABCD forgot
     # sometimes the VR drops the first release event, check for that and add first element if needed
-    first_release = extract_int(ses_settings['trial']['landmarks'][0][0]['odour'])
+    first_release = extract_int(trial['landmarks'][0][0]['odour'])
     if first_release != result[0][3]:
         result = [[pd.NaT, 0, -1, first_release]] + result
 
