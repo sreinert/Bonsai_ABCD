@@ -1217,6 +1217,90 @@ def plot_full_corr(sess_dataframe,ses_settings):
     plt.tight_layout()
     plt.show()
 
+def plot_full_corr_probe(sess_dataframe,ses_settings):
+    n_landmarks = ses_settings.get('n_landmarks', 10)  # ADD THIS LINE
+    
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    num_goals = len(goals)
+    #if we're using lm_ids, then the goals are indicated by 0,1,2 instead of their position
+    goals = range(num_goals)  # Assuming goals are indexed from 0 to num_goals-1
+    all_lms = lm_id.flatten()
+    was_target = np.zeros_like(all_lms)
+    for i in range(all_lms.shape[0]):
+        if all_lms[i] in goals:
+            match_id = goals.index(all_lms[i])
+            was_target[i] = match_id + 1
+
+    # Replaced instances harcoded for 10 LMs with n_landmarks 
+    if licked_all.shape[0] % n_landmarks != 0:
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+    if rewarded_all.shape[0] % n_landmarks != 0:
+        rewarded_all = np.pad(rewarded_all, (0, n_landmarks - (rewarded_all.shape[0] % n_landmarks)), 'constant')
+    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+    if was_target.shape[0] % n_landmarks != 0:
+        was_target = np.pad(was_target, (0, n_landmarks - (was_target.shape[0] % n_landmarks)), 'constant')
+    was_target_reshaped = was_target.reshape(np.round(was_target.shape[0] / n_landmarks).astype(int), n_landmarks)
+    if all_lms.shape[0] % n_landmarks != 0:
+        all_lms = np.pad(all_lms, (0, n_landmarks - (all_lms.shape[0] % n_landmarks)), 'constant')
+    all_lms_reshaped = all_lms.reshape(np.round(all_lms.shape[0] / n_landmarks).astype(int), n_landmarks)
+
+    plt.figure(figsize=(10,6))
+    plt.subplot(3, 1, 1)
+    plt.imshow(was_target_reshaped, aspect='auto', cmap='viridis', interpolation='none')
+    plt.clim(0, len(goals))
+    plt.title('Landmark ID (Full Corridor)')
+    plt.colorbar()
+    plt.subplot(3, 1, 2)
+    plt.imshow(licked_all_reshaped, aspect='auto', cmap='viridis', interpolation='none')
+    plt.clim(0, 1)
+    plt.title('Licked All (Full Corridor)')
+    plt.colorbar()
+    plt.subplot(3, 1, 3)
+    plt.imshow(rewarded_all_reshaped, aspect='auto', cmap='viridis', interpolation='none')
+    plt.clim(0, 1)
+    plt.title('Rewarded All (Full Corridor)')
+    plt.colorbar()
+    plt.tight_layout()
+    plt.show()
+
+def identify_probe_laps(sess_dataframe, ses_settings):
+
+    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    trial_types = ses_settings['trial']
+    rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
+    num_landmarks = ses_settings.get('n_landmarks', 10)  # ADD THIS LINE
+
+    #for each trial extract the lm sequence
+    trial_type_seq = np.zeros((len(trial_types), len(trial_types[0]['trial']['landmarks'])), dtype=int)
+    for trial_ix,trial in enumerate(trial_types):
+        trial_lm_sequence = trial['trial']['landmarks']
+        ids = []
+        #check if the trial_lm_sequence is present in the lm_id sequence of the session dataframe
+        for i in trial_lm_sequence:
+            if i[0]['odour'] in rew_odour:
+                ids.append(np.where(rew_odour == i[0]['odour'])[0][0])
+            elif i[0]['odour'] in non_rew_odour:
+                ids.append(np.where(non_rew_odour == i[0]['odour'])[0][0] + len(rew_odour))
+        trial_type_seq[trial_ix, :len(ids)] = ids
+
+    if lm_id.shape[0] % num_landmarks != 0:
+        lm_id = np.pad(lm_id, (0, num_landmarks - (lm_id.shape[0] % num_landmarks)), 'constant')
+    lm_id_reshaped = lm_id.reshape(-1, num_landmarks)
+    
+    lap_type = np.zeros(lm_id_reshaped.shape[0])
+    for i in range(lm_id_reshaped.shape[0]):
+        for j in range(len(trial_type_seq)):
+            if np.array_equal(trial_type_seq[j,:], lm_id_reshaped[i,:]):
+                lap_type[i] = j
+    
+    return lap_type
+
+            
+
+
 def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
 
     target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
@@ -1343,6 +1427,31 @@ def give_state_id(sess_dataframe,ses_settings):
 
     return state_id
 
+def plot_licks_per_trialtype(sess_dataframe, ses_settings):
+    n_landmarks = ses_settings.get('n_landmarks', 10)  
+    
+    lap_id = identify_probe_laps(sess_dataframe, ses_settings)
+    state_id = give_state_id(sess_dataframe,ses_settings)
+    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    
+    # Replaced instances harcoded for 10 LMs with n_landmarks
+    if licked_all.shape[0] % n_landmarks != 0:
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+
+ 
+    for i in range(int(np.max(lap_id))+1):
+        plt.figure(figsize=(10,2))
+        for j in range(int(np.max(state_id))+1):
+            licks_per_state = licked_all_reshaped[np.where((lap_id == i) & (state_id == j))[0],:]
+            state_hist = np.sum(licks_per_state,axis=0)/licks_per_state.shape[0]
+            plt.plot(state_hist, label=f'Lap {i+1} State {j+1}')
+            plt.legend()
+            plt.xlabel('Landmark')
+            plt.ylabel('Fraction of Licks')
+            plt.title(f'Licks per State/Lap for Trial Type {i+1}')
+        plt.show()
 
 def plot_licks_per_state(sess_dataframe, ses_settings):
     n_landmarks = ses_settings.get('n_landmarks', 10)  
@@ -1833,6 +1942,8 @@ def sanity_check_parsing(sess_dataframe, ses_settings):
     plt.xlabel('Landmark Index')
     plt.ylabel('Lap')
     plt.show()
+
+    return event_ids
 
 def threshold_lick_speed(sess_dataframe, speed_threshold=0.3):
 
