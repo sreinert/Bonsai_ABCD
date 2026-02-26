@@ -139,6 +139,8 @@ def load_settings(base_path):
             # fallback to 10 LMs
             ses_settings['n_landmarks'] = 10
     
+    print(ses_settings.keys())
+    print(ses_settings)
     return ses_settings, rig_settings
 
 
@@ -685,21 +687,22 @@ def plot_conditional_matrix(sess_dataframe,ses_settings):
         x_labels = [str(i) for i in range(n_lms)]
 
     plt.figure(figsize=(12, 5))
+
     plt.subplot(1, 3, 1)
-    plt.imshow(transition_prob, cmap='viridis', interpolation='none')
+    plt.imshow(control_prob, cmap='viridis', interpolation='none')
     plt.colorbar()
     plt.clim(0, max_val)
-    plt.title('Transition Probability Matrix (Licked)')
+    plt.title('Control Probability Matrix (All Targets)')
     plt.xlabel('Next Landmark ID')
     plt.xticks([i for i in range(n_lms)], x_labels)
     plt.yticks([i for i in range(n_goals)], y_labels)
     plt.ylabel('Goal ID')
 
     plt.subplot(1, 3, 2)
-    plt.imshow(control_prob, cmap='viridis', interpolation='none')
+    plt.imshow(transition_prob, cmap='viridis', interpolation='none')
     plt.colorbar()
     plt.clim(0, max_val)
-    plt.title('Control Probability Matrix (All Targets)')
+    plt.title('Transition Probability Matrix (Licked)')
     plt.xlabel('Next Landmark ID')
     plt.xticks([i for i in range(n_lms)], x_labels)
     plt.yticks([i for i in range(n_goals)], y_labels)
@@ -881,14 +884,12 @@ def plot_seq_fraction(sess_dataframe, ses_settings, test='transition'):
     plt.ylim(0, 1)
     plt.ylabel('Fraction of Correct Transitions')
     plt.title('Sequencing Performance per Transition')
-    
+    plt.show()
 
     perf_str = ', '.join([f'{p*100:.2f}%' for p in perf_individual])
     ctrl_str = ', '.join([f'{p*100:.2f}%' for p in perf_ctrl_individual])
     print(f'True Sequencing Performance: {performance*100:.2f}% ({perf_str})')
     print(f'Control Performance: {perf_ctrl*100:.2f}% ({ctrl_str})')
-
-    plt.show()
 
 def safe_divide(a, b):
     a = np.asarray(a, dtype=float)
@@ -1314,9 +1315,6 @@ def identify_probe_laps(sess_dataframe, ses_settings):
     
     return lap_type
 
-            
-
-
 def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
 
     target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
@@ -1444,69 +1442,61 @@ def give_state_id(sess_dataframe,ses_settings):
     return state_id
 
 def plot_licks_per_trialtype(sess_dataframe, ses_settings):
-    n_landmarks = ses_settings.get('n_landmarks', 10)  
+    n_landmarks = ses_settings.get('n_landmarks', 10)
+    goal_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+    goal_colors = ['#7B2D5E', '#B5547A', '#E091B0', '#F5D0E3']
     
     lap_id = identify_probe_laps(sess_dataframe, ses_settings)
-    state_id = give_state_id(sess_dataframe,ses_settings)
-    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    state_id = give_state_id(sess_dataframe, ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
-    
-    # Replaced instances harcoded for 10 LMs with n_landmarks
+
     if licked_all.shape[0] % n_landmarks != 0:
         licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
     licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
 
- 
-    for i in range(int(np.max(lap_id))+1):
-        plt.figure(figsize=(10,2))
-        for j in range(int(np.max(state_id))+1):
-            licks_per_state = licked_all_reshaped[np.where((lap_id == i) & (state_id == j))[0],:]
-            state_hist = np.sum(licks_per_state,axis=0)/licks_per_state.shape[0]
-            plt.plot(state_hist, label=f'Lap {i+1} State {j+1}')
-            plt.legend()
-            plt.xlabel('Landmark')
-            plt.ylabel('Fraction of Licks')
-            plt.title(f'Licks per State/Lap for Trial Type {i+1}')
+    for i in range(int(np.max(lap_id)) + 1):
+        fig, ax = plt.subplots(figsize=(10, 3))
+
+        n_total = np.sum(lap_id == i)
+
+        for j in range(int(np.max(state_id)) + 1):
+            licks_per_state = licked_all_reshaped[np.where((lap_id == i) & (state_id == j))[0], :]
+            state_hist = np.sum(licks_per_state, axis=0) / licks_per_state.shape[0]
+            ax.plot(state_hist, label=f'Lap {i+1} State {j+1}')
+
+        trial_landmarks = ses_settings['trial'][i]['trial']['landmarks']
+        goals = {}  
+        for lm_idx, lm in enumerate(trial_landmarks):
+            for item in lm:
+                rsp = item.get('rewardSequencePosition', -1)
+                if rsp >= 0:
+                    goals[rsp] = lm_idx
+
+        ax.set_ylim(-0.35, 1.05)  # extends y to add space for goal id badges
+
+        for seq_pos, lm_idx in goals.items():
+            letter = goal_letters[seq_pos]
+            color = goal_colors[seq_pos % len(goal_colors)]
+            text_color = 'white' 
+            ax.plot(lm_idx, -0.18, marker='o', markersize=16,
+                    color=color, markeredgecolor='none',
+                    clip_on=False, zorder=5)
+            ax.text(lm_idx, -0.18, letter,
+                    ha='center', va='center', fontsize=7,
+                    fontweight='bold', color=text_color,
+                    clip_on=False, zorder=6)
+
+        ax.legend()
+        ax.set_xlabel('Landmark')
+        ax.set_ylabel('Fraction of Licks')
+        ax.set_title(f'Licks per State/Lap for Trial Type {i+1}\nn={n_total}', fontsize=10)
+
+        plt.tight_layout()
         plt.show()
 
-def plot_licks_per_state(sess_dataframe, ses_settings):
-    n_landmarks = ses_settings.get('n_landmarks', 10)  
-    
-    state_id = give_state_id(sess_dataframe,ses_settings)
-    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
-    laps_needed = calc_laps_needed(ses_settings)
-    
-    # Replaced instances harcoded for 10 LMs with n_landmarks
-    if licked_all.shape[0] % n_landmarks != 0:
-        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
-    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
-
-    if laps_needed == 2:
-        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
-        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
-        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
-        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
-    elif laps_needed == 3:
-        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
-        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
-        state3_laps = licked_all_reshaped[np.where(state_id == 2)[0],:]
-        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
-        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
-        state3_hist = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
-
-    plt.figure(figsize=(10,2))
-    plt.plot(state1_hist, label='Lap1', color='g')
-    plt.plot(state2_hist, label='Lap2', color='r')
-    if laps_needed == 3:
-        plt.plot(state3_hist, label='Lap3', color='y')
-    plt.xlabel('Landmark')
-    plt.ylabel('Fraction of Licks')
-    plt.legend()
-    plt.title('Licks per State/Lap')
-    plt.show()
-
 def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
-    n_landmarks = ses_settings.get('n_landmarks', 10)  # ADD THIS LINE
+    n_landmarks = ses_settings.get('n_landmarks', 10)  
     
     state_id = give_state_id(sess_dataframe,ses_settings)
     hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
@@ -1514,7 +1504,7 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
 
     state_output = {}
     
-    # Replaced instances harcoded for 10 LMs with n_landmarks
+    
     if licked_all.shape[0] % n_landmarks != 0:
         licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
     licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
@@ -1547,7 +1537,7 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
         state_output['Lap2'] = state2_hist
         state_output['Lap3'] = state3_hist
 
-    # Replaced instances harcoded for 10 LMs with n_landmarks
+   
     angles = np.linspace(0, 2 * np.pi, len(state1_hist)-1, endpoint=False)
     angles = np.concatenate((angles, [angles[0]]))
     
@@ -1572,7 +1562,7 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
 def calc_speed_per_lap(sess_dataframe, ses_settings):
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
-    #max position is the max of all positions where lap id is 0
+    
     max_position = sess_dataframe['Position'][sess_dataframe['Lap'] == 0].max()
     max_position = np.round(max_position).astype(int)
 
