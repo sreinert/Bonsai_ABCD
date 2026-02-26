@@ -855,24 +855,40 @@ def calc_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
     return performance, perf_a, perf_b, perf_c
 
-def plot_seq_fraction(sess_dataframe,ses_settings,test='transition'):
+def plot_seq_fraction(sess_dataframe, ses_settings, test='transition'):
 
-    performance, perf_a, perf_b, perf_c = calc_seq_fraction(sess_dataframe,ses_settings,test='transition')
-    perf_ctrl, perf_a_ctrl, perf_b_ctrl, perf_c_ctrl = calc_seq_fraction(sess_dataframe,ses_settings,test='control')
+    perf_results = calc_seq_fraction(sess_dataframe, ses_settings, test='transition')
+    performance = perf_results[0]
+    perf_a, perf_b, perf_c = perf_results[1], perf_results[2], perf_results[3]
+    perf_individual = perf_results[1:]
 
-    plt.figure(figsize=(6, 4))
-    plt.bar(['A->B', 'B->C', 'C->A'], [perf_a, perf_b, perf_c], color=['blue', 'orange', 'green'])
-    #add a dashed bar plot for control
-    plt.bar(['A->B', 'B->C', 'C->A'], [perf_a_ctrl, perf_b_ctrl, perf_c_ctrl], color=['blue', 'orange', 'green'], alpha=0.3, hatch='//')
+    perf_ctrl_results = calc_seq_fraction(sess_dataframe, ses_settings, test='control')
+    perf_ctrl = perf_ctrl_results[0]
+    perf_a_ctrl, perf_b_ctrl, perf_c_ctrl = perf_ctrl_results[1], perf_ctrl_results[2], perf_ctrl_results[3]
+    perf_ctrl_individual = perf_ctrl_results[1:]
+
+    labels = ['A→B', 'B→C', 'C→A']          
+    colors = ['blue', 'orange', 'green']
+    x_pos = np.arange(3)
+
+    plt.figure(figsize=(7, 4))               
+    
+    plt.bar(x_pos, [perf_a, perf_b, perf_c], color=colors, label='Licked')
+    plt.bar(x_pos, [perf_a_ctrl, perf_b_ctrl, perf_c_ctrl], 
+            color=colors, alpha=0.3, hatch='//', label='Control')    
+    
+    plt.xticks(x_pos, labels)                
     plt.ylim(0, 1)
     plt.ylabel('Fraction of Correct Transitions')
     plt.title('Sequencing Performance per Transition')
+    
+
+    perf_str = ', '.join([f'{p*100:.2f}%' for p in perf_individual])
+    ctrl_str = ', '.join([f'{p*100:.2f}%' for p in perf_ctrl_individual])
+    print(f'True Sequencing Performance: {performance*100:.2f}% ({perf_str})')
+    print(f'Control Performance: {perf_ctrl*100:.2f}% ({ctrl_str})')
+
     plt.show()
-
-    print(f'Sequencing Performance: {performance*100:.2f}%')
-    print(f'Control Performance: {perf_ctrl*100:.2f}%')
-
-    return performance
 
 def safe_divide(a, b):
     a = np.asarray(a, dtype=float)
