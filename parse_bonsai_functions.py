@@ -1495,6 +1495,42 @@ def plot_licks_per_trialtype(sess_dataframe, ses_settings):
         plt.tight_layout()
         plt.show()
 
+def plot_licks_per_state(sess_dataframe, ses_settings):
+    n_landmarks = ses_settings.get('n_landmarks', 10)  
+    
+    state_id = give_state_id(sess_dataframe,ses_settings)
+    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    
+    # Replaced instances harcoded for 10 LMs with n_landmarks
+    if licked_all.shape[0] % n_landmarks != 0:
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+
+    if laps_needed == 2:
+        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
+        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
+        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+    elif laps_needed == 3:
+        state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
+        state2_laps = licked_all_reshaped[np.where(state_id == 1)[0],:]
+        state3_laps = licked_all_reshaped[np.where(state_id == 2)[0],:]
+        state1_hist = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
+        state2_hist = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
+        state3_hist = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
+
+    plt.figure(figsize=(10,2))
+    plt.plot(state1_hist, label='Lap1', color='g')
+    plt.plot(state2_hist, label='Lap2', color='r')
+    if laps_needed == 3:
+        plt.plot(state3_hist, label='Lap3', color='y')
+    plt.xlabel('Landmark')
+    plt.ylabel('Fraction of Licks')
+    plt.legend()
+    plt.title('Licks per State/Lap')
+    plt.show()
+
 def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
     n_landmarks = ses_settings.get('n_landmarks', 10)  
     
