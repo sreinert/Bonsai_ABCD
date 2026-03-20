@@ -2023,21 +2023,21 @@ def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoal
         for cell in neurons:
             real_scores[cell], shuffled_scores[cell], _, _ = cellTV.calc_goal_tuningix(dF, cell, session, condition='arb', period=period, event_frames=event_frames, n_goals=ngoals, frame_rate=45, bins=bins, shuffle=shuffle, plot=False)
 
-            if ('sequence' in session) and ('shuffled' in session['sequence']):
-                if real_scores[cell] - np.median(shuffled_scores[cell]) > 0.07:
-                    goal_progress_tuned.append(cell)
-            else:
-                if (real_scores[cell] > 1) & (np.abs(real_scores[cell] - np.median(shuffled_scores[cell])) > 0.5):
-                    goal_progress_tuned.append(cell)
+            # if ('sequence' in session) and ('shuffled' in session['sequence']):
+            #     if real_scores[cell] - np.median(shuffled_scores[cell]) > 0.07:
+            #         goal_progress_tuned.append(cell)
+            # else:
+            if (real_scores[cell] > 1) & (np.abs(real_scores[cell] - np.median(shuffled_scores[cell])) > 0.5):
+                goal_progress_tuned.append(cell)
             # if (real_scores[cell] > 1.5):
             #     goal_progress_tuned.append(cell)
         
         # Save these neurons
-        # np.savez(os.path.join(save_path, filename), 
-        #          goal_progress_tuned=np.array(goal_progress_tuned), 
-        #          real_scores=np.array(real_scores), 
-        #          shuffled_scores=np.array(shuffled_scores),
-        #          allow_pickle=True)
+        np.savez(os.path.join(save_path, filename), 
+                 goal_progress_tuned=np.array(goal_progress_tuned), 
+                 real_scores=np.array(real_scores), 
+                 shuffled_scores=np.array(shuffled_scores),
+                 allow_pickle=True)
 
     # Plot firing rates for goal progress tuned cells
     if plot:

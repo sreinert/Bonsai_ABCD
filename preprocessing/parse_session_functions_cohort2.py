@@ -1791,6 +1791,10 @@ def analyse_npz_pre7(mouse, date, stage, plot=True):
     session['mouse'] = mouse
     session['date'] = date
     session['stage'] = stage
+
+    save_path = Path(base_path) / 'analysis'
+    save_path.mkdir(parents=True, exist_ok=True)
+    session['save_path'] = save_path
     
     session = get_num_landmarks(session, options)
     session = get_lap_idx(session)

@@ -917,7 +917,7 @@ def calc_goal_tuningix(dF, cell, session, condition='goal', period='goal', event
     if condition == 'goal':
         binned_all, _ = extract_goal_progress(dF, cell, session, frame_rate=frame_rate, bins=bins, plot=False, shuffle=False)
     elif condition == 'arb':
-        binned_all = extract_arb_progress(dF, cell, session, event_frames, n_goals, bins, period=period, plot=False, shuffle=False)
+        binned_all = extract_arb_progress(dF, cell, session, event_frames, n_goals, bins, period=period, plot=True, shuffle=False)
 
     av_binned = np.nanmean(binned_all, axis=0)
     ngoals = av_binned.shape[0]/bins
@@ -934,8 +934,9 @@ def calc_goal_tuningix(dF, cell, session, condition='goal', period='goal', event
         pref_phase[i] = np.where(av_binned[bins*i:bins*(i+1)] == state_max[i])[0][0] 
     tuning_score = (state_max - state_min)/state_mean
     real_score = np.mean(tuning_score)
-    phase_preference = np.mean(pref_phase)
+    # phase_preference = np.mean(pref_phase)
     state_preference = np.where(state_max == np.max(state_max))[0][0]  # Find the state with the maximum firing rate
+    phase_preference = pref_phase[state_preference.astype(int)] 
     print(f'Real score for cell {cell} is {real_score:.2f}, phase preference is {phase_preference:.2f}, state preference is {state_preference:.2f}')
 
     if shuffle:
@@ -976,7 +977,7 @@ def calc_goal_tuningix(dF, cell, session, condition='goal', period='goal', event
         plt.legend()
         plt.show()
 
-    return real_score,shuffled_scores,phase_preference,state_preference
+    return real_score, shuffled_scores, phase_preference, state_preference
 
 ## Correlations with other cells
 

@@ -31,20 +31,31 @@ elif cohort == '3':
 importlib.reload(parse_session_functions)
 importlib.reload(neural_analysis_helpers)
 
-# Load data 
-root = f"/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives" 
-session_path = parse_session_functions.find_base_path(mouse, session_id, root)
-
-# Load dF and valid neurons
 if int(cohort) == 3:
+    root = f"/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives" 
+    session_path = parse_session_functions.find_base_path(mouse, session_id, root)
+
+    # Load dF and valid neurons
     dF, neurons = parse_session_functions.load_dF(session_path, red_chan=True)
 
-# Create session struct
-if stage == 't3':
-    world = 'random'
-else:
-    world = 'stable'
-session = parse_session_functions.analyse_npz_pre7(mouse, session_id, root, stage, world)
+    # Create session struct
+    if stage == 't3':
+        world = 'random'
+    else:
+        world = 'stable'
+    session = parse_session_functions.analyse_npz_pre7(mouse, session_id, root, stage, world)
+
+elif int(cohort) == 2:
+    root = f"/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2" 
+    _, _, _, _, date = parse_session_functions.get_session_folders(root, mouse, stage)
+    session_path = parse_session_functions.find_base_path_npz(mouse, date)
+
+    # Load dF and valid neurons
+    dF, neurons = parse_session_functions.load_dF(root, mouse, stage)
+
+    # Create session struct
+    session = parse_session_functions.analyse_npz_pre7(mouse, date, stage)
+
 event_idx = np.sort(np.concatenate([session['rewards'], session['miss_rew_idx'], session['test_rew_idx']])).astype(int)
 
 # Get goal progress neurons

@@ -17,6 +17,8 @@ module load mamba
 source activate bonsai_abcd 
 
 PAIRS=(
+  "mouse=TAA0000059 cohort=2 t5:t5 t6:t6"
+  "mouse=TAA0000066 cohort=2 t5:t5 t6:t6"
   "mouse=004 cohort=3 full020:t5 full030:t6"
   "mouse=006 cohort=3 full011:t5 full014:t6"
   "mouse=007 cohort=3 full010:t5 full012:t6"
