@@ -875,9 +875,9 @@ def extract_arb_progress(dF, cell, session, event_frames, ngoals, bins, period='
         elif stage == 4:
             color = '#9E664C'
         elif stage == 5:
-            color = 'blue'
+            color = 'forestgreen' #'blue'
         elif stage == 6:
-            color = 'orange'
+            color = 'firebrick' #'orange'
         elif stage == 8:
             color = 'red'
         elif stage == 12:
@@ -898,10 +898,11 @@ def extract_arb_progress(dF, cell, session, event_frames, ngoals, bins, period='
         ax1.fill_between(angles, avg_bin - sem_bin, avg_bin + sem_bin, color=color, alpha=0.2)
         #label the cardinal directions
         ax1.set_xticks(np.linspace(0, 2 * np.pi, ngoals, endpoint=False))
-        ax1.set_title(f'Cell {cell} - Average Firing Rate (Polar)')
+        # ax1.set_title(f'Cell {cell} - Average Firing Rate (Polar)')
         ax2 = fig.add_subplot(122)
         cax = ax2.imshow(binned_all, aspect='auto', cmap='viridis', interpolation='none')
-        ax2.set_title(f'Cell {cell} - Binned Firing Rates')
+        # ax2.set_title(f'Cell {cell} - Binned Firing Rates')
+        plt.suptitle(f'Cell {cell}')
         plt.colorbar(cax, ax=ax2, label='dF/F')
         plt.tight_layout()
 

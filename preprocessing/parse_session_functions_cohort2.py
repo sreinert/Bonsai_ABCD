@@ -185,7 +185,7 @@ def load_dF(base_path, mouse, stage):
     import cellTV.cellTV_functions_cohort2 as cellTV
 
     imaging_path, config_path, frame_ix, date1, date2 = get_session_folders(base_path, mouse, stage)
-    
+
     # Load or calculate dF/F0
     DF_F_file = os.path.join(imaging_path, 'DF_F0.npy')
     if os.path.exists(DF_F_file):

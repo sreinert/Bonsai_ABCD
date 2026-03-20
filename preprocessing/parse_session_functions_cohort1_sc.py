@@ -1,8 +1,10 @@
 from aeon.io.reader import Csv, Reader
 import aeon.io.api as aeon
 from pathlib import Path
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import matplotlib.ticker as mticker
 import pandas as pd
 import numpy as np
 import datetime
@@ -34,14 +36,41 @@ class AnalogData(Reader):
         data = np.reshape(data, (-1, self.channels))
         return pd.DataFrame(data, columns=self.columns)
 
+# def find_base_path(mouse, date, root):
+#     mouse_path = Path(root) / f"sub-{mouse}" 
+
+#     for folder in mouse_path.iterdir():
+#         if folder.is_dir() and date in folder.name:
+#             print(f"Found folder: {folder}")
+#             base_path = folder
+#     return base_path
+
+from datetime import datetime
+
 def find_base_path(mouse, date, root):
-    mouse_path = Path(root) / f"sub-{mouse}" 
+    mouse_path = Path(root) / f"sub-{mouse}"
+
+    candidates = []
 
     for folder in mouse_path.iterdir():
         if folder.is_dir() and date in folder.name:
-            print(f"Found folder: {folder}")
-            base_path = folder
-    return base_path
+            try:
+                # Extract timestamp after "date-"
+                ts_str = folder.name.split("date-")[-1]
+                ts = datetime.strptime(ts_str, "%Y%m%dT%H%M%S")
+                candidates.append((ts, folder))
+            except ValueError:
+                # Skip folders with unexpected formatting
+                continue
+
+    if not candidates:
+        raise FileNotFoundError(f"No session folder found for {mouse} on {date}")
+
+    # Pick the latest timestamp
+    latest_folder = max(candidates, key=lambda x: x[0])[1]
+    print(f"Using latest folder: {latest_folder}")
+
+    return latest_folder
 
 def load_settings(base_path):
     settings_path = Path(base_path) / "behav/session-settings/"
@@ -98,6 +127,7 @@ def load_data(base_path):
     sess_treadmill_data = treadmill_data[~treadmill_data.index.duplicated(keep='first')]
     sess_position_data = position_data[~position_data.index.duplicated(keep='first')]
     sess_reward_data = rewards_data[~rewards_data.index.duplicated(keep='first')]
+    sess_reward_data = sess_reward_data[sess_reward_data['Value'] != 'ManualReward']  # exclude experimenter-triggered rewards
     sess_buffer_data = buffer_data[~buffer_data.index.duplicated(keep='first')]
 
     if os.path.exists(Path(base_path) / "behav/current-landmark/"):
@@ -113,10 +143,30 @@ def load_data(base_path):
             'LM_Odour': pd.Series(sess_lm_data['Odour'], index=sess_lm_data.index),
             'LM_Position': pd.Series(sess_lm_data['Position'], index=sess_lm_data.index)
         }
-        #combine indices
+        # print(sess_data)
+        # #deal with index duplication (occurs if copying data breaks)
+        # keys_to_remove = []
+        # for k, v in sess_data.items():
+        #     if not hasattr(v, "index"):
+        #         continue
+
+        #     if not v.index.is_unique:
+        #         print(k, "has duplicate indices")
+        #         keys_to_remove.append(k)
+                
+        # for k in keys_to_remove:
+        #     sess_data.pop(k, None)
+        
+        # #combine indices
+        # all_ix = None
+        # for v in sess_data.values():
+        #     if hasattr(v, "index"):
+        #         all_ix = v.index if all_ix is None else all_ix.union(v.index)
+
         all_ix = sess_events_data.index.union(sess_lick_data.index).union(sess_treadmill_data.index).union(sess_position_data.index).union(sess_reward_data.index).union(sess_buffer_data.index).union(sess_lm_data.index)
         #take only unique indices
         all_ix = all_ix.unique()
+
     else:
         sess_data = {
             'Events': pd.Series(sess_events_data['Value'], index=sess_events_data.index),
@@ -242,8 +292,11 @@ def load_dF(base_path, red_chan=False):
 #%% ##### Session functions #####
 def get_event_parsed(sess_dataframe, ses_settings):
 
-    lick_position = sess_dataframe['Position'].values[sess_dataframe['Licks'].values > 0]
-    lick_times = sess_dataframe.index[sess_dataframe['Licks'].values > 0]
+    # TODO integrate better
+    licks = threshold_lick_events(sess_dataframe, ses_settings)
+    # licks = sess_dataframe['Licks'].values
+    lick_position = sess_dataframe['Position'].values[licks > 0]
+    lick_times = sess_dataframe.index[licks > 0]
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
 
@@ -251,6 +304,17 @@ def get_event_parsed(sess_dataframe, ses_settings):
         release_df = estimate_lm_events(sess_dataframe)
     else:
         release_df = estimate_release_events(sess_dataframe, ses_settings)
+
+    # re-order AB so that A is always first
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    reward_seq = np.array([lm[0]['rewardSequencePosition'] for lm in trial['landmarks']])
+    
+    if np.diff(reward_seq)[0] == 0: # AABB
+        release_df = release_df[2:]
+    else: # ABAB
+        release_df = release_df[1:]
 
     return lick_position, lick_times, reward_times, reward_positions, release_df
 
@@ -282,15 +346,19 @@ def parse_rew_lms(ses_settings):
 
 def parse_stable_goal_ids(ses_settings):
     '''Identify the number of landmarks and goals for stable world sequences'''
+    
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
 
-    num_lms = len(ses_settings['trial']['landmarks'])
+    num_lms = len(trial['landmarks'])
     num_goals = ses_settings['availableRewardPositions']
     lm_ids = np.arange(num_lms)
     goal_counter = 0
     goals = []
     while goal_counter < num_goals:
         for i in range(num_lms):
-            for j in ses_settings['trial']['landmarks'][i]:
+            for j in trial['landmarks'][i]:
                 if j['rewardSequencePosition'] == goal_counter:
                     goals.append(i)
                     goal_counter += 1
@@ -303,6 +371,10 @@ def parse_random_goal_ids(ses_settings):
     '''Identify the number of landmarks and goals for random world sequences'''
     rew_odour, _, non_rew_odour, _ = parse_rew_lms(ses_settings)
 
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+
     num_lms = len(rew_odour) + len(non_rew_odour)
     num_goals = ses_settings['availableRewardPositions']
     lm_ids = np.arange(num_lms)
@@ -311,7 +383,7 @@ def parse_random_goal_ids(ses_settings):
     goals = []
     while goal_counter < num_goals:
         for i in range(num_lms):
-            for j in ses_settings['trial']['landmarks'][i]:
+            for j in trial['landmarks'][i]:
                 if j['rewardSequencePosition'] == goal_counter:
                     goals.append(i)
                     goal_counter += 1
@@ -320,14 +392,18 @@ def parse_random_goal_ids(ses_settings):
 
     return goals, lm_ids
 
-def calc_hit_fa(sess_dataframe,ses_settings):
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+def calc_hit_fa(sess_dataframe, ses_settings):
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+
+    lm_size = trial['landmarks'][0][0]['size']
+    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+
+    target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
 
     lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
-
-    rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
-
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe, ses_settings)
+    release_positions = np.sort(np.concatenate([target_positions, distractor_positions]))
 
     licked_target = np.zeros(len(target_positions))
     for idx, pos in enumerate(target_positions):
@@ -339,26 +415,21 @@ def calc_hit_fa(sess_dataframe,ses_settings):
         if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
             licked_distractor[idx] = 1
 
-    if 'LM_Count' in sess_dataframe.columns:
-        LM_offset = 3
-    else:
-        LM_offset = 0
-    licked_all = np.zeros(len(release_df))
-    rewarded_all = np.zeros(len(release_df))
-    release_positions = release_df['Position'].to_numpy()
+    licked_all = np.zeros(len(release_df), dtype=int)
+    rewarded_all = np.zeros(len(release_df), dtype=int)
     for idx, pos in enumerate(release_positions):
-        #only take into account licks/rewards that came later than the release
+        # only take into account licks/rewards that came later than the release
         licks = lick_position[lick_times >= release_df.index[idx]]
         rewards = reward_positions[reward_times >= release_df.index[idx]]
-        #compare licks/rewards to position window (the LM position and logged position are offset by 3)
-        if np.any((licks > (pos - LM_offset)) & (licks < (pos - LM_offset + lm_size))):
-           licked_all[idx] = 1
-        if np.any((rewards > (pos - LM_offset)) & (rewards < (pos - LM_offset + lm_size))):
-           rewarded_all[idx] = 1
+        # compare licks/rewards to position window (the LM position and logged position are offset by 3)
+        if np.any((licks > (pos)) & (licks < (pos + lm_size))):
+            licked_all[idx] = 1
+        if np.any((rewards > (pos)) & (rewards < (pos + lm_size))):
+            rewarded_all[idx] = 1
 
     hit_rate = np.sum(licked_target) / len(licked_target) 
     fa_rate = np.sum(licked_distractor) / len(licked_distractor) 
-    #adjust hit rate and fa rate to avoid infinity in d-prime calculation
+    # adjust hit rate and fa rate to avoid infinity in d-prime calculation
     if hit_rate == 1:
         hit_rate = 0.99
     if hit_rate == 0:
@@ -370,7 +441,432 @@ def calc_hit_fa(sess_dataframe,ses_settings):
 
     d_prime = np.log10(hit_rate/(1-hit_rate)) - np.log10(fa_rate/(1-fa_rate))
 
-    return hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all
+    return hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all
+
+def calc_sw_hit_fa(sess_dataframe, ses_settings, window=12, split_lms=False, plot=True):
+    '''Calculate hit and false alarm rates as a sliding window across the session'''
+
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+    reward_seq = np.array([lm[0]['rewardSequencePosition'] for lm in trial['landmarks']])
+
+    target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
+    lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
+    release_positions = np.sort(np.concatenate([target_positions, distractor_positions]))
+    
+    if not split_lms:
+        hit_rate_sw = np.zeros(len(release_positions[:-window]))
+        fa_rate_sw = np.zeros(len(release_positions[:-window]))
+
+        for idx, pos in enumerate(release_positions[:-window]):
+
+            # Find landmark events within the specified window
+            positions_range = release_positions[idx:idx + window]
+            
+            lick_pos_range = lick_position[(lick_position >= positions_range[0]) & (lick_position <= positions_range[-1] + lm_size)]
+            target_pos_range = target_positions[(target_positions >= positions_range[0]) & (target_positions <= positions_range[-1])]
+            distractor_pos_range = distractor_positions[(distractor_positions >= positions_range[0]) & (distractor_positions <= positions_range[-1])]
+            
+            # Find responses to targets and distractors inside the lms
+            licked_target = np.zeros(len(target_pos_range))
+            for a, a_pos in enumerate(target_pos_range):
+                if np.any((lick_pos_range > a_pos) & (lick_pos_range < (a_pos + lm_size))):
+                    licked_target[a] = 1
+            
+            licked_distractor = np.zeros(len(distractor_pos_range))
+            for b, b_pos in enumerate(distractor_pos_range):
+                if np.any((lick_pos_range > b_pos) & (lick_pos_range < (b_pos + lm_size))):
+                    licked_distractor[b] = 1
+
+            # Calculate hit and false alarm rates for each window 
+            hit_rate_sw[idx] = np.sum(licked_target) / len(licked_target) 
+            fa_rate_sw[idx] = np.sum(licked_distractor) / len(licked_distractor) 
+            # adjust hit rate and fa rate to avoid infinity in d-prime calculation
+            if hit_rate_sw[idx] == 1:
+                hit_rate_sw[idx] = 0.99
+            if hit_rate_sw[idx] == 0:
+                hit_rate_sw[idx] = 0.01
+            if fa_rate_sw[idx] == 1:
+                fa_rate_sw[idx] = 0.99
+            if fa_rate_sw[idx] == 0:
+                fa_rate_sw[idx] = 0.01
+
+    else:       
+        A1 = A_landmarks
+        A2 = []
+
+        if len(reward_seq) == 3:
+            B1 = B_landmarks[::2]
+            B2 = B_landmarks[1::2]
+
+        elif len(reward_seq) == 4:
+            A1 = A_landmarks[::2]
+            A2 = A_landmarks[1::2]
+            B1 = B_landmarks[::2]
+            B2 = B_landmarks[1::2]
+
+        A1_positions = release_positions[A1]
+        A2_positions = release_positions[A2] if len(A2) > 0 else np.array([])
+
+        B1_positions = release_positions[B1]
+        B2_positions = release_positions[B2]
+
+        hit_rate_sw = {"A1": np.zeros(len(release_positions[:-window]))}
+        if len(A2) > 0:
+            hit_rate_sw["A2"] = np.zeros(len(release_positions[:-window]))
+
+        fa_rate_sw  = {"B1": np.zeros(len(release_positions[:-window])),
+                       "B2": np.zeros(len(release_positions[:-window]))}
+
+        for idx, pos in enumerate(release_positions[:-window]):
+            
+            # Find landmark events within the specified window
+            positions_range = release_positions[idx:idx + window]
+            
+            lick_pos_range = lick_position[(lick_position >= positions_range[0]) & (lick_position <= positions_range[-1] + lm_size)]
+            
+            A1_pos_range = A1_positions[(A1_positions >= positions_range[0]) & (A1_positions <= positions_range[-1])]
+            A2_pos_range = A2_positions[(A2_positions >= positions_range[0]) & (A2_positions <= positions_range[-1])] if len(A2_positions) else np.array([])
+            
+            B1_pos_range = B1_positions[(B1_positions >= positions_range[0]) & (B1_positions <= positions_range[-1])]
+            B2_pos_range = B2_positions[(B2_positions >= positions_range[0]) & (B2_positions <= positions_range[-1])]
+
+            # Find responses to targets and distractors inside the lms
+            licked_A1 = np.zeros(len(A1_pos_range))
+            for a, a_pos in enumerate(A1_pos_range):
+                if np.any((lick_pos_range > a_pos) & (lick_pos_range < (a_pos + lm_size))):
+                    licked_A1[a] = 1
+            
+            if len(A2_positions):
+                licked_A2 = np.zeros(len(A2_pos_range))
+                for a, a_pos in enumerate(A2_pos_range):
+                    if np.any((lick_pos_range > a_pos) & (lick_pos_range < (a_pos + lm_size))):
+                        licked_A2[a] = 1
+
+            licked_B1 = np.zeros(len(B1_pos_range))
+            for b, b_pos in enumerate(B1_pos_range):
+                if np.any((lick_pos_range > b_pos) & (lick_pos_range < (b_pos + lm_size))):
+                    licked_B1[b] = 1
+
+            licked_B2 = np.zeros(len(B2_pos_range))
+            for b, b_pos in enumerate(B2_pos_range):
+                if np.any((lick_pos_range > b_pos) & (lick_pos_range < (b_pos + lm_size))):
+                    licked_B2[b] = 1
+
+            # Calculate hit and false alarm rates for each window 
+            hit_rate_sw["A1"][idx] = np.sum(licked_A1) / len(licked_A1) 
+            if len(A2_positions):
+                hit_rate_sw["A2"][idx] = np.clip(np.sum(licked_A2) / len(licked_A2), 0.01, 0.99)
+            fa_rate_sw["B1"][idx] = np.sum(licked_B1) / len(licked_B1) 
+            fa_rate_sw["B2"][idx] = np.sum(licked_B2) / len(licked_B2) 
+
+            # adjust hit rate and fa rate to avoid infinity in d-prime calculation
+            hit_rate_sw["A1"][idx] = np.clip(hit_rate_sw["A1"][idx], 0.01, 0.99)
+            fa_rate_sw["B1"][idx] = np.clip(fa_rate_sw["B1"][idx], 0.01, 0.99)
+            fa_rate_sw["B2"][idx] = np.clip(fa_rate_sw["B2"][idx], 0.01, 0.99)
+
+    if plot:
+        fig = plt.figure(figsize=(6,3))
+
+        if not split_lms:
+            plt.plot(hit_rate_sw, c='darkblue', linewidth=2, label='hit rate')
+            plt.plot(fa_rate_sw, c='orange', linewidth=2, label='fa rate')
+
+        else:
+            plt.plot(hit_rate_sw["A1"], c='darkblue', linewidth=2, label='Hit A1')
+            if "A2" in hit_rate_sw:
+                plt.plot(hit_rate_sw["A2"], c='blue', linewidth=2, label='Hit A2')
+            plt.plot(fa_rate_sw["B1"], c='orange', linewidth=2, label='FA B1')
+            plt.plot(fa_rate_sw["B2"], c='gold', linewidth=2, label='FA B2')
+        
+        plt.ylim([0,1.1])
+        plt.yticks([0,0.5,1])
+        plt.xlabel(f'Landmark window (n={window} lms)')
+        ax = plt.gca()
+        ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        plt.legend(frameon=False)
+
+        return hit_rate_sw, fa_rate_sw, fig
+    
+    else:
+        return hit_rate_sw, fa_rate_sw, None
+
+def calc_distance_hit_fa(sess_dataframe, ses_settings, split_lms=False, plot=True):
+    '''Calculate hit and fa rates for each distance'''
+
+    lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
+    target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
+    A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
+
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+    reward_seq = np.array([lm[0]['rewardSequencePosition'] for lm in trial['landmarks']])
+
+    distances = np.diff(release_df['Position']) - lm_size
+    
+    release_positions = np.sort(np.concatenate([target_positions, distractor_positions]))
+
+    if not split_lms:
+        hit_rate = {}
+        fa_rate = {}
+
+        for d in np.unique(distances):
+            lms_considered = np.where(distances == d)[0]
+
+            target_pos_considered = [pos for pos in target_positions if pos in release_positions[lms_considered]]
+            distractor_pos_considered = [pos for pos in distractor_positions if pos in release_positions[lms_considered]]
+            
+            licked_target = np.zeros(len(target_pos_considered))
+            for idx, pos in enumerate(target_pos_considered):
+                if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+                    licked_target[idx] = 1
+
+            licked_distractor = np.zeros(len(distractor_pos_considered))
+            for idx, pos in enumerate(distractor_pos_considered):
+                if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+                    licked_distractor[idx] = 1
+
+            hit_rate[d] = (np.sum(licked_target) / len(licked_target)
+                if len(licked_target) > 0 else np.nan)
+
+            fa_rate[d] = (np.sum(licked_distractor) / len(licked_distractor)
+                if len(licked_distractor) > 0 else np.nan)
+    
+    else:
+        A1 = A_landmarks
+        A2 = []
+
+        if len(reward_seq) == 3:
+            B1 = B_landmarks[::2]
+            B2 = B_landmarks[1::2]
+
+        elif len(reward_seq) == 4:
+            A1 = A_landmarks[::2]
+            A2 = A_landmarks[1::2]
+            B1 = B_landmarks[::2]
+            B2 = B_landmarks[1::2]
+
+        A1_positions = release_positions[A1]
+        A2_positions = release_positions[A2] if len(A2) > 0 else np.array([])
+
+        B1_positions = release_positions[B1]
+        B2_positions = release_positions[B2]
+
+        hit_rate = {"A1": {}}
+        if len(A2) > 0:
+            hit_rate["A2"] = {}
+        fa_rate = {"B1": {}, "B2": {}}
+
+        for d in np.unique(distances):
+            lms_considered = np.where(distances == d)[0]
+            pos_considered = release_positions[lms_considered]
+
+            A1_pos_considered = [p for p in A1_positions if p in pos_considered]
+            A2_pos_considered = [p for p in A2_positions if p in pos_considered]
+            B1_pos_considered = [p for p in B1_positions if p in pos_considered]
+            B2_pos_considered = [p for p in B2_positions if p in pos_considered]
+
+            licked_A1 = np.zeros(len(A1_pos_considered))
+            for i, pos in enumerate(A1_pos_considered):
+                if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+                    licked_A1[i] = 1
+
+            licked_A2 = np.zeros(len(A2_pos_considered))
+            for i, pos in enumerate(A2_pos_considered):
+                if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+                    licked_A2[i] = 1
+            
+            licked_B1 = np.zeros(len(B1_pos_considered))
+            for i, pos in enumerate(B1_pos_considered):
+                if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+                    licked_B1[i] = 1
+            
+            licked_B2 = np.zeros(len(B2_pos_considered))
+            for i, pos in enumerate(B2_pos_considered):
+                if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+                    licked_B2[i] = 1
+
+            hit_rate["A1"][d] = (np.sum(licked_A1) / len(licked_A1)
+                if len(licked_A1) > 0 else np.nan)
+
+            if len(A2) > 0:
+                hit_rate["A2"][d] = (np.sum(licked_A2) / len(licked_A2)
+                    if len(licked_A2) > 0 else np.nan)
+
+            fa_rate["B1"][d] = (np.sum(licked_B1) / len(licked_B1)
+                if len(licked_B1) > 0 else np.nan)
+
+            fa_rate["B2"][d] = (np.sum(licked_B2) / len(licked_B2)
+                if len(licked_B2) > 0 else np.nan)
+
+    if plot:
+        with mpl.rc_context({
+            'axes.titlesize': 10,
+            'axes.labelsize': 10,
+            'xtick.labelsize': 10,
+            'ytick.labelsize': 10,
+            'legend.fontsize': 10,
+        }):
+
+            fig = plt.figure(figsize=(6,3))
+
+            if not split_lms:
+                d_sorted = sorted(hit_rate.keys())
+                plt.plot(d_sorted, [hit_rate[d] for d in d_sorted],
+                        c='darkblue', linewidth=2, label='hit rate')
+                plt.plot(d_sorted, [fa_rate[d] for d in d_sorted],
+                        c='orange', linewidth=2, label='fa rate')
+
+            else:
+                d_sorted = sorted(fa_rate["B1"].keys())
+                plt.plot(d_sorted, [hit_rate["A1"][d] for d in d_sorted],
+                        c='darkblue', linewidth=2, label='hit A1')
+                if "A2" in hit_rate:
+                    plt.plot(d_sorted, [hit_rate["A2"][d] for d in d_sorted],
+                            c='blue', linewidth=2, label='hit A2')
+                plt.plot(d_sorted, [fa_rate["B1"][d] for d in d_sorted],
+                        c='orange', linewidth=2, label='fa B1')
+                plt.plot(d_sorted, [fa_rate["B2"][d] for d in d_sorted],
+                        c='gold', linewidth=2, label='fa B2')
+
+            plt.xlabel("Landmark distance")
+            ax = plt.gca()
+            ax.set_ylim([0,1.1])
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.yticks([0,0.5,1])
+            plt.xticks([np.min(distances), np.max(distances)])
+            ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
+            plt.legend(frameon=False, loc='lower left')
+
+        return hit_rate, fa_rate, fig
+    
+    else:
+        return hit_rate, fa_rate, None
+    
+def calc_time_hit_fa(sess_dataframe, ses_settings, bins=10, plot=True):
+    '''Calculate hit and fa rates based on time spent between landmarks'''
+
+    lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
+    target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
+
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    release_positions = np.sort(np.concatenate([target_positions, distractor_positions]))
+
+    # Bin time 
+    dt, _ = get_time_between_landmarks(sess_dataframe, ses_settings, bins, plot=False)
+    time_bins = np.linspace(np.floor(np.nanmin(dt)), np.ceil(np.nanmax(dt)), bins+1, dtype=int)
+    bin_idx = np.digitize(dt, time_bins) - 1
+    
+    # Calculate hit and fa rates 
+    hit_rate = {}
+    fa_rate = {}
+
+    for t in np.unique(bin_idx):
+        lms_considered = np.where(bin_idx == t)[0]
+
+        target_pos_considered = [pos for pos in target_positions if pos in release_positions[lms_considered]]
+        distractor_pos_considered = [pos for pos in distractor_positions if pos in release_positions[lms_considered]]
+        
+        licked_target = np.zeros(len(target_pos_considered))
+        for idx, pos in enumerate(target_pos_considered):
+            if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+                licked_target[idx] = 1
+
+        licked_distractor = np.zeros(len(distractor_pos_considered))
+        for idx, pos in enumerate(distractor_pos_considered):
+            if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+                licked_distractor[idx] = 1
+
+        hit_rate[t] = (
+            np.sum(licked_target) / len(licked_target)
+            if len(licked_target) > 0 else np.nan
+        )
+
+        fa_rate[t] = (
+            np.sum(licked_distractor) / len(licked_distractor)
+            if len(licked_distractor) > 0 else np.nan
+        )
+
+    if plot:
+        with mpl.rc_context({
+            'axes.titlesize': 10,
+            'axes.labelsize': 10,
+            'xtick.labelsize': 10,
+            'ytick.labelsize': 10,
+            'legend.fontsize': 10,
+        }):
+            fig = plt.figure(figsize=(6,3))
+            plt.plot(hit_rate.keys(), hit_rate.values(), c='darkblue', linewidth=2, label='hit rate')
+            plt.plot(fa_rate.keys(), fa_rate.values(), c='orange', linewidth=2, label='fa rate')
+            plt.ylim([0,1.1])
+            plt.yticks([0,0.5,1])
+            plt.xticks([np.min(bin_idx), np.max(bin_idx)], labels=[f'{time_bins[0]}-{time_bins[1]}', f'{time_bins[-2]}-{time_bins[-1]}'])
+            plt.xlabel(f'Time between landmarks (s)')
+            ax = plt.gca()
+            ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
+
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            plt.legend(frameon=False)
+
+        return hit_rate, fa_rate, fig
+    
+    else:
+        return hit_rate, fa_rate, None
+
+def get_time_between_landmarks(sess_dataframe, ses_settings, bins=20, plot=True):
+    '''Calculate time spent between different landmark types (AA, BB or AB)'''
+
+    if 'LM_Count' in sess_dataframe.columns:
+        release_df = estimate_lm_events(sess_dataframe)
+    else:
+        release_df = estimate_release_events(sess_dataframe, ses_settings)
+
+    _, _, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
+
+    A_dt = release_df.index[release_df['Index'].isin(A_idx)].to_series().diff().dt.total_seconds().to_numpy()
+    B_dt = release_df.index[release_df['Index'].isin(B_idx)].to_series().diff().dt.total_seconds().to_numpy()
+    dt = release_df.index.to_series().diff().dt.total_seconds().to_numpy()
+    dt = dt[~np.isnan(dt)]
+
+    # Calculate and plot histograms of time between landmarks 
+    time_bins = np.linspace(np.floor(np.nanmin(dt)), np.ceil(np.nanmax(dt)), bins+1, dtype=int)
+    time_bins_A = np.linspace(np.floor(np.nanmin(A_dt)), np.ceil(np.nanmax(A_dt)), bins+1, dtype=int)
+    time_bins_B = np.linspace(np.floor(np.nanmin(B_dt)), np.ceil(np.nanmax(B_dt)), bins+1, dtype=int)
+
+    if plot:
+        fig = plt.figure(figsize=(3,3))
+        _ = plt.hist(dt, bins=time_bins, alpha=0.5, color='grey', label='AB')
+        _ = plt.hist(A_dt, bins=time_bins_A, alpha=0.5, color='darkblue', label='AA')
+        _ = plt.hist(B_dt, bins=time_bins_B, alpha=0.5, color='orange', label='BB')
+        plt.xlabel('Time between landmarks (s)')
+        ax = plt.gca()
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        plt.legend()
+
+        print(f'min time between landmarks {np.nanmin(dt):.2f}\nmax time between landmarks: {np.nanmax(dt):.2f}')
+        print(f'\nmin time between A {np.nanmin(A_dt):.2f}\nmax time between A: {np.nanmax(A_dt):.2f}')
+        print(f'\nmin time between B {np.nanmin(B_dt):.2f}\nmax time between B: {np.nanmax(B_dt):.2f}')
+
+        return dt, fig
+    
+    else:
+        return dt, None
 
 def extract_int(s: str) -> int:
     m = re.search(r'\d+', s)
@@ -379,81 +875,254 @@ def extract_int(s: str) -> int:
     else:
         raise ValueError(f"No digits found in string: {s!r}")
 
-def find_targets_distractors(sess_dataframe,ses_settings):
-    
+def get_A_B_landmarks(sess_dataframe, ses_settings):
+    '''Find which landmarks are rewarded (A) or non-rewarded (B)'''
+
+    # Get landmark visits
     lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
-    rew_odour, rew_texture, non_rew_odour, non_rew_texture = parse_rew_lms(ses_settings)
+    lm_idx = np.asarray(release_df['Index'].to_numpy(), dtype=int) # TODO rename because it conflicts with another definition
 
-    target_id = []
-    target_positions = []
-    for i in range(len(rew_odour)):
-        test_int = extract_int(rew_odour[i])
-        matches = release_df[release_df["Odour"] == test_int] # does released odour match with test_int
-        pos = matches["Position"].tolist()
+    # Get the sequence of landmarks
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    reward_seq = np.array([lm[0]['rewardSequencePosition'] for lm in trial['landmarks']])
 
-        target_id.extend([i] * len(pos))
-        target_positions.extend(pos)
+    # Split As and Bs into A1-A2-B1-B2
+    if len(reward_seq) == 4:
+        if np.diff(reward_seq)[0] == 0:     # AABB
+            A_landmarks = [i - 2 for i, r in enumerate(reward_seq) if r == 0]
+            B_landmarks = [i + 2 for i, r in enumerate(reward_seq) if r == -1]
+        else:     # ABAB
+            A_landmarks = [i - 1 for i, r in enumerate(reward_seq) if r == 0]
+            B_landmarks = [i + 1 for i, r in enumerate(reward_seq) if r == -1]
+    elif len(reward_seq) == 3:
+        A_landmarks = list(np.where(reward_seq == 0)[0])
+        if A_landmarks[0] == 0:
+            A_landmarks[0] = 2
 
-    distractor_id = []
-    distractor_positions = []
-    for i in range(len(non_rew_odour)):
-        test_int = extract_int(non_rew_odour[i])
-        matches = release_df[release_df["Odour"] == test_int] # does released odour match with test_int
-        pos = matches["Position"].tolist()
+        # first_rew = np.where(reward_positions > sess_dataframe['Position'].iloc[lm_idx[0]])[0][0]
+        # first_A_lag = np.argmin(np.abs(sess_dataframe['Position'].iloc[lm_idx] - reward_positions[first_rew]))
+        # A_landmarks = [first_A_lag]
+        B_landmarks = [i for i in range(len(reward_seq)) if (i not in A_landmarks)]
 
-        distractor_id.extend([i + len(rew_odour)] * len(pos)) # offset distractor IDs
-        distractor_positions.extend(pos)
+    for a in range(len(np.where(reward_seq == 0)[0])):
+        A_landmarks.extend([i for i in range(A_landmarks[a]+len(reward_seq), len(lm_idx), len(reward_seq)) if i < len(lm_idx)])
+    for b in range(len(np.where(reward_seq == -1)[0])):
+        B_landmarks.extend([i for i in range(B_landmarks[b]+len(reward_seq), len(lm_idx), len(reward_seq)) if i < len(lm_idx)])
+
+    A_landmarks = np.sort(A_landmarks)
+    B_landmarks = np.sort(B_landmarks)    
+
+    # Split the data indices into A1-A2-B1-B2
+    A_idx = [lm_idx[i] for i in A_landmarks]
+    B_idx = [lm_idx[i] for i in B_landmarks]
+
+    assert len(lm_idx) == (len(A_landmarks) + len(B_landmarks)), 'Some landmarks are missing!'
+
+    return A_landmarks, B_landmarks, A_idx, B_idx
+
+def find_targets_distractors(sess_dataframe, ses_settings):
+    '''Give an id to each type of landmark'''
+
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    reward_seq = np.array([lm[0]['rewardSequencePosition'] for lm in trial['landmarks']])
+
+    # Give ids to each type of landmark 
+    # distractor_id = np.arange(0, len(np.where(reward_seq == -1)[0])) #[0,1]
+    # target_id = np.arange(distractor_id[-1] + 1, len(np.where(reward_seq != -1)[0]) + distractor_id[-1] + 1)
+
+    # Define order of landmark ids
+    lm_id = np.arange(len(reward_seq))
+    target_idx = np.where(reward_seq == 0)[0] 
+    distractor_idx = np.where(reward_seq == -1)[0]
     
-    all_release_positions = release_df["Position"].tolist()
-    was_target = np.zeros(len(all_release_positions))
-    lm_id = np.zeros(len(all_release_positions))
-    for idx, pos in enumerate(all_release_positions):
-        if pos in target_positions:
-            was_target[idx] = 1
-            lm_id[idx] = target_id[np.where(np.isclose(target_positions, pos))[0][0]]
-        elif pos in distractor_positions:
-            was_target[idx] = 0
-            lm_id[idx] = distractor_id[np.where(np.isclose(distractor_positions, pos))[0][0]] 
-    
-    return target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id
+    if len(reward_seq) == 4:
+        if np.diff(reward_seq)[0] == 0: # AABB
+            if reward_seq[0] == -1:
+                distractor_id = lm_id[distractor_idx] + 2
+                target_id = lm_id[target_idx] - 2
+            else:
+                distractor_id = lm_id[distractor_idx]
+                target_id = lm_id[target_idx]
+        else: # ABAB
+            if reward_seq[0] == -1:
+                distractor_id = lm_id[distractor_idx] + 1
+                target_id = lm_id[target_idx] - 1
+            else:
+                distractor_id = lm_id[distractor_idx]
+                target_id = lm_id[target_idx]
 
-def calc_transition_matrix(sess_dataframe,ses_settings):
+    elif len(reward_seq) == 3:
+        distractor_id = np.atleast_1d(lm_id[1:])
+        target_id = np.atleast_1d(lm_id[0])
     
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
-    ideal_licks = get_ideal_performance(sess_dataframe,ses_settings)
+    A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
 
-    lick_sequence = lm_id[licked_all==1]
-    num_landmarks = int(np.max(lm_id)) + 1
-    ideal_sequence = lm_id[ideal_licks==1]
-        
+    # Get sequence of landmark ids 
+    lm_id_sequence = np.zeros(len(A_landmarks) + len(B_landmarks), dtype=int)
+    if len(reward_seq) == 4:
+        lm_id_sequence[A_landmarks] = np.tile(target_id, int(np.ceil(len(A_landmarks)/2)))[:len(A_landmarks)]
+        lm_id_sequence[B_landmarks] = np.tile(distractor_id, int(np.ceil(len(B_landmarks)/2)))[:len(B_landmarks)]
+    elif len(reward_seq) == 3:
+        lm_id_sequence[A_landmarks] = np.tile(target_id, len(A_landmarks))
+        lm_id_sequence[B_landmarks] = np.tile(distractor_id, int(np.ceil(len(B_landmarks)/2)))[:len(B_landmarks)]
+
+    # Get landmark visits
+    lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
+    lm_idx = np.asarray(release_df['Index'].to_numpy(), dtype=int)
+    
+    # Get positions of targets and distractors
+    position = np.nan_to_num(sess_dataframe['Position'].values, nan=0.0)
+
+    release_positions = position[lm_idx]
+    # release_positions = release_df['Position'].to_numpy()     # less accurate
+
+    target_positions = release_positions[A_landmarks]
+    distractor_positions = release_positions[B_landmarks]
+
+    return target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence
+
+def calc_transition_matrix(sess_dataframe, ses_settings):
+    
+    target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
+    ideal_licks = get_ideal_performance(sess_dataframe, ses_settings)
+
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+
+    num_landmarks = len(trial['landmarks'])
+
+    lick_sequence = lm_id_sequence[licked_all==1]
+    ideal_sequence = lm_id_sequence[ideal_licks==1]
+
+    # stimulus transition matrix
     transition_matrix = np.zeros((num_landmarks, num_landmarks))
+    for i in range(len(lm_id_sequence)-1):
+        current_lm = int(lm_id_sequence[i])
+        next_lm = int(lm_id_sequence[i+1])
+        transition_matrix[current_lm, next_lm] += 1
+
+    # for i in range(len(lm_id)-1):
+    #     current_lm = int(lm_id[i])
+    #     next_lm = int(lm_id[i+1])
+    #     transition_matrix[current_lm, next_lm] += 1
+    # transition_matrix[next_lm, lm_id[0]] += 1
+
+    # lick transition matrix
     lick_tm = np.zeros((num_landmarks, num_landmarks))
-    ideal_tm = np.zeros((num_landmarks, num_landmarks))
     for i in range(len(lick_sequence)-1):
         current_lm = int(lick_sequence[i])
         next_lm = int(lick_sequence[i+1])
         lick_tm[current_lm, next_lm] += 1
-    for i in range(len(lm_id)-1):
-        current_lm = int(lm_id[i])
-        next_lm = int(lm_id[i+1])
-        transition_matrix[current_lm, next_lm] += 1
+
+    # ideal transition matrix
+    ideal_tm = np.zeros((num_landmarks, num_landmarks))
     for i in range(len(ideal_sequence)-1):
         current_lm = int(ideal_sequence[i])
         next_lm = int(ideal_sequence[i+1])
         ideal_tm[current_lm, next_lm] += 1
 
+    print(f'target ids {target_id} and distractor ids {distractor_id}')
+
+    return transition_matrix, lick_tm, ideal_tm
+
+def calc_distance_transition_matrix(sess_dataframe, ses_settings, binning=True):
+    '''
+    Create a lick transition matrix based on distance between current and next licked landmark.
+    If binning, distances will be grouped into small, medium, large.
+    '''
+    release_df = estimate_lm_events(sess_dataframe)
+
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    num_landmarks = len(trial['landmarks'])
+
+    target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
+
+    ideal_licks = get_ideal_performance(sess_dataframe, ses_settings) # TODO 
+    ideal_sequence = lm_id_sequence[ideal_licks==1]
+
+    distances = np.diff(release_df['Position']) - lm_size
+    distance_range = np.sort(np.unique(distances))
+
+    # Group distances
+    if binning:
+        n = len(distance_range)
+        base = n // 3
+        distance_groups = {
+            'small':  distance_range[:base],
+            'medium': distance_range[base:2 * base],
+            'large':  distance_range[2 * base:]
+        }
+    else:
+        distance_groups = {d: np.array([d]) for d in distance_range}
+
+    # Calculate stimulus, lick, and ideal transition matrices
+    transition_matrix = {}
+    lick_tm = {}
+    ideal_tm = {}
+
+    for key, dist_vals in distance_groups.items():
+        lms_considered = np.where(np.isin(distances, dist_vals))[0]
+
+        # stimulus transition matrix
+        transition_matrix[key] = np.zeros((num_landmarks, num_landmarks))
+        for i in lms_considered:
+            if i + 1 >= len(lm_id_sequence):
+                break
+            current_lm = int(lm_id_sequence[i])
+            next_lm = int(lm_id_sequence[i+1])
+            transition_matrix[key][current_lm, next_lm] += 1
+        # transition_matrix[d][next_lm, current_lm] += 1 # TODO why is this here? 
+
+        # lick transition matrix
+        lick_tm[key] = np.zeros((num_landmarks, num_landmarks))
+        for i in lms_considered:
+            if licked_all[i] == 1: 
+                current_lm = int(lm_id_sequence[i])
+                next_licks = np.where(licked_all[i+1:] == 1)[0]
+                if len(next_licks) > 0:
+                    next_lm_idx = np.where(licked_all[i+1:] == 1)[0][0] + i + 1
+                    next_lm = lm_id_sequence[next_lm_idx]
+                else:
+                    break
+                lick_tm[key][current_lm, next_lm] += 1
+
+        # ideal transition matrix
+        ideal_tm[key] = np.zeros((num_landmarks, num_landmarks))
+        for i in lms_considered:
+            current_lm = int(lm_id_sequence[i])
+            # print(current_lm)
+            if current_lm in target_id:
+                next_target = np.where(ideal_licks[i+1:] == 1)[0]
+                if len(next_target) > 0:
+                    next_target_idx = next_target[0] + i + 1
+                    next_lm = lm_id_sequence[next_target_idx] 
+                else:
+                    break
+                ideal_tm[key][current_lm, next_lm] += 1
+
     return transition_matrix, lick_tm, ideal_tm
 
 def get_ideal_performance(sess_dataframe,ses_settings):
 
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
+    target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = find_targets_distractors(sess_dataframe,ses_settings)
+    
     targets = np.unique(target_id)
-    ideal_licks = np.zeros_like(lm_id)
+    ideal_licks = np.zeros_like(lm_id_sequence, dtype=int)
     target_counter = 0
-    for i in range(lm_id.shape[0]):
+    for i in range(len(lm_id_sequence)):
 
-        if lm_id[i] == targets[target_counter]:
+        if lm_id_sequence[i] == targets[target_counter]:
             ideal_licks[i] = 1  # ideal lick on target
             if target_counter < len(targets) - 1:
                 target_counter += 1  # switch to the next target
@@ -461,40 +1130,137 @@ def get_ideal_performance(sess_dataframe,ses_settings):
                 target_counter = 0  # reset to the first target
         else:
             ideal_licks[i] = 0  # no lick on distractor
+
     return ideal_licks
 
-def calc_conditional_matrix(sess_dataframe,ses_settings):
+def calc_sequencing_performance(sess_dataframe, ses_settings):
+    '''Calculate sequencing performance i.e., the conditional A->A (hit) and A->B (fa) transitions, for each target (A)'''
+    target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
 
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe, ses_settings)
+    As = list(target_id)
+    Bs = list(distractor_id)
+    lm_ids = list(lm_ids)
+
+    # 1. Find number of steps ahead to look for As and Bs
+    # AABB: A1 +1+4 / +2+3 A2 +3+4 / +1+2
+    # ABAB: A1 +2+4 / +1+3 A2 +2+4 / +1+3
+
+    # calculate number of steps ahead to get to next A and back to the same A
+    next_A_steps = {}
+    for a, A in enumerate(As):
+        next_A = As[a+1] if a+1 < len(As) else As[0]
+        next_A_steps[A] = [(lm_ids.index(next_A) - lm_ids.index(A)) % len(lm_ids)]
+        next_A_steps[A].append(len(lm_ids))
+    # print(next_A_steps)
+
+    # calculate number of steps ahead to get to Bs
+    next_B_steps = {A: [] for A in As}
+    for A in As:
+        for B in Bs:
+            next_B_steps[A].append((lm_ids.index(B) - lm_ids.index(A)) % len(lm_ids))
+    # print(next_B_steps)
+
+    # 2. Calculate transition probabilities for each number of steps ahead and take the mean per target (A) and distractor (B)
+    transition_prob_A = {A: [] for A in As}
+    for a, A in enumerate(As):
+        for steps in next_A_steps[A][:1]:
+            trans, _, _ = calc_conditional_matrix(sess_dataframe, ses_settings, n_steps=steps)
+            transition_prob_A[A].append(trans[a])
+    # print(transition_prob_A)
+
+    mean_transition_prob_A = {A: np.mean(np.stack(steps, axis=0), axis=0) for A, steps in transition_prob_A.items()}
+    # print(mean_transition_prob_A)
+
+    distractor_prob_A = {A: [] for A in As}
+    for a, A in enumerate(As):
+        for steps in next_B_steps[A][:1]:
+            trans, _, _ = calc_conditional_matrix(sess_dataframe, ses_settings, n_steps=steps)
+            distractor_prob_A[A].append(trans[a])
+    # print(distractor_prob_A)
+
+    mean_distractor_prob_A = {A: np.mean(np.stack(steps, axis=0), axis=0) for A, steps in distractor_prob_A.items()}
+    # print(mean_distractor_prob_A)
+
+    # 3. Calculate performance metrics using the mean transition probs for As and Bs
+    sequencing_hit_rate = {}
+    sequencing_fa_rate = {}
+    sequencing_d_prime = {}
+    for A in As:
+        sequencing_hit_rate[A] = np.mean(mean_transition_prob_A[A][target_id])
+        sequencing_fa_rate[A] = np.mean(mean_distractor_prob_A[A][distractor_id])
+        sequencing_d_prime[A] = np.log10(sequencing_hit_rate[A]/(1-sequencing_hit_rate[A])) - np.log10(sequencing_fa_rate[A]/(1-sequencing_fa_rate[A]))
+
+    for a, A in enumerate(As):
+        print(f'A{a+1} sequencing performance: hit rate {sequencing_hit_rate[A]*100:.1f}%, FA rate {sequencing_fa_rate[A]*100:.1f}%, d_prime {sequencing_d_prime[A]:.3f}')
+
+    return sequencing_hit_rate, sequencing_fa_rate, sequencing_d_prime
+
+def calc_performance(sess_dataframe, ses_settings):
+
+    _ = calc_sequencing_performance(sess_dataframe, ses_settings)
+
     hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
-    ideal_licks = get_ideal_performance(sess_dataframe, ses_settings)
+    print(f'Overall performance: hit rate {hit_rate*100:.1f}%, FA rate {fa_rate*100:.1f}%, d_prime {d_prime:.3f}')
 
-    transition_prob = np.zeros((np.unique(target_id).shape[0], np.unique(lm_id).shape[0]))
-    control_prob = np.zeros((np.unique(target_id).shape[0], np.unique(lm_id).shape[0])) 
-    ideal_prob = np.zeros((np.unique(target_id).shape[0], np.unique(lm_id).shape[0]))
+    return 
+
+
+def calc_conditional_matrix(sess_dataframe, ses_settings, n_steps=1):
+    '''Calculate the transition probabilities given reward n_steps ahead of the reward'''
+
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
+    target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+
+    goals = list(target_id)
+    all_lms = lm_id_sequence
+
     licked_lm_ix = np.where(licked_all == 1)[0]
-    controlled_lm_ix = np.where(was_target == 1)[0]
 
-    for g in range(np.unique(target_id).shape[0]):
-        rewards = np.intersect1d(np.where(rewarded_all == 1)[0],np.where(lm_id == g)[0])
-        for i,reward in enumerate(rewards):
-            if i == len(rewards)-1:
-                break
-            next_lick_index = licked_lm_ix[licked_lm_ix > reward][0]
-            next_control_index = controlled_lm_ix[controlled_lm_ix > reward][0]
-            next_lm = lm_id[next_lick_index].astype(int)
-            next_control_lm = lm_id[next_control_index].astype(int)
-            transition_prob[g,next_lm] += 1
-            control_prob[g,next_control_lm] += 1
+    transition_licks = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+    transition_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
     
-    for g in range(np.unique(target_id).shape[0]):
-        ideal_rewards = np.intersect1d(np.where(ideal_licks == 1)[0],np.where(lm_id == g)[0])
-        for i,ideal_reward in enumerate(ideal_rewards):
-            if i == len(ideal_rewards)-1:
-                break
-            next_ideal_index = np.where(ideal_licks == 1)[0][np.where(np.where(ideal_licks == 1)[0] > ideal_reward)[0][0]]
-            next_ideal_lm = lm_id[next_ideal_index].astype(int)
-            ideal_prob[g,next_ideal_lm] += 1
+    control_licks = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+    control_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+
+    ideal_prob = np.zeros((np.unique(goals).shape[0], np.unique(lm_ids).shape[0]))
+
+    for g in range(np.unique(goals).shape[0]):
+        goal = goals[g]
+
+        rewards = np.intersect1d(np.where(rewarded_all == 1)[0], np.where(all_lms == goal)[0])
+
+        for i, reward in enumerate(rewards[:-1]):
+            # 1. Transition probability
+            if len(licked_lm_ix[licked_lm_ix > reward]) >= n_steps:
+                lick_index = licked_lm_ix[licked_lm_ix > reward][n_steps-1]
+            lm = all_lms[lick_index].astype(int)
+            
+            # position in matrix according to order in AB sequence
+            lm_pos = np.where(lm_ids == lm)[0]
+            transition_licks[g, lm_pos] += 1
+            
+            # convert to probability
+            transition_prob[g] = transition_licks[g] / np.sum(transition_licks[g], axis=0)
+            
+            # 2. Control probability - lick at next 
+            next_control_index = reward + 1
+            lm = all_lms[next_control_index].astype(int)
+            
+            # position in matrix according to order in AB sequence
+            lm_pos = np.where(lm_ids == lm)[0]
+            control_licks[g, lm_pos] += 1
+
+            # convert to probability
+            control_prob[g] = control_licks[g] / np.sum(control_licks[g], axis=0)
+            
+    # 3. Ideal probabilities         
+    for g in range(np.unique(goals).shape[0]):
+        next_goal = goals[g+1] if g+1 < len(goals) else goals[0]
+
+        # position in matrix according to order in AB sequence
+        next_goal_pos = np.where(lm_ids == next_goal)[0] 
+        ideal_prob[g, next_goal_pos] += 1
+
     return transition_prob, control_prob, ideal_prob
 
 def calc_stable_conditional_matrix(sess_dataframe,ses_settings):
@@ -721,7 +1487,7 @@ def give_state_id(sess_dataframe, ses_settings):
 
     goals,lm_ids = parse_stable_goal_ids(ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
     if rewarded_all.shape[0] % 10 != 0:
         #extend the array to make it divisible by 10
         rewarded_all = np.pad(rewarded_all, (0, 10 - (rewarded_all.shape[0] % 10)), 'constant')
@@ -1102,7 +1868,11 @@ def calc_sw_state_ratio(sess_dataframe, ses_settings):
     return sw_state_ratio, sw_state_ratio_a, sw_state_ratio_b, sw_state_ratio_c, sw_state_ratio_d
 
 def estimate_release_events(sess_dataframe, ses_settings):
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
     lm_gap = lm_size + ses_settings['trial']['offsets'][0]
 
     tmp = sess_dataframe.reset_index(drop=False, inplace=False)
@@ -1342,7 +2112,7 @@ def estimate_lm_events(sess_dataframe):
         'Odour': lm_odour
     }).set_index('time')
 
-    if lm_df['Position'][0] != 0:
+    if lm_df['Position'].iloc[0] != 0:
         # Add initial landmark at position 0 if not present
         initial_lm = pd.DataFrame({
             'time': [pd.NaT],
@@ -1423,6 +2193,20 @@ def threshold_licks(session):
     session['licks_idx'] = licks_idx
 
     return session
+
+def threshold_lick_events(sess_dataframe, ses_settings):
+
+    session = create_session_struct(sess_dataframe, ses_settings)
+
+    licks = sess_dataframe['Licks'].values.astype(int)
+    speed_ok = session['speed'] < session['lick_threshold']
+    licked = licks > 0
+    threshold_mask = speed_ok & licked
+
+    thresholded_licks = np.zeros(len(licks))
+    thresholded_licks[threshold_mask] = licks[threshold_mask]
+
+    return thresholded_licks
 
 def get_licks_per_lap(session):
     # Get position and frame index for each lick 
@@ -1753,8 +2537,11 @@ def calculate_frame_lick_rate(session):
 #%% ##### Functions that work with NIDAQ data only (after funcimg alignment) #####
 def get_landmark_positions(session, sess_dataframe, ses_settings, data='pd'):
     '''Get the start and end of each landmark'''
-    
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
 
     if data == 'odour':
         result_df = estimate_release_events(sess_dataframe, ses_settings)
@@ -1777,7 +2564,11 @@ def get_landmark_positions(session, sess_dataframe, ses_settings, data='pd'):
         # print(entry_pos2[:50])
         # print(exit_pos1[:50])
         # print(exit_pos2[:50])
-        lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+        trial = ses_settings['trial']
+        if isinstance(trial, list):
+            trial = trial[0]['trial']
+        lm_size = trial['landmarks'][0][0]['size']
+        # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
         offset = ses_settings['trial']['offsets'][0]
         tol = lm_size * 0.5
 
@@ -1858,7 +2649,7 @@ def merge_positions_keep_single(pos1, pos2, tol, offset):
 
 def get_goal_positions(session, sess_dataframe, ses_settings):
     '''Get the start and end of each goal landmark using odour release events to find targets'''
-    target_positions, _, _, _, _, _ = find_targets_distractors(sess_dataframe, ses_settings)
+    target_positions, _, _, _, _, _, _ = find_targets_distractors(sess_dataframe, ses_settings)
 
     goals = np.zeros((len(target_positions), 2))
     for i, pos in enumerate(np.sort(target_positions)):
@@ -1879,7 +2670,11 @@ def estimate_pd_entry_exit(ses_settings, session, pd='pd1'):
     if binary_pd[0] == 1:
         all_lm_entry_idx = np.insert(all_lm_entry_idx, 0, 0)
     
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
     offset = ses_settings['trial']['offsets'][0]
 
     # Filter out repeated lm visits
@@ -2127,32 +2922,28 @@ def create_session_struct_npz(data, ses_settings, world):
     
     return session
 
-def create_session_struct(sess_dataframe, ses_settings, world):
+def create_session_struct(sess_dataframe, ses_settings):
 
     # Use the Buffer as datapoint idx
     position = np.nan_to_num(sess_dataframe['Position'].values, nan=0.0)
     speed = np.nan_to_num(sess_dataframe['Treadmill'].values, nan=0.0)
     licks = sess_dataframe['Licks'].values.astype(int)
-    rewards = sess_dataframe['Buffer'][sess_dataframe['Rewards'].notna()].values
-    
-    if world == 'stable':
-        goal_ids, lm_ids = parse_stable_goal_ids(ses_settings)
-    elif world == 'random':
-        goal_ids, lm_ids = parse_random_goal_ids(ses_settings)
-    num_landmarks = len(lm_ids) # unique number of lm ids
-
-    tunnel_length = calculate_corr_length(ses_settings)
+    rewards = sess_dataframe['Buffer'][sess_dataframe['Rewards'].notna()].values    
     lick_threshold = ses_settings['velocityThreshold']
 
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+    # lm_size = ses_settings['trial']['landmarks'][0][0]['size'] # assume same size for all lms
+
     session = {'position': position,
+               'speed': speed,
                'licks': licks, 
-               'rewards': rewards, 
-               'goal_ids': goal_ids, 
-               'lm_ids': lm_ids,
-               'num_landmarks': num_landmarks,
-               'tunnel_length': tunnel_length,
+               'rewards': rewards,
                'lick_threshold': lick_threshold,
-               'speed': speed}
+               'lm_size': lm_size
+               }
     
     return session
 
@@ -2251,7 +3042,7 @@ def analyse_session_pre7_behav(session_path, mouse, stage, world='stable', plot=
     save_path.mkdir(parents=True, exist_ok=True)
     session['save_path'] = save_path
     
-    session = get_lap_idx(session)
+    # session = get_lap_idx(session)
     session = get_lm_idx(session)
     session = get_licks_idx(session) # thresholding is also performed here
     session = get_licks_per_lap(session)
@@ -2282,7 +3073,7 @@ def plot_ethogram(sess_dataframe,ses_settings):
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
     if 'LM_Count' in sess_dataframe.columns:
-        release_df = estimate_lm_events(sess_dataframe,)
+        release_df = estimate_lm_events(sess_dataframe)
     else:
         release_df = estimate_release_events(sess_dataframe, ses_settings)
     release_times = release_df.index.tolist() # time
@@ -2290,7 +3081,7 @@ def plot_ethogram(sess_dataframe,ses_settings):
     release_positions = release_df["Position"].tolist()
     release_positions = release_positions[1:]  # remove first release for plotting because sometimes the timestamp is NaN   
 
-    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
+    # num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
 
     plt.figure(figsize=(12, 6))
     plt.plot(sess_dataframe.index, sess_dataframe['Treadmill']/np.max(sess_dataframe['Treadmill']), label='Treadmill Speed', color='purple')
@@ -2299,7 +3090,7 @@ def plot_ethogram(sess_dataframe,ses_settings):
     plt.plot(release_times, release_positions/np.max(sess_dataframe['Position']), marker='o', linestyle='', label='Releases', color='red')
     plt.plot(reward_times, reward_positions/np.max(sess_dataframe['Position']), marker='o', linestyle='', label='Rewards', color='green')
     plt.plot(sess_dataframe.index, sess_dataframe['Buffer']/np.max(sess_dataframe['Buffer']), label='Analog Buffer', color='black')
-    plt.plot(sess_dataframe.index, sess_dataframe['Lap']/num_laps, label='Laps', color='brown')
+    # plt.plot(sess_dataframe.index, sess_dataframe['Lap']/num_laps, label='Laps', color='brown')
 
     plt.xlabel('Time (s)')
     plt.ylabel('Value')
@@ -2307,142 +3098,519 @@ def plot_ethogram(sess_dataframe,ses_settings):
     plt.legend()
     plt.show()
 
-def plot_transition_matrix(sess_dataframe,ses_settings):
+def get_speed_psth(ses_settings, sess_dataframe, events=None, bins=300):
+    '''Get speed around landmark entry'''
 
-    transition_matrix, lick_tm, ideal_tm = calc_transition_matrix(sess_dataframe,ses_settings)
-    n_lms = transition_matrix.shape[0]
+    # Get session data
+    session = create_session_struct(sess_dataframe, ses_settings)
+    position = session['position']
+    # licks = threshold_lick_events(sess_dataframe, ses_settings).astype(int)
+    licks_idx = np.where(session['licks'] > 0)[0]
 
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 3, 1)
-    plt.imshow(transition_matrix, cmap='viridis', interpolation='none')
-    plt.colorbar()
-    plt.clim(0, np.max(transition_matrix))
-    plt.title('Stimulus Transition Matrix')
-    plt.xlabel('Next Landmark ID')
-    plt.ylabel('Current Landmark ID')
-    plt.xticks([i for i in range(n_lms)])
-    plt.yticks([i for i in range(n_lms)])
-
-    plt.subplot(1, 3, 2)
-    plt.imshow(lick_tm, cmap='viridis', interpolation='none')
-    plt.colorbar()
-    plt.clim(0, np.max(lick_tm))
-    plt.title('Lick Transition Matrix')
-    plt.xlabel('Next Landmark ID')
-    plt.ylabel('Current Landmark ID')
-    plt.xticks([i for i in range(n_lms)])
-    plt.yticks([i for i in range(n_lms)])
-
-    plt.subplot(1, 3, 3)
-    plt.imshow(ideal_tm, cmap='viridis', interpolation='none')
-    plt.colorbar()
-    plt.clim(0, np.max(ideal_tm))
-    plt.title('Ideal Transition Matrix')
-    plt.xlabel('Next Landmark ID')
-    plt.ylabel('Current Landmark ID')
-    plt.xticks([i for i in range(n_lms)])
-    plt.yticks([i for i in range(n_lms)])
-
-    plt.tight_layout()
-    plt.show()
-
-def plot_conditional_matrix(sess_dataframe,ses_settings):
-
-    transition_prob, control_prob, ideal_prob = calc_conditional_matrix(sess_dataframe,ses_settings)
-    max_val = max(np.max(transition_prob), np.max(control_prob), np.max(ideal_prob))
-    n_goals = transition_prob.shape[0]
-    n_lms = transition_prob.shape[1]
-    if n_goals == 3:
-        y_labels = ['A', 'B', 'C']
-        x_labels = [str(i) for i in range(n_lms)]
-    elif n_goals == 4:
-        y_labels = ['A', 'B', 'C', 'D']
-        x_labels = [str(i) for i in range(n_lms)]
+    if 'LM_Count' in sess_dataframe.columns:
+        release_df = estimate_lm_events(sess_dataframe)
     else:
-        y_labels = [str(i) for i in range(n_goals)]
-        x_labels = [str(i) for i in range(n_lms)]
+        release_df = estimate_release_events(sess_dataframe, ses_settings)
 
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 3, 1)
-    plt.imshow(transition_prob, cmap='viridis', interpolation='none')
-    plt.colorbar()
-    plt.clim(0, max_val)
-    plt.title('Transition Probability Matrix (Licked)')
-    plt.xlabel('Next Landmark ID')
-    plt.xticks([i for i in range(n_lms)], x_labels)
-    plt.yticks([i for i in range(n_goals)], y_labels)
-    plt.ylabel('Goal ID')
+    if events is None:
+        events = release_df['Index']
 
-    plt.subplot(1, 3, 2)
-    plt.imshow(control_prob, cmap='viridis', interpolation='none')
-    plt.colorbar()
-    plt.clim(0, max_val)
-    plt.title('Control Probability Matrix (All Targets)')
-    plt.xlabel('Next Landmark ID')
-    plt.xticks([i for i in range(n_lms)], x_labels)
-    plt.yticks([i for i in range(n_goals)], y_labels)
-    plt.ylabel('Goal ID')
+    # # Remove non-responsive runs for this analysis
+    # no_response_trials = []
+    # for i, lm_idx in enumerate(events):  
+    #     start_idx = lm_idx - bins / 2
+    #     end_idx = lm_idx + bins / 2
+    #     # only consider lm until the last reward - ignore lms that the mouse just ran through 
+    #     if not np.any(licks_idx[(licks_idx > start_idx) & (licks_idx < (end_idx))]):
+    #         no_response_trials.append(i)
 
-    plt.subplot(1, 3, 3)
-    plt.imshow(ideal_prob, cmap='viridis', interpolation='none')
-    plt.colorbar()
-    plt.clim(0, max_val)
-    plt.title('Ideal Probability Matrix')
-    plt.xlabel('Next Landmark ID')
-    plt.xticks([i for i in range(n_lms)], x_labels)
-    plt.yticks([i for i in range(n_goals)], y_labels)
-    plt.ylabel('Goal ID')
+    # large_gaps = np.where(np.diff(no_response_trials) > 20)[0]
+    # if len(large_gaps) > 0:
+    #     cutoff_idx = large_gaps[-1] + 1
+    #     cutoff_trial = no_response_trials[cutoff_idx]
+    #     events = events[:cutoff_trial]
+    #     print("Exclude from trial:", cutoff_trial)
+        
+    # Bin speed
+    binned_speed = np.zeros((len(events), bins))
 
-    plt.tight_layout()
-    plt.show()
+    for i, lm_idx in enumerate(events):  
+        start_idx = lm_idx - bins / 2
+        end_idx = lm_idx + bins / 2
 
-def plot_stable_conditional_matrix(sess_dataframe,ses_settings):
+        if start_idx < 0:
+            continue
+        if end_idx > len(position):
+            break
+        
+        event_idx = np.arange(start_idx, end_idx).astype(int)
+        binned_speed[i] = session['speed'][event_idx]
+        # bin_edges = np.linspace(start_idx, end_idx, bins + 1).astype(int)
+        # binned_speed[i], _, _ = stats.binned_statistic(event_idx, session['speed'][event_idx], statistic='mean', bins=bin_edges)
 
-    transition_prob, control_prob, ideal_prob = calc_stable_conditional_matrix(sess_dataframe,ses_settings)
-    goals, lm_ids = parse_stable_goal_ids(ses_settings)
-    max_val = max(np.max(transition_prob), np.max(control_prob), np.max(ideal_prob))
-    n_goals = transition_prob.shape[0]
-    n_lms = transition_prob.shape[1]
-    if n_goals == 3:
-        y_labels = ['A', 'B', 'C']
-    elif n_goals == 4:
-        y_labels = goals
+        event_pos = position[np.where(release_df['Index'] == lm_idx)[0][0]]
+        lm_exit_idx = np.argmin(np.abs(position - (event_pos + session['lm_size'])))
+
+    
+    mean_binned_speed = np.mean(binned_speed, axis=0)
+    sem_binned_speed = stats.sem(binned_speed, axis=0)
+
+    return mean_binned_speed, sem_binned_speed
+
+def get_lick_rate_psth(ses_settings, sess_dataframe, events=None, bins=300):
+    '''Get lick rate around landmark entry'''
+
+    # Get session data
+    session = create_session_struct(sess_dataframe, ses_settings)
+
+    # Threshold licks 
+    licks = threshold_lick_events(sess_dataframe, ses_settings)
+
+    if 'LM_Count' in sess_dataframe.columns:
+        release_df = estimate_lm_events(sess_dataframe)
     else:
-        y_labels = [str(i) for i in range(n_goals)]
+        release_df = estimate_release_events(sess_dataframe, ses_settings)
 
-    plt.figure(figsize=(12, 5))
-    plt.subplot(1, 3, 1)
-    im = plt.imshow(transition_prob, cmap='viridis', interpolation='none')
-    plt.colorbar(im,fraction=0.02, pad=0.04)
-    plt.clim(0, max_val)
-    plt.title('Transition Probability Matrix (Licked)')
-    plt.xlabel('Next Landmark ID')
-    plt.xticks([i for i in range(n_lms)])
-    plt.yticks([i for i in range(n_goals)], y_labels)
-    plt.ylabel('Goal ID')
+    if events is None:
+        events = release_df['Index']
+     
+    # Bin licks
+    binned_licks = np.zeros((len(events), bins))
 
-    plt.subplot(1, 3, 2)
-    im = plt.imshow(control_prob, cmap='viridis', interpolation='none')
-    plt.colorbar(im,fraction=0.02, pad=0.04)
-    plt.clim(0, max_val)
-    plt.title('Control Probability Matrix (All Targets)')
-    plt.xlabel('Next Landmark ID')
-    plt.xticks([i for i in range(n_lms)])
-    plt.yticks([i for i in range(n_goals)], y_labels)
-    plt.ylabel('Goal ID')
+    for i, lm_idx in enumerate(events):    
+        start_idx = lm_idx - bins / 2
+        end_idx = lm_idx + bins / 2
+        if start_idx < 0:
+            continue
+        if end_idx > len(session['position']):
+            break
+        
+        event_idx = np.arange(start_idx, end_idx).astype(int)
+        bin_edges = np.linspace(start_idx, end_idx, bins + 1).astype(int)
+        
+        binned_licks[i], _, _ = stats.binned_statistic(event_idx, licks[event_idx], statistic='mean', bins=bin_edges)
 
-    plt.subplot(1, 3, 3)
-    im = plt.imshow(ideal_prob, cmap='viridis', interpolation='none')
-    plt.colorbar(im,fraction=0.02, pad=0.04)
-    plt.clim(0, 1)
-    plt.title('Ideal Probability Matrix')
-    plt.xlabel('Next Landmark ID')
-    plt.xticks([i for i in range(n_lms)])
-    plt.yticks([i for i in range(n_goals)], y_labels)
-    plt.ylabel('Goal ID')
+    mean_binned_licks = np.mean(binned_licks, axis=0)
+    sem_binned_licks = stats.sem(binned_licks, axis=0)
 
-    plt.tight_layout()
-    plt.show()
+    return mean_binned_licks, sem_binned_licks
+
+def plot_speed_lick_rate_psth(ses_settings, sess_dataframe, session_id, bins=300):
+    with mpl.rc_context({
+        'axes.titlesize': 15,
+        'axes.labelsize': 15,
+        'xtick.labelsize': 12,
+        'ytick.labelsize': 12,
+        'legend.fontsize': 15,
+    }):
+
+        sequence_task = True
+        if 'full' in session_id:
+            sequence_task = False
+
+        # Estimate dt 
+        if 'LM_Count' in sess_dataframe.columns:
+            release_df = estimate_lm_events(sess_dataframe)
+        else:
+            release_df = estimate_release_events(sess_dataframe, ses_settings)
+
+        dt_idx = np.diff(release_df['Index'])
+        dt_seconds = release_df.index.to_series().diff().dt.total_seconds().to_numpy()
+        window_seconds = np.round(dt_seconds[1:] / dt_idx * bins, 1)
+        window_seconds = window_seconds[~np.isnan(window_seconds)][0]
+
+        # Plot data based on session id 
+        if not sequence_task:
+            # Shaping (10LM corridor)
+            fig, axes = plt.subplots(1, 2, figsize=(10,4))
+            axes = axes.ravel()
+
+            mean_binned_speed, sem_binned_speed = get_speed_psth(ses_settings, sess_dataframe, bins=bins)
+            mean_binned_licks, sem_binned_licks = get_lick_rate_psth(ses_settings, sess_dataframe, bins=bins)
+
+            axes[0].plot(mean_binned_speed, color='black')
+            axes[0].fill_between(range(len(mean_binned_speed)), 
+                            mean_binned_speed + sem_binned_speed, 
+                            mean_binned_speed - sem_binned_speed,
+                            color='black', alpha=0.3)
+            axes[0].set_title('Speed')
+
+            axes[1].plot(mean_binned_licks, color='black')
+            axes[1].fill_between(range(len(mean_binned_licks)), 
+                            mean_binned_licks + sem_binned_licks, 
+                            mean_binned_licks - sem_binned_licks,
+                            color='black', alpha=0.3)
+            axes[1].set_title('Lick rate')
+
+            bins = mean_binned_speed.shape[0]
+            for ax in axes:
+                ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
+                ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
+                # ax.set_xticks([bins/2, bins], labels=['lm entry', 'lm exit'])
+                ax.spines['top'].set_visible(False)
+                ax.spines['right'].set_visible(False)
+
+        else:
+            # Sequence training (ABAB or AABB)
+            A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
+
+            if 'aabb' in session_id:
+                A1 = A_idx[::2]
+                A2 = A_idx[1::2]
+                B1 = B_idx[::2]
+                B2 = B_idx[1::2]
+
+                fig, axes = plt.subplots(1, 2, figsize=(10,4))
+                axes = axes.ravel()
+
+                mean_binned_speed_A1, sem_binned_speed_A1 = get_speed_psth(ses_settings, sess_dataframe, events=A1, bins=bins)
+                mean_binned_licks_A1, sem_binned_licks_A1 = get_lick_rate_psth(ses_settings, sess_dataframe, events=A1, bins=bins)
+
+                mean_binned_speed_A2, sem_binned_speed_A2 = get_speed_psth(ses_settings, sess_dataframe, events=A2, bins=bins)
+                mean_binned_licks_A2, sem_binned_licks_A2 = get_lick_rate_psth(ses_settings, sess_dataframe, events=A2, bins=bins)
+
+                mean_binned_speed_B1, sem_binned_speed_B1 = get_speed_psth(ses_settings, sess_dataframe, events=B1, bins=bins)
+                mean_binned_licks_B1, sem_binned_licks_B1 = get_lick_rate_psth(ses_settings, sess_dataframe, events=B1, bins=bins)
+
+                mean_binned_speed_B2, sem_binned_speed_B2 = get_speed_psth(ses_settings, sess_dataframe, events=B2, bins=bins)
+                mean_binned_licks_B2, sem_binned_licks_B2 = get_lick_rate_psth(ses_settings, sess_dataframe, events=B2, bins=bins)
+
+                axes[0].axhline(ses_settings['velocityThreshold'], linestyle='--', color='grey')
+                axes[0].plot(mean_binned_speed_A1, color='darkblue', label='A1')
+                axes[0].fill_between(range(len(mean_binned_speed_A1)), 
+                                mean_binned_speed_A1 + sem_binned_speed_A1, 
+                                mean_binned_speed_A1 - sem_binned_speed_A1,
+                                color='darkblue', alpha=0.3)
+                axes[0].plot(mean_binned_speed_A2, color='blue', label='A2')
+                axes[0].fill_between(range(len(mean_binned_speed_A2)), 
+                                mean_binned_speed_A2 + sem_binned_speed_A2, 
+                                mean_binned_speed_A2 - sem_binned_speed_A2,
+                                color='blue', alpha=0.3)
+                axes[0].plot(mean_binned_speed_B1, color='orange', label='B1')
+                axes[0].fill_between(range(len(mean_binned_speed_B1)), 
+                                mean_binned_speed_B1 + sem_binned_speed_B1, 
+                                mean_binned_speed_B1 - sem_binned_speed_B1,
+                                color='orange', alpha=0.3)
+                axes[0].plot(mean_binned_speed_B2, color='gold', label='B2')
+                axes[0].fill_between(range(len(mean_binned_speed_B2)), 
+                                mean_binned_speed_B2 + sem_binned_speed_B2, 
+                                mean_binned_speed_B2 - sem_binned_speed_B2,
+                                color='gold', alpha=0.3)
+                axes[0].set_title('Speed')
+
+                axes[1].plot(mean_binned_licks_A1, color='darkblue', label='A1')
+                axes[1].fill_between(range(len(mean_binned_licks_A1)), 
+                                mean_binned_licks_A1 + sem_binned_licks_A1, 
+                                mean_binned_licks_A1 - sem_binned_licks_A1,
+                                color='darkblue', alpha=0.3)
+                axes[1].plot(mean_binned_licks_A2, color='blue', label='A2')
+                axes[1].fill_between(range(len(mean_binned_licks_A2)), 
+                                mean_binned_licks_B1 + sem_binned_licks_A2, 
+                                mean_binned_licks_A2 - sem_binned_licks_A2,
+                                color='blue', alpha=0.3)
+                axes[1].plot(mean_binned_licks_B1, color='orange', label='B1')
+                axes[1].fill_between(range(len(mean_binned_licks_B1)), 
+                                mean_binned_licks_B1 + sem_binned_licks_B1, 
+                                mean_binned_licks_B1 - sem_binned_licks_B1,
+                                color='orange', alpha=0.3)
+                axes[1].plot(mean_binned_licks_B2, color='gold', label='B2')
+                axes[1].fill_between(range(len(mean_binned_licks_B2)), 
+                                mean_binned_licks_B2 + sem_binned_licks_B2, 
+                                mean_binned_licks_B2 - sem_binned_licks_B2,
+                                color='gold', alpha=0.3)
+                axes[1].set_title('Lick rate')
+
+                bins = mean_binned_speed_A1.shape[0]
+                for ax in axes:
+                    ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
+                    ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
+                    # ax.set_xticks([bins/2, bins], labels=['lm entry', 'lm exit'])
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.legend()
+
+            elif 'abab' in session_id:
+                fig, axes = plt.subplots(1, 2, figsize=(10,4))
+                axes = axes.ravel()
+
+                mean_binned_speed_A, sem_binned_speed_A = get_speed_psth(ses_settings, sess_dataframe, events=A_idx, bins=bins)
+                mean_binned_licks_A, sem_binned_licks_A = get_lick_rate_psth(ses_settings, sess_dataframe, events=A_idx, bins=bins)
+
+                mean_binned_speed_B, sem_binned_speed_B = get_speed_psth(ses_settings, sess_dataframe, events=B_idx, bins=bins)
+                mean_binned_licks_B, sem_binned_licks_B = get_lick_rate_psth(ses_settings, sess_dataframe, events=B_idx, bins=bins)
+
+                axes[0].axhline(ses_settings['velocityThreshold'], linestyle='--', color='grey')
+                axes[0].plot(mean_binned_speed_A, color='darkblue', label='A')
+                axes[0].fill_between(range(len(mean_binned_speed_A)), 
+                                mean_binned_speed_A + sem_binned_speed_A, 
+                                mean_binned_speed_A - sem_binned_speed_A,
+                                color='darkblue', alpha=0.3)
+                axes[0].plot(mean_binned_speed_B, color='orange', label='B')
+                axes[0].fill_between(range(len(mean_binned_speed_B)), 
+                                mean_binned_speed_B + sem_binned_speed_B, 
+                                mean_binned_speed_B - sem_binned_speed_B,
+                                color='orange', alpha=0.3)
+                axes[0].set_title('Speed')
+
+                axes[1].plot(mean_binned_licks_A, color='darkblue', label='A')
+                axes[1].fill_between(range(len(mean_binned_licks_A)), 
+                                mean_binned_licks_A + sem_binned_licks_A, 
+                                mean_binned_licks_A - sem_binned_licks_A,
+                                color='darkblue', alpha=0.3)
+                axes[1].plot(mean_binned_licks_B, color='orange', label='B')
+                axes[1].fill_between(range(len(mean_binned_licks_B)), 
+                                mean_binned_licks_B + sem_binned_licks_B, 
+                                mean_binned_licks_B - sem_binned_licks_B,
+                                color='orange', alpha=0.3)
+                axes[1].set_title('Lick rate')
+
+                bins = mean_binned_speed_A.shape[0]   
+                for ax in axes:
+                    ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
+                    ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
+                    # ax.set_xticks([bins/2, bins], labels=['lm entry', 'lm exit'])
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.legend()
+    
+            elif 'abb' in session_id:                
+                A1 = A_idx
+                B1 = B_idx[::2]
+                B2 = B_idx[1::2]
+
+                fig, axes = plt.subplots(1, 2, figsize=(10,4))
+                axes = axes.ravel()
+
+                mean_binned_speed_A1, sem_binned_speed_A1 = get_speed_psth(ses_settings, sess_dataframe, events=A1, bins=bins)
+                mean_binned_licks_A1, sem_binned_licks_A1 = get_lick_rate_psth(ses_settings, sess_dataframe, events=A1, bins=bins)
+
+                mean_binned_speed_B1, sem_binned_speed_B1 = get_speed_psth(ses_settings, sess_dataframe, events=B1, bins=bins)
+                mean_binned_licks_B1, sem_binned_licks_B1 = get_lick_rate_psth(ses_settings, sess_dataframe, events=B1, bins=bins)
+
+                mean_binned_speed_B2, sem_binned_speed_B2 = get_speed_psth(ses_settings, sess_dataframe, events=B2, bins=bins)
+                mean_binned_licks_B2, sem_binned_licks_B2 = get_lick_rate_psth(ses_settings, sess_dataframe, events=B2, bins=bins)
+
+                axes[0].axhline(ses_settings['velocityThreshold'], linestyle='--', color='grey')
+                axes[0].plot(mean_binned_speed_A1, color='darkblue', label='A')
+                axes[0].fill_between(range(len(mean_binned_speed_A1)), 
+                                mean_binned_speed_A1 + sem_binned_speed_A1, 
+                                mean_binned_speed_A1 - sem_binned_speed_A1,
+                                color='darkblue', alpha=0.3)
+                axes[0].plot(mean_binned_speed_B1, color='orange', label='B1')
+                axes[0].fill_between(range(len(mean_binned_speed_B1)), 
+                                mean_binned_speed_B1 + sem_binned_speed_B1, 
+                                mean_binned_speed_B1 - sem_binned_speed_B1,
+                                color='orange', alpha=0.3)
+                axes[0].plot(mean_binned_speed_B2, color='gold', label='B2')
+                axes[0].fill_between(range(len(mean_binned_speed_B2)), 
+                                mean_binned_speed_B2 + sem_binned_speed_B2, 
+                                mean_binned_speed_B2 - sem_binned_speed_B2,
+                                color='gold', alpha=0.3)
+                axes[0].set_title('Speed')
+
+                axes[1].plot(mean_binned_licks_A1, color='darkblue', label='A')
+                axes[1].fill_between(range(len(mean_binned_licks_A1)), 
+                                mean_binned_licks_A1 + sem_binned_licks_A1, 
+                                mean_binned_licks_A1 - sem_binned_licks_A1,
+                                color='darkblue', alpha=0.3)
+                axes[1].plot(mean_binned_licks_B1, color='orange', label='B1')
+                axes[1].fill_between(range(len(mean_binned_licks_B1)), 
+                                mean_binned_licks_B1 + sem_binned_licks_B1, 
+                                mean_binned_licks_B1 - sem_binned_licks_B1,
+                                color='orange', alpha=0.3)
+                axes[1].plot(mean_binned_licks_B2, color='gold', label='B2')
+                axes[1].fill_between(range(len(mean_binned_licks_B2)), 
+                                mean_binned_licks_B2 + sem_binned_licks_B2, 
+                                mean_binned_licks_B2 - sem_binned_licks_B2,
+                                color='gold', alpha=0.3)
+                axes[1].set_title('Lick rate')
+
+                bins = mean_binned_speed_A1.shape[0]
+                for ax in axes:
+                    ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
+                    ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
+                    # ax.set_xticks([bins/2, bins], labels=['lm entry', 'lm exit'])
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.legend()
+
+        plt.tight_layout()
+
+    return fig
+
+def plot_transition_matrix(sess_dataframe, ses_settings):
+    from matplotlib.colors import Normalize
+
+    target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    
+    transition_matrix, lick_tm, ideal_tm = calc_transition_matrix(sess_dataframe, ses_settings)
+    label_map = {}
+    for i, tid in enumerate(target_id, start=1):
+        label_map[tid] = f"A{i}"
+    for i, did in enumerate(distractor_id, start=1):
+        label_map[did] = f"B{i}"
+    labels = [label_map[i] for i in lm_ids]
+    
+    global_max = max(np.max(lick_tm), np.max(ideal_tm))
+
+    with mpl.rc_context({
+        'axes.titlesize': 15,
+        'axes.labelsize': 15,
+        'xtick.labelsize': 15,
+        'ytick.labelsize': 15,
+        'legend.fontsize': 10,
+    }):
+        fig, axes = plt.subplots(1, 3, figsize=(12, 5))
+
+        ims = []
+        ims.append(axes[0].imshow(transition_matrix, cmap='viridis', interpolation='none',
+                                vmin=0, vmax=np.max(transition_matrix)))
+        axes[0].set_title('Stimulus Transition Matrix')
+
+        ims.append(axes[1].imshow(lick_tm, cmap='viridis', interpolation='none',
+                                vmin=0, vmax=global_max))
+        axes[1].set_title('Lick Transition Matrix')
+
+        ims.append(axes[2].imshow(ideal_tm, cmap='viridis', interpolation='none',
+                                vmin=0, vmax=global_max))
+        axes[2].set_title('Ideal Transition Matrix')
+
+        for ax in axes:
+            ax.set_xlabel('Next Landmark ID')
+            # ax.set_ylabel('Current Landmark ID')
+            ax.set_xticks(range(len(lm_ids)))
+            ax.set_yticks(range(len(lm_ids)))
+            ax.set_xticklabels(labels)
+            ax.set_yticklabels(labels)
+        axes[0].set_ylabel('Current Landmark ID')
+
+        for ax, im in zip(axes, ims):
+            cbar = fig.colorbar(im, ax=ax, shrink=0.5, aspect=20, pad=0.05)
+            cbar.set_ticks([im.norm.vmin, im.norm.vmax])
+
+        plt.tight_layout()
+
+    return fig
+
+def plot_distance_transition_matrix(sess_dataframe, ses_settings):
+
+    target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    transition_matrix, lick_tm, ideal_tm = calc_distance_transition_matrix(sess_dataframe, ses_settings)
+    
+    label_map = {}
+    for i, tid in enumerate(target_id, start=1):
+        label_map[tid] = f"A{i}"
+    for i, did in enumerate(distractor_id, start=1):
+        label_map[did] = f"B{i}"
+    
+    labels = [label_map[i] for i in lm_ids]
+
+    with mpl.rc_context({
+        'axes.titlesize': 15,
+        'axes.labelsize': 15,
+        'xtick.labelsize': 15,
+        'ytick.labelsize': 15,
+        'legend.fontsize': 10,
+    }):
+        for d in transition_matrix.keys():
+            fig, axes = plt.subplots(1, 3, figsize=(12, 5))
+
+            ims = []
+            ims.append(axes[0].imshow(transition_matrix[d], cmap='viridis', interpolation='none',
+                                        vmin=0, vmax=np.max(transition_matrix[d])))
+            axes[0].set_title('Stimulus Transition Matrix')
+
+            ims.append(axes[1].imshow(lick_tm[d], cmap='viridis', interpolation='none',
+                                        vmin=0, vmax=np.max(lick_tm[d])))
+            axes[1].set_title('Lick Transition Matrix')
+
+            ims.append(axes[2].imshow(ideal_tm[d], cmap='viridis', interpolation='none',
+                                        vmin=0, vmax=np.max(ideal_tm[d])))
+            axes[2].set_title('Ideal Transition Matrix')
+
+            for ax in axes:
+                ax.set_xlabel('Next Landmark ID')
+                ax.set_ylabel('Current Landmark ID')
+                ax.set_xticks(range(len(lm_ids)))
+                ax.set_yticks(range(len(lm_ids)))
+                ax.set_xticklabels(labels)
+                ax.set_yticklabels(labels)
+
+            for ax, im in zip(axes, ims):
+                cbar = fig.colorbar(im, ax=ax, shrink=0.5, aspect=20, pad=0.05)
+                vmin, vmax = im.get_clim()
+                cbar.set_ticks([vmin, vmax])
+                cbar.set_ticklabels([f'{vmin:.0f}', f'{vmax:.0f}'])
+                
+            plt.tight_layout()
+            if isinstance(d, float):
+                fig.suptitle(f'Distance between current and next landmark = {int(d)}')
+            else:
+                fig.suptitle(f'Distance between current and next landmark = {d}')
+
+    return 
+
+def plot_conditional_matrix(sess_dataframe, ses_settings, n_steps=1):
+    
+    transition_prob, control_prob, ideal_prob = calc_conditional_matrix(sess_dataframe, ses_settings, n_steps)
+    target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    
+    max_val = max(np.max(transition_prob), np.max(control_prob), np.max(ideal_prob))
+
+    label_map = {}
+    for i, tid in enumerate(target_id, start=1):
+        label_map[tid] = f"A{i}"
+    for i, did in enumerate(distractor_id, start=1):
+        label_map[did] = f"B{i}"
+    
+    xlabels = [label_map[i] for i in lm_ids]
+    ylabels = [label_map[i] for i in target_id]
+
+    with mpl.rc_context({
+        'axes.titlesize': 15,
+        'axes.labelsize': 15,
+        'xtick.labelsize': 15,
+        'ytick.labelsize': 15,
+        'legend.fontsize': 10,
+    }):
+        fig, axes = plt.subplots(1, 3, figsize=(10, 3))
+
+        ims = []
+        ims.append(axes[0].imshow(transition_prob, cmap='viridis', interpolation='none',
+                                    vmin=0, vmax=max_val))
+        axes[0].set_title(f'Transition Probability Matrix') #\n(Licked at {n_steps} lms ahead)')
+
+        ims.append(axes[1].imshow(control_prob, cmap='viridis', interpolation='none',
+                                    vmin=0, vmax=max_val))
+        axes[1].set_title('Control Probability Matrix\n(Next landmark)')
+
+        ims.append(axes[2].imshow(ideal_prob, cmap='viridis', interpolation='none',
+                                    vmin=0, vmax=max_val))
+        axes[2].set_title('Ideal Probability Matrix\n(Next A)')
+
+        for ax in axes:
+            ax.set_xlabel('Next Landmark ID')
+            ax.set_xticks(range(len(lm_ids)))
+            ax.set_xticklabels(xlabels)
+            ax.set_yticks(range(len(target_id)))
+            ax.set_yticklabels(ylabels)
+        axes[0].set_ylabel('Landmark ID')
+        
+        for ax, im in zip(axes, ims):
+            cbar = fig.colorbar(im, ax=ax, shrink=0.3, aspect=20, pad=0.05)
+            ticks = cbar.get_ticks()
+            cbar.set_ticks(ticks)
+            cbar.set_ticklabels([f"{i:.1f}" for i in ticks])
+
+        plt.tight_layout()
+
+    return fig
 
 def plot_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
@@ -2578,33 +3746,40 @@ def plot_sequencing_ABC(sess_dataframe,ses_settings):
     plt.show()
 
 def plot_lick_lm(sess_dataframe,ses_settings):
+    target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
 
-    target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    A_landmarks, _, _, _ = get_A_B_landmarks(sess_dataframe, ses_settings)
 
+    was_target = np.zeros(len(lm_id_sequence))
+    was_target[A_landmarks] = 1
     was_target = was_target[:,np.newaxis]
+
     licked_all = licked_all[:,np.newaxis]
-    lm_id = lm_id[:,np.newaxis]
-    plt.figure(figsize=(10,4))
+    lm_id_sequence = lm_id_sequence[:,np.newaxis]
+    fig = plt.figure(figsize=(10,4))
     plt.subplot(3, 1, 1)
     plt.imshow(was_target.T, aspect='auto', cmap='viridis')
     plt.clim(0, 1)
     plt.title('Was Target')
+
     #invert color map for better visibility
     plt.subplot(3, 1, 2)
-    plt.imshow(lm_id.T, aspect='auto', cmap='viridis_r')
-    plt.clim(0, np.max(lm_id))
+    plt.imshow(lm_id_sequence.T, aspect='auto', cmap='viridis_r')
+    plt.clim(0, np.max(lm_id_sequence))
     plt.title('Landmark ID')
+
     plt.subplot(3, 1, 3)
     plt.imshow(licked_all.T, aspect='auto', cmap='viridis')
     plt.clim(0, 1)
     plt.title('Licked All')
     plt.tight_layout()
-    plt.show()
+
+    return fig
 
 def plot_full_corr(sess_dataframe,ses_settings):
 
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
     #for the length of licked_all, repeat the lm_ids to fill the array
     all_lms = np.concatenate([lm_ids]* (licked_all.shape[0] // lm_ids.shape[0] + 1))[:licked_all.shape[0]]
@@ -2654,7 +3829,7 @@ def plot_full_corr(sess_dataframe,ses_settings):
 def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
 
     target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
-    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
 
     hit_rate_window = np.zeros(len(licked_all)-window)
     false_alarm_rate_window = np.zeros(len(licked_all)-window)
@@ -2676,7 +3851,7 @@ def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
 def plot_licks_per_state(sess_dataframe, ses_settings):
     state_id = give_state_id(sess_dataframe,ses_settings)
 
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
     if licked_all.shape[0] % 10 != 0:
         #extend the array to make it divisible by 10

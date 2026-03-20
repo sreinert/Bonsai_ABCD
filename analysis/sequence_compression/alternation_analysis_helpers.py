@@ -1863,6 +1863,7 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
                 os.makedirs(condition_save_path, exist_ok=True)
                 plt.savefig(condition_save_path + f'/{data_type}_neuron{cell}.png', dpi=300)
 
-            plt.close(fig)
+            if len(neurons) > 100:
+                plt.close(fig)
             
     return results

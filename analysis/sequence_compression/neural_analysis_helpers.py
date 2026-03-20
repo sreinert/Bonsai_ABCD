@@ -1934,9 +1934,9 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
     elif stage == 4:
         color = '#9E664C'
     elif stage == 5:
-        color = 'blue'
+        color = 'forestgreen' #'blue'
     elif stage == 6:
-        color = 'orange'
+        color = 'firebrick' #'orange'
     elif stage == 8:
         color = 'red'
     elif stage == 12:
@@ -2007,8 +2007,14 @@ def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoal
         print(f'Goal progress and tracked neurons found. Loading...')
         data = np.load(os.path.join(save_path, filename), allow_pickle=True)
         goal_progress_tuned = data['goal_progress_tuned']
-        real_scores = data['real_scores'].item()
-        shuffled_scores = data['shuffled_scores'].item()
+        if 'real_scores' in data:
+            real_scores = data['real_scores'].item()
+        else:
+            real_scores = None
+        if 'shuffled_scores' in data:
+            shuffled_scores = data['shuffled_scores'].item()
+        else:
+            shuffled_scores = None
 
     else:
         goal_progress_tuned = []
@@ -2023,13 +2029,15 @@ def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoal
             else:
                 if (real_scores[cell] > 1) & (np.abs(real_scores[cell] - np.median(shuffled_scores[cell])) > 0.5):
                     goal_progress_tuned.append(cell)
+            # if (real_scores[cell] > 1.5):
+            #     goal_progress_tuned.append(cell)
         
         # Save these neurons
-        np.savez(os.path.join(save_path, filename), 
-                 goal_progress_tuned=np.array(goal_progress_tuned), 
-                 real_scores=np.array(real_scores), 
-                 shuffled_scores=np.array(shuffled_scores),
-                 allow_pickle=True)
+        # np.savez(os.path.join(save_path, filename), 
+        #          goal_progress_tuned=np.array(goal_progress_tuned), 
+        #          real_scores=np.array(real_scores), 
+        #          shuffled_scores=np.array(shuffled_scores),
+        #          allow_pickle=True)
 
     # Plot firing rates for goal progress tuned cells
     if plot:
