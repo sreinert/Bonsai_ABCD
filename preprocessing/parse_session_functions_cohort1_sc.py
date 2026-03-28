@@ -95,22 +95,22 @@ def load_settings(base_path):
 
 def load_data(base_path):
     '''Load raw behaviour data logged by Bonsai'''
-    events_reader = Csv("behav/experiment-events/*", ["Seconds", "Value"])
+    events_reader = Csv("behav/experiment-events/experiment-events_*", ["Seconds", "Value"])
     events_data = aeon.load(Path(base_path), events_reader)
 
-    lick_reader = Csv("behav/licks/*", ["Seconds", "Value"])
+    lick_reader = Csv("behav/licks/licks_*", ["Seconds", "Value"])
     lick_data = aeon.load(Path(base_path), lick_reader)
 
-    rewards_reader = Csv("behav/reward/*", ["Seconds", "Value"])
+    rewards_reader = Csv("behav/reward/reward_*", ["Seconds", "Value"])
     rewards_data = aeon.load(Path(base_path), rewards_reader)
 
-    position_reader = Csv("behav/current-position/*", ["Seconds","Value.X","Value.Y","Value.Z","Value.Length", "Value.LengthFast", "Value.LengthSquared"])
+    position_reader = Csv("behav/current-position/current-position_*", ["Seconds","Value.X","Value.Y","Value.Z","Value.Length", "Value.LengthFast", "Value.LengthSquared"])
     position_data = aeon.load(Path(base_path), position_reader)
 
-    treadmill_reader = Csv("behav/treadmill-speed/*", ["Seconds", "Value"])
+    treadmill_reader = Csv("behav/treadmill-speed/treadmill-speed_*", ["Seconds", "Value"])
     treadmill_data = aeon.load(Path(base_path), treadmill_reader)
 
-    buffer_reader = Csv("behav/analog-data/*", ["Seconds", "Value"])
+    buffer_reader = Csv("behav/analog-data/analog-data_*", ["Seconds", "Value"])
     buffer_data = aeon.load(Path(base_path), buffer_reader)
 
     if os.path.exists(Path(base_path) / "behav/current-landmark/"):
@@ -497,22 +497,30 @@ def calc_sw_hit_fa(sess_dataframe, ses_settings, window=12, split_lms=False, plo
     else:       
         A1 = A_landmarks
         A2 = []
+        B3 = []
 
         if len(reward_seq) == 3:
             B1 = B_landmarks[::2]
             B2 = B_landmarks[1::2]
 
         elif len(reward_seq) == 4:
-            A1 = A_landmarks[::2]
-            A2 = A_landmarks[1::2]
-            B1 = B_landmarks[::2]
-            B2 = B_landmarks[1::2]
+            if len(np.where(reward_seq == -1)[0]) > 2:
+                B1 = B_landmarks[::3]
+                B2 = B_landmarks[1::3]
+                B3 = B_landmarks[2::3]
+            else:
+                A1 = A_landmarks[::2]
+                A2 = A_landmarks[1::2]
+                B1 = B_landmarks[::2]
+                B2 = B_landmarks[1::2]
 
         A1_positions = release_positions[A1]
         A2_positions = release_positions[A2] if len(A2) > 0 else np.array([])
 
         B1_positions = release_positions[B1]
         B2_positions = release_positions[B2]
+        B3_positions = release_positions[B3] if len(B3) > 0 else np.array([])
+
 
         hit_rate_sw = {"A1": np.zeros(len(release_positions[:-window]))}
         if len(A2) > 0:
@@ -520,6 +528,8 @@ def calc_sw_hit_fa(sess_dataframe, ses_settings, window=12, split_lms=False, plo
 
         fa_rate_sw  = {"B1": np.zeros(len(release_positions[:-window])),
                        "B2": np.zeros(len(release_positions[:-window]))}
+        if len(B3) > 0:
+            fa_rate_sw["B3"] = np.zeros(len(release_positions[:-window]))
 
         for idx, pos in enumerate(release_positions[:-window]):
             
@@ -533,6 +543,7 @@ def calc_sw_hit_fa(sess_dataframe, ses_settings, window=12, split_lms=False, plo
             
             B1_pos_range = B1_positions[(B1_positions >= positions_range[0]) & (B1_positions <= positions_range[-1])]
             B2_pos_range = B2_positions[(B2_positions >= positions_range[0]) & (B2_positions <= positions_range[-1])]
+            B3_pos_range = B3_positions[(B3_positions >= positions_range[0]) & (B3_positions <= positions_range[-1])] if len(B3_positions) else np.array([])
 
             # Find responses to targets and distractors inside the lms
             licked_A1 = np.zeros(len(A1_pos_range))
@@ -556,12 +567,20 @@ def calc_sw_hit_fa(sess_dataframe, ses_settings, window=12, split_lms=False, plo
                 if np.any((lick_pos_range > b_pos) & (lick_pos_range < (b_pos + lm_size))):
                     licked_B2[b] = 1
 
+            if len(B3_positions):
+                licked_B3 = np.zeros(len(B3_pos_range))
+                for a, a_pos in enumerate(B3_pos_range):
+                    if np.any((lick_pos_range > a_pos) & (lick_pos_range < (a_pos + lm_size))):
+                        licked_B3[a] = 1
+
             # Calculate hit and false alarm rates for each window 
             hit_rate_sw["A1"][idx] = np.sum(licked_A1) / len(licked_A1) 
             if len(A2_positions):
                 hit_rate_sw["A2"][idx] = np.clip(np.sum(licked_A2) / len(licked_A2), 0.01, 0.99)
             fa_rate_sw["B1"][idx] = np.sum(licked_B1) / len(licked_B1) 
             fa_rate_sw["B2"][idx] = np.sum(licked_B2) / len(licked_B2) 
+            if len(B3_positions):
+                fa_rate_sw["B3"][idx] = np.clip(np.sum(licked_B3) / len(licked_B3), 0.01, 0.99)
 
             # adjust hit rate and fa rate to avoid infinity in d-prime calculation
             hit_rate_sw["A1"][idx] = np.clip(hit_rate_sw["A1"][idx], 0.01, 0.99)
@@ -581,7 +600,9 @@ def calc_sw_hit_fa(sess_dataframe, ses_settings, window=12, split_lms=False, plo
                 plt.plot(hit_rate_sw["A2"], c='blue', linewidth=2, label='Hit A2')
             plt.plot(fa_rate_sw["B1"], c='orange', linewidth=2, label='FA B1')
             plt.plot(fa_rate_sw["B2"], c='gold', linewidth=2, label='FA B2')
-        
+            if "B3" in fa_rate_sw:
+                plt.plot(fa_rate_sw["B3"], c='brown', linewidth=2, label='FA B3')
+
         plt.ylim([0,1.1])
         plt.yticks([0,0.5,1])
         plt.xlabel(f'Landmark window (n={window} lms)')
@@ -643,27 +664,36 @@ def calc_distance_hit_fa(sess_dataframe, ses_settings, split_lms=False, plot=Tru
     else:
         A1 = A_landmarks
         A2 = []
+        B3 = []
 
         if len(reward_seq) == 3:
             B1 = B_landmarks[::2]
             B2 = B_landmarks[1::2]
 
         elif len(reward_seq) == 4:
-            A1 = A_landmarks[::2]
-            A2 = A_landmarks[1::2]
-            B1 = B_landmarks[::2]
-            B2 = B_landmarks[1::2]
+            if len(np.where(reward_seq == -1)[0]) > 2:
+                B1 = B_landmarks[::3]
+                B2 = B_landmarks[1::3]
+                B3 = B_landmarks[2::3]
+            else:
+                A1 = A_landmarks[::2]
+                A2 = A_landmarks[1::2]
+                B1 = B_landmarks[::2]
+                B2 = B_landmarks[1::2]
 
         A1_positions = release_positions[A1]
         A2_positions = release_positions[A2] if len(A2) > 0 else np.array([])
 
         B1_positions = release_positions[B1]
         B2_positions = release_positions[B2]
+        B3_positions = release_positions[B3] if len(B3) > 0 else np.array([])
 
         hit_rate = {"A1": {}}
         if len(A2) > 0:
             hit_rate["A2"] = {}
         fa_rate = {"B1": {}, "B2": {}}
+        if len(B3) > 0:
+            fa_rate["B3"] = {}
 
         for d in np.unique(distances):
             lms_considered = np.where(distances == d)[0]
@@ -673,6 +703,7 @@ def calc_distance_hit_fa(sess_dataframe, ses_settings, split_lms=False, plot=Tru
             A2_pos_considered = [p for p in A2_positions if p in pos_considered]
             B1_pos_considered = [p for p in B1_positions if p in pos_considered]
             B2_pos_considered = [p for p in B2_positions if p in pos_considered]
+            B3_pos_considered = [p for p in B3_positions if p in pos_considered]
 
             licked_A1 = np.zeros(len(A1_pos_considered))
             for i, pos in enumerate(A1_pos_considered):
@@ -694,6 +725,11 @@ def calc_distance_hit_fa(sess_dataframe, ses_settings, split_lms=False, plot=Tru
                 if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
                     licked_B2[i] = 1
 
+            licked_B3 = np.zeros(len(B3_pos_considered))
+            for i, pos in enumerate(B3_pos_considered):
+                if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+                    licked_B3[i] = 1
+
             hit_rate["A1"][d] = (np.sum(licked_A1) / len(licked_A1)
                 if len(licked_A1) > 0 else np.nan)
 
@@ -706,6 +742,10 @@ def calc_distance_hit_fa(sess_dataframe, ses_settings, split_lms=False, plot=Tru
 
             fa_rate["B2"][d] = (np.sum(licked_B2) / len(licked_B2)
                 if len(licked_B2) > 0 else np.nan)
+            
+            if len(B3) > 0:
+                fa_rate["B3"][d] = (np.sum(licked_B3) / len(licked_B3)
+                if len(licked_B3) > 0 else np.nan)
 
     if plot:
         with mpl.rc_context({
@@ -736,6 +776,9 @@ def calc_distance_hit_fa(sess_dataframe, ses_settings, split_lms=False, plot=Tru
                         c='orange', linewidth=2, label='fa B1')
                 plt.plot(d_sorted, [fa_rate["B2"][d] for d in d_sorted],
                         c='gold', linewidth=2, label='fa B2')
+                if "B3" in fa_rate:
+                    plt.plot(d_sorted, [fa_rate["B3"][d] for d in d_sorted],
+                        c='brown', linewidth=2, label='fa B3')
 
             plt.xlabel("Landmark distance")
             ax = plt.gca()
@@ -893,6 +936,11 @@ def get_A_B_landmarks(sess_dataframe, ses_settings):
         if np.diff(reward_seq)[0] == 0:     # AABB
             A_landmarks = [i - 2 for i, r in enumerate(reward_seq) if r == 0]
             B_landmarks = [i + 2 for i, r in enumerate(reward_seq) if r == -1]
+        elif len(np.where(reward_seq == -1)[0]) > 2:    # ABBB
+            A_landmarks = list(np.where(reward_seq == 0)[0])
+            if A_landmarks[0] == 0:
+                A_landmarks[0] = 3 
+            B_landmarks = [i for i in range(len(reward_seq)) if (i not in A_landmarks)]
         else:     # ABAB
             A_landmarks = [i - 1 for i, r in enumerate(reward_seq) if r == 0]
             B_landmarks = [i + 1 for i, r in enumerate(reward_seq) if r == -1]
@@ -912,7 +960,7 @@ def get_A_B_landmarks(sess_dataframe, ses_settings):
         B_landmarks.extend([i for i in range(B_landmarks[b]+len(reward_seq), len(lm_idx), len(reward_seq)) if i < len(lm_idx)])
 
     A_landmarks = np.sort(A_landmarks)
-    B_landmarks = np.sort(B_landmarks)    
+    B_landmarks = np.sort(B_landmarks)
 
     # Split the data indices into A1-A2-B1-B2
     A_idx = [lm_idx[i] for i in A_landmarks]
@@ -947,6 +995,9 @@ def find_targets_distractors(sess_dataframe, ses_settings):
             else:
                 distractor_id = lm_id[distractor_idx]
                 target_id = lm_id[target_idx]
+        elif len(np.where(reward_seq == -1)[0]) > 2: # ABBB
+            distractor_id = np.atleast_1d(lm_id[1:])
+            target_id = np.atleast_1d(lm_id[0])
         else: # ABAB
             if reward_seq[0] == -1:
                 distractor_id = lm_id[distractor_idx] + 1
@@ -964,8 +1015,12 @@ def find_targets_distractors(sess_dataframe, ses_settings):
     # Get sequence of landmark ids 
     lm_id_sequence = np.zeros(len(A_landmarks) + len(B_landmarks), dtype=int)
     if len(reward_seq) == 4:
-        lm_id_sequence[A_landmarks] = np.tile(target_id, int(np.ceil(len(A_landmarks)/2)))[:len(A_landmarks)]
-        lm_id_sequence[B_landmarks] = np.tile(distractor_id, int(np.ceil(len(B_landmarks)/2)))[:len(B_landmarks)]
+        if len(np.where(reward_seq == -1)[0]) > 2: # ABBB
+            lm_id_sequence[A_landmarks] = np.tile(target_id, len(A_landmarks))
+            lm_id_sequence[B_landmarks] = np.tile(distractor_id, int(np.ceil(len(B_landmarks)/2)))[:len(B_landmarks)]
+        else:
+            lm_id_sequence[A_landmarks] = np.tile(target_id, int(np.ceil(len(A_landmarks)/2)))[:len(A_landmarks)]
+            lm_id_sequence[B_landmarks] = np.tile(distractor_id, int(np.ceil(len(B_landmarks)/2)))[:len(B_landmarks)]
     elif len(reward_seq) == 3:
         lm_id_sequence[A_landmarks] = np.tile(target_id, len(A_landmarks))
         lm_id_sequence[B_landmarks] = np.tile(distractor_id, int(np.ceil(len(B_landmarks)/2)))[:len(B_landmarks)]
@@ -1918,7 +1973,7 @@ def estimate_release_events(sess_dataframe, ses_settings):
             continue # we have already identified odour
         else:
             closed_idx = int(df.at[i, "idx"])
-            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, pos_window = lm_size /2, event_priority=["release"], choose = "earlist")
+            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, pos_window = lm_size /2, event_priority=["release"], choose = "earliest")
             if odour is not None:
                 df.at[i, "idx"] = chosen_idx
                 df.at[i, "released_odour"] = odour
@@ -1968,7 +2023,7 @@ def find_closest_events(
     idx: int,
     pos_window: float = 3.0,
     event_priority=["release", "prepare", "flush"],
-    choose = 'earlist',
+    choose = 'earliest',
     verbose = False,
 ):
     """
@@ -2035,7 +2090,7 @@ def find_closest_events(
             offset += 1  # expand zigzag radius
 
     if len(candidate_idx) > 0:
-        if choose == 'earlist':
+        if choose == 'earliest':
             chosen_idx = min(candidate_idx)
             chosen_event = events_col.iat[chosen_idx]
             chosen_pos = df.at[chosen_idx, "Position"]
@@ -3377,7 +3432,7 @@ def plot_speed_lick_rate_psth(ses_settings, sess_dataframe, session_id, bins=300
                     ax.spines['right'].set_visible(False)
                     ax.legend()
     
-            elif 'abb' in session_id:                
+            elif 'abb' in session_id and 'abbb' not in session_id:                
                 A1 = A_idx
                 B1 = B_idx[::2]
                 B2 = B_idx[1::2]
@@ -3427,6 +3482,83 @@ def plot_speed_lick_rate_psth(ses_settings, sess_dataframe, session_id, bins=300
                                 mean_binned_licks_B2 + sem_binned_licks_B2, 
                                 mean_binned_licks_B2 - sem_binned_licks_B2,
                                 color='gold', alpha=0.3)
+                axes[1].set_title('Lick rate')
+
+                bins = mean_binned_speed_A1.shape[0]
+                for ax in axes:
+                    ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
+                    ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
+                    # ax.set_xticks([bins/2, bins], labels=['lm entry', 'lm exit'])
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.spines['top'].set_visible(False)
+                    ax.spines['right'].set_visible(False)
+                    ax.legend()
+
+            elif 'abbb' in session_id:                
+                A1 = A_idx
+                B1 = B_idx[::3]
+                B2 = B_idx[1::3]
+                B3 = B_idx[2::3]
+
+                fig, axes = plt.subplots(1, 2, figsize=(10,4))
+                axes = axes.ravel()
+
+                mean_binned_speed_A1, sem_binned_speed_A1 = get_speed_psth(ses_settings, sess_dataframe, events=A1, bins=bins)
+                mean_binned_licks_A1, sem_binned_licks_A1 = get_lick_rate_psth(ses_settings, sess_dataframe, events=A1, bins=bins)
+
+                mean_binned_speed_B1, sem_binned_speed_B1 = get_speed_psth(ses_settings, sess_dataframe, events=B1, bins=bins)
+                mean_binned_licks_B1, sem_binned_licks_B1 = get_lick_rate_psth(ses_settings, sess_dataframe, events=B1, bins=bins)
+
+                mean_binned_speed_B2, sem_binned_speed_B2 = get_speed_psth(ses_settings, sess_dataframe, events=B2, bins=bins)
+                mean_binned_licks_B2, sem_binned_licks_B2 = get_lick_rate_psth(ses_settings, sess_dataframe, events=B2, bins=bins)
+
+                mean_binned_speed_B3, sem_binned_speed_B3 = get_speed_psth(ses_settings, sess_dataframe, events=B3, bins=bins)
+                mean_binned_licks_B3, sem_binned_licks_B3 = get_lick_rate_psth(ses_settings, sess_dataframe, events=B3, bins=bins)
+
+                axes[0].axhline(ses_settings['velocityThreshold'], linestyle='--', color='grey')
+                axes[0].plot(mean_binned_speed_A1, color='darkblue', label='A')
+                axes[0].fill_between(range(len(mean_binned_speed_A1)), 
+                                mean_binned_speed_A1 + sem_binned_speed_A1, 
+                                mean_binned_speed_A1 - sem_binned_speed_A1,
+                                color='darkblue', alpha=0.3)
+                axes[0].plot(mean_binned_speed_B1, color='orange', label='B1')
+                axes[0].fill_between(range(len(mean_binned_speed_B1)), 
+                                mean_binned_speed_B1 + sem_binned_speed_B1, 
+                                mean_binned_speed_B1 - sem_binned_speed_B1,
+                                color='orange', alpha=0.3)
+                axes[0].plot(mean_binned_speed_B2, color='gold', label='B2')
+                axes[0].fill_between(range(len(mean_binned_speed_B2)), 
+                                mean_binned_speed_B2 + sem_binned_speed_B2, 
+                                mean_binned_speed_B2 - sem_binned_speed_B2,
+                                color='gold', alpha=0.3)
+                axes[0].plot(mean_binned_speed_B3, color='brown', label='B3')
+                axes[0].fill_between(range(len(mean_binned_speed_B3)), 
+                                mean_binned_speed_B3 + sem_binned_speed_B3, 
+                                mean_binned_speed_B3 - sem_binned_speed_B3,
+                                color='brown', alpha=0.3)
+                axes[0].set_title('Speed')
+
+                axes[1].plot(mean_binned_licks_A1, color='darkblue', label='A')
+                axes[1].fill_between(range(len(mean_binned_licks_A1)), 
+                                mean_binned_licks_A1 + sem_binned_licks_A1, 
+                                mean_binned_licks_A1 - sem_binned_licks_A1,
+                                color='darkblue', alpha=0.3)
+                axes[1].plot(mean_binned_licks_B1, color='orange', label='B1')
+                axes[1].fill_between(range(len(mean_binned_licks_B1)), 
+                                mean_binned_licks_B1 + sem_binned_licks_B1, 
+                                mean_binned_licks_B1 - sem_binned_licks_B1,
+                                color='orange', alpha=0.3)
+                axes[1].plot(mean_binned_licks_B2, color='gold', label='B2')
+                axes[1].fill_between(range(len(mean_binned_licks_B2)), 
+                                mean_binned_licks_B2 + sem_binned_licks_B2, 
+                                mean_binned_licks_B2 - sem_binned_licks_B2,
+                                color='gold', alpha=0.3)
+                axes[1].plot(mean_binned_licks_B3, color='brown', label='B3')
+                axes[1].fill_between(range(len(mean_binned_licks_B3)), 
+                                mean_binned_licks_B3 + sem_binned_licks_B3, 
+                                mean_binned_licks_B3 - sem_binned_licks_B3,
+                                color='brown', alpha=0.3)
                 axes[1].set_title('Lick rate')
 
                 bins = mean_binned_speed_A1.shape[0]

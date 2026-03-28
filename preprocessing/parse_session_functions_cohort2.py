@@ -271,7 +271,7 @@ def get_lap_idx(session):
         lap_idx[flip_ix[-1]:] = len(flip_ix)
 
         session['lap_idx'] = lap_idx
-        session['num_laps'] = len(flip_ix) #+ 1
+        session['num_laps'] = len(flip_ix) + 1
     else:
         # the session didn't have any flips
         session['lap_idx'] = np.ones(len(session['position']))
