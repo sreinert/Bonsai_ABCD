@@ -1927,8 +1927,9 @@ def estimate_release_events(sess_dataframe, ses_settings):
     if isinstance(trial, list):
         trial = trial[0]['trial']
     lm_size = trial['landmarks'][0][0]['size']
-    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
-    lm_gap = lm_size + ses_settings['trial']['offsets'][0]
+    offset = trial['offsets'][0]
+
+    lm_gap = lm_size + offset 
 
     tmp = sess_dataframe.reset_index(drop=False, inplace=False)
     release_subset = tmp[tmp['Events'].str.contains('release', na=False) & ~tmp['Events'].str.contains('odour0', na=False)][['Events', 'Position']]
@@ -2007,7 +2008,7 @@ def estimate_release_events(sess_dataframe, ses_settings):
 
     # Step 7: Add the first odour stimulus that VR ABCD forgot
     # sometimes the VR drops the first release event, check for that and add first element if needed
-    first_release = extract_int(ses_settings['trial']['landmarks'][0][0]['odour'])
+    first_release = extract_int(trial['landmarks'][0][0]['odour'])
     # if first_release != result[0][3]:
     if first_release != 0 and (len(result) == 0 or first_release != result[0][3]):
         result = [[pd.NaT, 0, -1, first_release]] + result
@@ -2210,16 +2211,20 @@ def get_licks_idx(session, lick_threshold=True):
 
     return session 
 
-def get_lap_idx(session):
-    # Divide the session dataframe into laps based on the position and corridor length
-    if session['world'] == 'stable':
-        session['num_laps'] = int(np.ceil(session['position'].max() / session['tunnel_length']))
-    elif session['world'] == 'random':
-        session['num_laps'] = 1
-    # For each position, determine which lap it belongs to
-    session['lap_idx'] = (session['position'] // session['tunnel_length']).astype(int)
+# def get_lap_idx(session):
+#     # Divide the session dataframe into laps based on the position and corridor length
+#     if 'world' in session:
+#         if session['world'] == 'stable':
+#             session['num_laps'] = int(np.ceil(session['position'].max() / session['tunnel_length']))
+#         elif session['world'] == 'random':
+#             session['num_laps'] = 1
+#     else:
+#         session['num_laps'] = int(np.ceil(session['position'].max() / session['tunnel_length']))
 
-    return session
+#     # For each position, determine which lap it belongs to
+#     session['lap_idx'] = (session['position'] // session['tunnel_length']).astype(int)
+#     print(session['num_laps'])
+#     return session
 
 def get_lm_idx(session):
     # Get landmark idx for each datapoint
@@ -2283,24 +2288,35 @@ def get_licks_per_lap(session):
     return session
 
 def get_licked_lms(session):
-    # Get licked landmarks
-    licked_lms = np.zeros((session['num_laps'], len(session['landmarks'])))
-    
-    for i in range(session['num_laps']):
-        lap_idx = np.where(session['lap_idx'] == i)[0]
-        for j in range(len(session['landmarks'])):
-            lm = np.where(session['lm_idx'] == j+1)[0]
+    # Get licked landmarks 
+
+    if 'num_laps' in session:
+        licked_lms = np.zeros((session['num_laps'], len(session['landmarks'])))
+        
+        for i in range(session['num_laps']):
+            lap_idx = np.where(session['lap_idx'] == i)[0]
             target_ix = np.intersect1d(lap_idx, lm)
-            # if session['thresholded_licks'] exists, use that
-            if 'thresholded_licks' in session:
-                target_licks = np.intersect1d(target_ix, session['thresholded_licks'])
-            # otherwise use all licks
-            else:
-                target_licks = np.intersect1d(target_ix, session['licks'])
+            for j in range(len(session['landmarks'])):
+                lm = np.where(session['lm_idx'] == j+1)[0]
+                target_ix = np.intersect1d(lap_idx, lm)
+                target_licks = np.intersect1d(target_ix, session['licks_idx'])
+
+                if len(target_licks) > 0:
+                    licked_lms[i,j] = 1
+                else:
+                    licked_lms[i,j] = 0
+
+    else:
+        licked_lms = np.zeros(len(session['landmarks']))
+
+        for i in range(len(session['landmarks'])):
+            lm = np.where(session['lm_idx'] == i+1)[0]
+            target_licks = np.intersect1d(lm, session['licks_idx'])
+            
             if len(target_licks) > 0:
-                licked_lms[i,j] = 1
+                licked_lms[i] = 1
             else:
-                licked_lms[i,j] = 0
+                licked_lms[i] = 0
 
     session['licked_lms'] = licked_lms
 
@@ -2308,18 +2324,31 @@ def get_licked_lms(session):
 
 def get_rewarded_lms(session):
     # Get rewarded landmarks
-    rewarded_lms = np.zeros((session['num_laps'], len(session['landmarks'])))
-    
-    for i in range(session['num_laps']):
-        lap_idx = np.where(session['lap_idx'] == i)[0]
-        for j in range(len(session['landmarks'])):
-            lm = np.where(session['lm_idx'] == j+1)[0]
-            target_ix = np.intersect1d(lap_idx, lm)
-            target_rewards = np.intersect1d(target_ix, session['rewards'])
+
+    if 'num_laps' in session:
+        rewarded_lms = np.zeros((session['num_laps'], len(session['landmarks'])))
+        
+        for i in range(session['num_laps']):
+            lap_idx = np.where(session['lap_idx'] == i)[0]
+            for j in range(len(session['landmarks'])):
+                lm = np.where(session['lm_idx'] == j+1)[0]
+                target_ix = np.intersect1d(lap_idx, lm)
+                target_rewards = np.intersect1d(target_ix, session['rewards'])
+                if len(target_rewards) > 0:
+                    rewarded_lms[i,j] = 1
+                else:
+                    rewarded_lms[i,j] = 0
+
+    else:
+        rewarded_lms = np.zeros((len(session['landmarks'])))
+
+        for i in range(len(session['landmarks'])):
+            lm = np.where(session['lm_idx'] == i+1)[0]
+            target_rewards = np.intersect1d(lm, session['rewards'])
             if len(target_rewards) > 0:
-                rewarded_lms[i,j] = 1
+                rewarded_lms[i] = 1
             else:
-                rewarded_lms[i,j] = 0
+                rewarded_lms[i] = 0
 
     session['rewarded_lms'] = rewarded_lms
 
@@ -2363,20 +2392,18 @@ def get_lms_visited(session, sess_dataframe, ses_settings):
     else:
         num_lms = len(session['landmarks'])  
 
-    if session['world'] == 'stable':
-        all_lms = np.array([])  # landmark ids
-        for i in range(session['num_laps']):
-            all_lms = np.append(all_lms, session['lm_ids'])
-        all_lms = all_lms.astype(int)[:num_lms]
-    elif session['world'] == 'random':
-        all_lms = get_random_lm_sequence(sess_dataframe, ses_settings)
-        all_lms = all_lms[:num_lms]
-        
-    all_landmarks = session['landmarks']  
-    for i in range(1, session['num_laps']):  
-        all_landmarks = np.concatenate((all_landmarks, session['landmarks']), axis=0)
-    all_landmarks = all_landmarks[:num_lms]  # landmark positions
-
+    all_lms = np.array([]) # landmark ids
+    if 'world' in session:
+        if session['world'] == 'stable':
+            for i in range(session['num_laps']):
+                all_lms = np.append(all_lms, session['lm_ids'])
+            all_lms = all_lms.astype(int)[:num_lms]
+        elif session['world'] == 'random':
+            all_lms = get_random_lm_sequence(sess_dataframe, ses_settings)
+            all_lms = all_lms[:num_lms]
+    
+    all_landmarks = session['landmarks'][:num_lms]  # landmark positions
+    
     session['all_landmarks'] = all_landmarks
     session['all_lms'] = all_lms
 
@@ -2460,7 +2487,7 @@ def get_data_lm_idx(session):
 
     # Find datapoints within a landmark
     lm_idx = np.zeros(len(session['position']))
-    for i in range(len(session['all_lms'])):
+    for i in range(len(session['all_landmarks'])):
         lm_idx[lm_entry[i]:lm_exit[i]+1] = i+1
 
     session['data_lm_idx'] = lm_idx
@@ -2522,55 +2549,77 @@ def get_lm_lick_rate(session, bins=16):  # TODO I really need to fix this and ma
     else:
         binary_licks = session['licks'] 
 
-    if ('stage' in session) and ('3' in session['stage'] or '4' in session['stage']):
-        
-        lm_lick_rate = np.zeros((len(session['all_lms']), bins))
-        for lm in range(len(session['all_lms'])):
-            # datapoints within landmarks for each lap 
-            lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
-
-            # binary licks within landmark
-            lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+    if bins is not None:
+        if ('stage' in session) and ('3' in session['stage'] or '4' in session['stage']):
             
-            # calculate lick rate within each landmark (mean in each bin)
-            lm_lick_rate[lm], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+            lm_lick_rate = np.zeros((len(session['all_lms']), bins))
+            for lm in range(len(session['all_lms'])):
+                # datapoints within landmarks for each lap 
+                lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
 
-            # Reshape the data in goal - non-goal pairs
-            goal_lm_lick_rate = lm_lick_rate[session['goals_idx']]
-            non_goal_lm_lick_rate = lm_lick_rate[session['non_goals_idx']]
+                # binary licks within landmark
+                lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+                
+                # calculate lick rate within each landmark (mean in each bin)
+                lm_lick_rate[lm], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
 
-            min_len = min(len(goal_lm_lick_rate), len(non_goal_lm_lick_rate))
-            goal_lm_lick_rate = goal_lm_lick_rate[:min_len, :]
-            non_goal_lm_lick_rate = non_goal_lm_lick_rate[:min_len, :]
+                # Reshape the data in goal - non-goal pairs
+                goal_lm_lick_rate = lm_lick_rate[session['goals_idx']]
+                non_goal_lm_lick_rate = lm_lick_rate[session['non_goals_idx']]
 
-            lm_lick_rate = np.column_stack((goal_lm_lick_rate, non_goal_lm_lick_rate))
-            
+                min_len = min(len(goal_lm_lick_rate), len(non_goal_lm_lick_rate))
+                goal_lm_lick_rate = goal_lm_lick_rate[:min_len, :]
+                non_goal_lm_lick_rate = non_goal_lm_lick_rate[:min_len, :]
+
+                lm_lick_rate = np.column_stack((goal_lm_lick_rate, non_goal_lm_lick_rate))
+                
+        else:
+            lm_lick_rate = np.zeros((len(session['all_lms']), bins))
+            for lm in range(len(session['all_lms'])):
+                # datapoints within landmarks for each lap 
+                lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
+
+                # binary licks within landmark
+                lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+                
+                # calculate lick rate within each landmark (mean in each bin)
+                lm_lick_rate[lm], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+
+            # Calculate actual number of laps and lms
+            num_lms_considered = int(np.round((len(session['all_landmarks']) // session['num_landmarks']) * session['num_landmarks']))
+            num_laps = int(num_lms_considered / session['num_landmarks'])
+
+            # Reshape the data 
+            lm_lick_rate_reshape = [[] for _ in range(num_laps)]
+            for lap in range(num_laps):
+                start = lap * session['num_landmarks']
+                end = start + session['num_landmarks']
+                for lm_idx in range(start, end):
+                    rate = lm_lick_rate[lm_idx]
+                    lm_lick_rate_reshape[lap].extend(rate)                
+            lm_lick_rate = np.array(lm_lick_rate_reshape)  # (num_laps, num_bins * num_landmarks)
+
     else:
-        lm_lick_rate = np.zeros((len(session['all_lms']), bins))
-        for lm in range(len(session['all_lms'])):
+        # Get a single value per landmark 
+        lm_lick_rate = np.zeros((len(session['all_landmarks'])))
+        for lm in range(len(session['all_landmarks'])):
             # datapoints within landmarks for each lap 
             lm_idx = np.where(session['data_lm_idx'] == lm+1)[0]
-
-            # binary licks within landmark
-            lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
             
-            # calculate lick rate within each landmark (mean in each bin)
-            lm_lick_rate[lm], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+            if len(lm_idx) == 0:
+                lm_lick_rate[lm] = 0
+                continue
 
-        # Calculate actual number of laps and lms
-        num_lms_considered = int(np.round((len(session['all_landmarks']) // session['num_landmarks']) * session['num_landmarks']))
-        num_laps = int(num_lms_considered / session['num_landmarks'])
+            # calculate mean lick rate within each landmark
+            lm_lick_rate[lm] = np.mean(binary_licks[lm_idx])
 
-        # Reshape the data 
-        lm_lick_rate_reshape = [[] for _ in range(num_laps)]
-        for lap in range(num_laps):
-            start = lap * session['num_landmarks']
-            end = start + session['num_landmarks']
-            for lm_idx in range(start, end):
-                rate = lm_lick_rate[lm_idx]
-                lm_lick_rate_reshape[lap].extend(rate)                
-        lm_lick_rate = np.array(lm_lick_rate_reshape)  # (num_laps, num_bins * num_landmarks)
-
+        # Alternative 
+        # lm_lick_rate = np.zeros(len(session['landmarks']))
+        # for lm in range(len(session['landmarks'])):
+        #     lm = np.where(session['lm_idx'] == lm+1)[0]
+        #     target_licks = np.intersect1d(lm, session['licks_idx'])
+        #     lm_lick_rate[lm] = len(target_licks) / len(lm)
+        
     session['lm_lick_rate'] = lm_lick_rate
 
     return session
@@ -2704,7 +2753,7 @@ def merge_positions_keep_single(pos1, pos2, tol, offset):
 
 def get_goal_positions(session, sess_dataframe, ses_settings):
     '''Get the start and end of each goal landmark using odour release events to find targets'''
-    target_positions, _, _, _, _, _, _ = find_targets_distractors(sess_dataframe, ses_settings)
+    target_positions, _, _, _, _, _ = find_targets_distractors(sess_dataframe, ses_settings)
 
     goals = np.zeros((len(target_positions), 2))
     for i, pos in enumerate(np.sort(target_positions)):
@@ -3076,48 +3125,44 @@ def analyse_npz_pre7(mouse, session_id, root, stage, world='stable', plot=True):
     
     return session
 
-def analyse_session_pre7_behav(session_path, mouse, stage, world='stable', plot=True):
+def analyse_session_behav(session_path, mouse, plot=True):
     '''Wrapper for session analysis using behaviour data'''
 
-    if '3' not in stage and '4' not in stage and '5' not in stage and '6' not in stage:
-        raise ValueError('This function only works for T3-T6.')
-    
     ses_settings, _ = load_settings(session_path)
     sess_dataframe = load_data(session_path)
 
-    session = create_session_struct(sess_dataframe, ses_settings, world=world)
+    session = create_session_struct(sess_dataframe, ses_settings)
     session = get_landmark_positions(session, sess_dataframe, ses_settings, data='odour')
     session = get_goal_positions(session, sess_dataframe, ses_settings)
 
     session['mouse'] = mouse
-    session['stage'] = stage
-    session['world'] = world
 
-    save_path = Path(session_path) / 'analysis'
-    save_path.mkdir(parents=True, exist_ok=True)
-    session['save_path'] = save_path
+    # save_path = Path(session_path) / 'analysis'
+    # save_path.mkdir(parents=True, exist_ok=True)
+    # session['save_path'] = save_path
     
     # session = get_lap_idx(session)
     session = get_lm_idx(session)
     session = get_licks_idx(session) # thresholding is also performed here
-    session = get_licks_per_lap(session)
+    # session = get_licks_per_lap(session)
     session = get_licked_lms(session)
     session = get_rewarded_lms(session)
     session = get_lms_visited(session, sess_dataframe, ses_settings)
     session = get_reward_idx(session)
-    session = get_active_goal(session)
-    session = calc_acceleration(session)
-    session = calculate_frame_lick_rate(session)
+    session = get_lm_lick_rate(session, bins=None)
+    # session = get_active_goal(session)
+    # session = calc_acceleration(session)
+    # session = calculate_frame_lick_rate(session)
 
-    session = get_AB_sequence(session, world)
-    session = get_landmark_categories(session)
-    session = get_rewarded_landmarks(session)
-    session = get_landmark_category_rew_idx(session)
+    # session = get_AB_sequence(session, world)
+    # session = get_landmark_categories(session)
+    # session = get_rewarded_landmarks(session)
+    # session = get_landmark_category_rew_idx(session)
 
     # Get behaviour
-    session = get_behaviour(session, sess_dataframe, ses_settings, plot)
+    # session = get_behaviour(session, sess_dataframe, ses_settings, plot)
 
-    print('Number of laps = ', session['num_laps'])
+    # print('Number of laps = ', session['num_laps'])
     
     return session
     

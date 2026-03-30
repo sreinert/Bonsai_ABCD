@@ -260,8 +260,13 @@ def get_VR_rewards(VR_data):
 def get_lap_idx(session):
     # get lap idx
     flip_ix = find_peaks(session['position'], height=session['tunnel_length']-1,distance=100)[0]
-    if np.abs(session['position'][0] - session['landmarks'][-1,1]) < np.abs(session['position'][0] - session['landmarks'][0,0]):
-        flip_ix = flip_ix[1:]  # Remove the first peak index - the mouse accidentally moved backwards first
+    
+    # Remove the first peak index - the mouse accidentally moved backwards first
+    # if np.abs(session['position'][0] - session['landmarks'][-1,1]) < np.abs(session['position'][0] - session['landmarks'][0,0]):
+    #     flip_ix = flip_ix[1:]  
+    backward_idx = np.where(np.abs(session['position'][:2000] - session['landmarks'][-1,1]) < np.abs(session['position'][:2000] - session['landmarks'][0,0]))[0]
+    if backward_idx.size > 0:
+        flip_ix = flip_ix[1:]
 
     if len(flip_ix) > 0:
         # a lap is between two flips
