@@ -305,17 +305,34 @@ def get_event_parsed(sess_dataframe, ses_settings):
     else:
         release_df = estimate_release_events(sess_dataframe, ses_settings)
 
-    # re-order AB so that A is always first
+    # Fix the order of the first events
+    lm_idx = np.asarray(release_df['Index'].to_numpy(), dtype=int)
+    position = np.nan_to_num(sess_dataframe['Position'].values, nan=0.0)
+    release_positions = position[lm_idx]
+    
     trial = ses_settings['trial']
     if isinstance(trial, list):
         trial = trial[0]['trial']
     reward_seq = np.array([lm[0]['rewardSequencePosition'] for lm in trial['landmarks']])
     
-    if np.diff(reward_seq)[0] == 0: # AABB
-        release_df = release_df[2:]
-    else: # ABAB
-        release_df = release_df[1:]
+    if len(reward_seq) == 4:
+        if np.diff(reward_seq)[0] == 0:    
+            # AABB: re-order AB so that A is always first
+            release_df = release_df[2:]
+            
+        elif len(np.where(reward_seq == -1)[0]) > 2:    
+            # ABBB: get rid of first event if needed otherwise keep the order the same
+            if release_positions[0] < 2:
+                release_df = release_df[1:]
+        else:    
+            # ABAB: re-order AB so that A is always first
+            release_df = release_df[1:]
 
+    if len(reward_seq) == 3:
+        # ABB: get rid of first event if needed otherwise keep the order the same
+        if release_positions[0] < 2:
+            release_df = release_df[1:]
+    
     return lick_position, lick_times, reward_times, reward_positions, release_df
 
 def parse_rew_lms(ses_settings):
@@ -393,12 +410,12 @@ def parse_random_goal_ids(ses_settings):
     return goals, lm_ids
 
 def calc_hit_fa(sess_dataframe, ses_settings):
+    '''Calculate average hit and false alarm rate across a session'''
+
     trial = ses_settings['trial']
     if isinstance(trial, list):
         trial = trial[0]['trial']
-
     lm_size = trial['landmarks'][0][0]['size']
-    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
 
     target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
 
@@ -933,7 +950,7 @@ def get_A_B_landmarks(sess_dataframe, ses_settings):
 
     # Split As and Bs into A1-A2-B1-B2
     if len(reward_seq) == 4:
-        if np.diff(reward_seq)[0] == 0:     # AABB
+        if np.diff(reward_seq)[0] == 0:    # AABB
             A_landmarks = [i - 2 for i, r in enumerate(reward_seq) if r == 0]
             B_landmarks = [i + 2 for i, r in enumerate(reward_seq) if r == -1]
         elif len(np.where(reward_seq == -1)[0]) > 2:    # ABBB
@@ -941,7 +958,7 @@ def get_A_B_landmarks(sess_dataframe, ses_settings):
             if A_landmarks[0] == 0:
                 A_landmarks[0] = 3 
             B_landmarks = [i for i in range(len(reward_seq)) if (i not in A_landmarks)]
-        else:     # ABAB
+        else:    # ABAB
             A_landmarks = [i - 1 for i, r in enumerate(reward_seq) if r == 0]
             B_landmarks = [i + 1 for i, r in enumerate(reward_seq) if r == -1]
     elif len(reward_seq) == 3:
@@ -1050,7 +1067,7 @@ def calc_transition_matrix(sess_dataframe, ses_settings):
     if isinstance(trial, list):
         trial = trial[0]['trial']
 
-    num_landmarks = len(trial['landmarks'])
+    num_landmarks = len(trial['all_landmarks'])
 
     lick_sequence = lm_id_sequence[licked_all==1]
     ideal_sequence = lm_id_sequence[ideal_licks==1]
@@ -1061,12 +1078,6 @@ def calc_transition_matrix(sess_dataframe, ses_settings):
         current_lm = int(lm_id_sequence[i])
         next_lm = int(lm_id_sequence[i+1])
         transition_matrix[current_lm, next_lm] += 1
-
-    # for i in range(len(lm_id)-1):
-    #     current_lm = int(lm_id[i])
-    #     next_lm = int(lm_id[i+1])
-    #     transition_matrix[current_lm, next_lm] += 1
-    # transition_matrix[next_lm, lm_id[0]] += 1
 
     # lick transition matrix
     lick_tm = np.zeros((num_landmarks, num_landmarks))
@@ -1098,7 +1109,7 @@ def calc_distance_transition_matrix(sess_dataframe, ses_settings, binning=True):
         trial = trial[0]['trial']
     lm_size = trial['landmarks'][0][0]['size']
     # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
-    num_landmarks = len(trial['landmarks'])
+    num_landmarks = len(trial['all_landmarks'])
 
     target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
     hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
@@ -2645,11 +2656,15 @@ def get_landmark_positions(session, sess_dataframe, ses_settings, data='pd'):
     if isinstance(trial, list):
         trial = trial[0]['trial']
     lm_size = trial['landmarks'][0][0]['size']
-    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
 
     if data == 'odour':
-        result_df = estimate_release_events(sess_dataframe, ses_settings)
-        release_positions = result_df['Position'].values
+        # Estimate landmark entries based on odour release positions 
+        lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
+        lm_idx = np.asarray(release_df['Index'].to_numpy(), dtype=int)
+        
+        position = np.nan_to_num(sess_dataframe['Position'].values, nan=0.0)
+        release_positions = position[lm_idx]
+        
         landmarks = np.zeros((len(release_positions), 2))
         for lm, pos in enumerate(release_positions):
             landmarks[lm,0] = pos
@@ -2664,15 +2679,10 @@ def get_landmark_positions(session, sess_dataframe, ses_settings, data='pd'):
         exit_pos1  = session['position'][lm_exit_idx1]
         exit_pos2  = session['position'][lm_exit_idx2]
         
-        # print(entry_pos1[:50])
-        # print(entry_pos2[:50])
-        # print(exit_pos1[:50])
-        # print(exit_pos2[:50])
         trial = ses_settings['trial']
         if isinstance(trial, list):
             trial = trial[0]['trial']
         lm_size = trial['landmarks'][0][0]['size']
-        # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
         offset = ses_settings['trial']['offsets'][0]
         tol = lm_size * 0.5
 
@@ -2758,8 +2768,8 @@ def get_goal_positions(session, sess_dataframe, ses_settings):
     goals = np.zeros((len(target_positions), 2))
     for i, pos in enumerate(np.sort(target_positions)):
         # Find lm closest to release position
-        closest_lm = np.argmin(np.abs(session['landmarks'][:,0] - pos))
-        goals[i] = session['landmarks'][closest_lm]
+        closest_lm = np.argmin(np.abs(session['all_landmarks'][:,0] - pos))
+        goals[i] = session['all_landmarks'][closest_lm]
     
     session['goals'] = goals
 
@@ -3133,6 +3143,7 @@ def analyse_session_behav(session_path, mouse, plot=True):
 
     session = create_session_struct(sess_dataframe, ses_settings)
     session = get_landmark_positions(session, sess_dataframe, ses_settings, data='odour')
+    session = get_lms_visited(session, sess_dataframe, ses_settings)
     session = get_goal_positions(session, sess_dataframe, ses_settings)
 
     session['mouse'] = mouse
@@ -3147,7 +3158,7 @@ def analyse_session_behav(session_path, mouse, plot=True):
     # session = get_licks_per_lap(session)
     session = get_licked_lms(session)
     session = get_rewarded_lms(session)
-    session = get_lms_visited(session, sess_dataframe, ses_settings)
+    
     session = get_reward_idx(session)
     session = get_lm_lick_rate(session, bins=None)
     # session = get_active_goal(session)
