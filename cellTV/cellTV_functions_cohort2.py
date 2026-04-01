@@ -43,7 +43,10 @@ def load_img_data(imaging_path):
     fneu = np.load(os.path.join(imaging_path, 'Fneu.npy'))
     iscell = np.load(os.path.join(imaging_path, 'iscell.npy'))
     ops = np.load(os.path.join(imaging_path, 'ops.npy'), allow_pickle=True).item()
-    seg = np.load(os.path.join(imaging_path, 'meanImg_seg.npy'), allow_pickle=True).item()
+    if os.path.exists(os.path.join(imaging_path, 'meanImg_seg.npy')):
+        seg = np.load(os.path.join(imaging_path, 'meanImg_seg.npy'), allow_pickle=True).item()
+    else:
+        seg = None
     frame_rate = ops['fs']
 
     return f, fneu, iscell, ops, seg, frame_rate

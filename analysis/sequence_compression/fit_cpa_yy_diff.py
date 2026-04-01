@@ -26,70 +26,72 @@ cohort = args.cohort
 # Load functions according to cohort 
 if cohort == '2':
     import preprocessing.parse_session_functions_cohort2 as parse_session_functions
-    base_path = Path('/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/')
+    base_path = Path("/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/")
 elif cohort == '3':
-    raise ValueError('This has not been implemented for cohort 3 yet.')
-    
+    import preprocessing.parse_session_functions_cohort3 as parse_session_functions
+    base_path = Path("/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives")
+
 importlib.reload(parse_session_functions)
 importlib.reload(neural_analysis_helpers)
 importlib.reload(alternation)
+alternation.set_parse_session_functions(parse_session_functions)
 
 #%% Load data 
-# Load dF and valid neurons
-dF, neurons = parse_session_functions.load_dF(base_path, mouse, stage)
-            
-# Load session data 
-_, _, _, _, date = parse_session_functions.get_session_folders(base_path, mouse, stage)
-session = parse_session_functions.analyse_npz_pre7(mouse, date, stage)
 
+if cohort == '2':
+    # Load dF and valid neurons
+    dF, neurons = parse_session_functions.load_dF(base_path, mouse, stage)
+    
+    # Create session struct
+    _, _, _, _, date = parse_session_functions.get_session_folders(base_path, mouse, stage)
+    session = parse_session_functions.analyse_npz_pre7(mouse, date, stage, plot=False)
+    session['stim_order'] = 'pseudorandom'
+
+elif cohort == '3':
+    # Load dF and valid neurons
+    session_path = parse_session_functions.find_base_path(mouse, session_id, base_path)
+    dF, neurons = parse_session_functions.load_dF(session_path, red_chan=True)
+
+    # Create session struct
+    if stage == 't3' or stage == 't4':
+        world = 'random'
+    else:
+        world = 'stable'
+
+    behav_path = parse_session_functions.find_base_path(mouse, session_id, '/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata')
+    session = parse_session_functions.analyse_npz_pre7(mouse, session_id, base_path, stage, world, plot=False)
+    session['stim_order'] = 'random'
+
+# Collect all events
+event_idx = np.sort(np.concatenate([session['reward_idx'], session['miss_rew_idx'], session['nongoal_rew_idx'], session['test_rew_idx']])).astype(int)
 if mouse == 'TAA0000066' and stage == 't3':
     lick_end_idx = 160
-    event_idx = np.sort(np.concatenate([session['reward_idx'], session['miss_rew_idx'], session['nongoal_rew_idx']])).astype(int)[:lick_end_idx]
-else:
-    event_idx = np.sort(np.concatenate([session['reward_idx'], session['miss_rew_idx'], session['nongoal_rew_idx']])).astype(int)
+    event_idx = event_idx[:lick_end_idx]
 session['event_idx'] = event_idx
 
 #%% Bin YY data 
 bins = 20 
 
-# Define patches again - with include_next requirement the last one might be included (XYYX)
-ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, include_next=False)
+# Define patches
+if session['stim_order'] == 'random':
+    ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, include_next=False, precede_XY=True)
+elif session['stim_order'] == 'pseudorandom':
+    ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, include_next=False, precede_XY=False)
 
-# Use lm entry and exit idx
-lm_entry_idx, lm_exit_idx = parse_session_functions.get_lm_entry_exit(session)
-
-if mouse == 'TAA0000066' and stage == 't3':
-    lm_entry_idx = lm_entry_idx[:lick_end_idx]
-    lm_exit_idx = lm_exit_idx[:lick_end_idx]
-
-# Find the midpoint between two YY events
-BB_midpoint = [np.around(lm_exit_idx[lm[1]] + ((lm_entry_idx[lm[2]] - lm_exit_idx[lm[1]]) / 2)).astype(int) for lm in ABB_patches]
-events_BB = {}
-for i, lm in enumerate(ABB_patches):
-    B1 = lm[1]
-    B2 = lm[2]
-    events_BB[B1] = { "start": lm_entry_idx[B1], "reward": event_idx[B1], "end": lm_exit_idx[B1]}
-    events_BB[B2] = { "start": lm_entry_idx[B2], "reward": event_idx[B2], "end": lm_exit_idx[B2]}
-
-AA_midpoint = [np.around(lm_exit_idx[lm[1]] + ((lm_entry_idx[lm[2]] - lm_exit_idx[lm[1]]) / 2)).astype(int) for lm in BAA_patches]
-events_AA = {}
-for i, lm in enumerate(BAA_patches):
-    A1 = lm[1]
-    A2 = lm[2]
-    events_AA[A1] = {"start": lm_entry_idx[A1], "reward": event_idx[A1], "end": lm_exit_idx[A1]}
-    events_AA[A2] = {"start": lm_entry_idx[A2], "reward": event_idx[A2], "end": lm_exit_idx[A2]}
+# Find start, reward and end timepoints inside YY events 
+events_AA = alternation.get_YY_events(session, BAA_patches)
+events_BB = alternation.get_YY_events(session, ABB_patches)
 
 # Temporal binning within XYY patch
-binned_BB_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, ABB_patches, events_BB, bins, condition='BB', plot=True)
-binned_AA_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, BAA_patches, events_AA, bins, condition='AA', plot=True)
+binned_AA_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, BAA_patches, events_AA, bins, condition='AA', plot=False)
+binned_BB_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, ABB_patches, events_BB, bins, condition='BB', plot=False)
 
 # Get the difference between two YYs 
+AA_diff = {}
 BB_diff = {}
 for cell in neurons:
-    BB_diff[cell] = binned_BB_phase_activity['temporal_ABB_firing'][cell][:, bins:] - binned_BB_phase_activity['temporal_ABB_firing'][cell][:, :bins]
-AA_diff = {}
-for cell in neurons:
-    AA_diff[cell] = binned_AA_phase_activity['temporal_ABB_firing'][cell][:, bins:] - binned_AA_phase_activity['temporal_ABB_firing'][cell][:, :bins]
+    AA_diff[cell] = binned_AA_phase_activity['temporal_XYY_firing'][cell][:, bins:] - binned_AA_phase_activity['temporal_XYY_firing'][cell][:, :bins]
+    BB_diff[cell] = binned_BB_phase_activity['temporal_XYY_firing'][cell][:, bins:] - binned_BB_phase_activity['temporal_XYY_firing'][cell][:, :bins]
 
 # Define save path
 t = parse_session_functions.extract_int(session['stage'])

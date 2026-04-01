@@ -21,7 +21,7 @@ def get_XYY_patches(session, include_next=True, precede_XY=False):
     - include_next: whether the landmark after the XYY patch should be included i.e., XYYX (default = True) 
     - precede_XY: whether the two landmarks preceding the patch should be XY (relevant for truly random sequences) (default = False)
     '''     
-    event_idx = session['event_idx']
+    event_idx = session['event_idx'] # includes non-goals
     non_goals = session['non_goals_idx'][session['non_goals_idx'] < len(event_idx)]
     goals = session['goals_idx'][session['goals_idx'] < len(event_idx)]
 
@@ -71,6 +71,21 @@ def get_XYY_patches(session, include_next=True, precede_XY=False):
 
     return ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx
 
+def get_YY_events(session, XYY_patches):
+    '''Find the start, reward (or imaginary reward) and end for each YY event in a patch'''
+
+    lm_entry_idx, lm_exit_idx = parse_session_functions.get_lm_entry_exit(session)
+    lm_entry_idx = lm_entry_idx[:len(session['event_idx'])]
+    lm_exit_idx = lm_exit_idx[:len(session['event_idx'])]
+
+    events_YY = {}
+    for lm in XYY_patches:
+        Y1 = lm[1]
+        Y2 = lm[2]
+        events_YY[Y1] = { "start": lm_entry_idx[Y1], "reward": session['event_idx'][Y1], "end": lm_exit_idx[Y1]}
+        events_YY[Y2] = { "start": lm_entry_idx[Y2], "reward": session['event_idx'][Y2], "end": lm_exit_idx[Y2]}
+
+    return events_YY
 
 def get_repeating_XY_patches(session, min_length=2):
     # Find patches of alternating AB/BA 
@@ -94,13 +109,23 @@ def get_repeating_XY_patches(session, min_length=2):
             continue
         if labels_sorted[i] == labels_sorted[i-1]:
             # End of an alternating patch
-            if i - start > min_length:  
-                patches.append(combined_sorted[start:i])
+            patch = combined_sorted[start:i]
+            if i - start >= min_length:
+                # enforce even length (pairs)
+                if len(patch) % 2 != 0:
+                    patch = patch[:-1]  # drop last element
+
+                if len(patch) >= min_length:  # still valid after trimming
+                    patches.append(patch)
+
             start = i
 
     # Check last patch 
-    if len(labels_sorted) - start >= 2:
-        patches.append(combined_sorted[start:])
+    if len(labels_sorted) - start >= min_length:
+        patch = combined_sorted[start:]
+        if len(patch) % 2 != 0:
+            patch = patch[:-1] 
+        patches.append(patch)
 
     # Filter patches based on A or B start
     BA_patches = [patch for patch in patches if np.isin(patch[0], non_goals)]
@@ -705,8 +730,6 @@ def temporal_bin_lm_firing_reward_aligned(event, cell, dF, bins_pre=45, bins_pos
 
     return binned_phase_firing
 
-    # return binned
-
 def get_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='ABB', plot=True):
     '''Binning of neural activity inside a XYY patch from the beginning to the end of each landmark in the the patch.'''
     
@@ -796,7 +819,6 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
     for n, cell in enumerate(neurons):
         for patch in XYY_patches:
             if condition == 'BB' or condition == 'AA':
-                # Assume that lm entry and exit, and YY midpoint indices are provided
                 assert n_lms == 2, 'Each patch should have 3 landmarks - XYY'
                 patch_bin_list = [temporal_bin_lm_firing_reward_aligned(event_idx[lm], cell, dF, bins_pre=bins//2, bins_post=bins//2) for lm in patch[1:]]
             else:
@@ -848,8 +870,6 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
 
             ax.set_xticks([0, bins - 1])
             ax.set_xticklabels(['entry', 'exit'], rotation=0)
-            # ax.set_xticklabels([f'{title} entry', f'{title} exit'], rotation=0)
-
             ax.set_title(title)
             # ax.set_xlabel('Time bins')
 
@@ -864,14 +884,12 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
         cb.set_label('z-scored dF/F')
         cb.set_ticks([vmin, 0, vmax])
         cb.set_ticklabels([np.round(vmin,1), 0, np.round(vmax,1)])
-
-
         fig.tight_layout()
 
     # Collect all data into a dict - maintain similar structure to get_spatial_and_temporal_ABB_binning
     binned_XYY_phase_activity = {}
-    binned_XYY_phase_activity['temporal_ABB_firing'] = binned_XYY_phase_firing
-    binned_XYY_phase_activity['avg_temporal_ABB_firing'] = avg_binned_XYY_phase_firing
+    binned_XYY_phase_activity['temporal_XYY_firing'] = binned_XYY_phase_firing
+    binned_XYY_phase_activity['avg_temporal_XYY_firing'] = avg_binned_XYY_phase_firing
     binned_XYY_phase_activity['zscored_sorted_temporal'] = sorted_zscored_avg_binned_XYY
 
     return binned_XYY_phase_activity
@@ -1581,7 +1599,7 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
     results_file = os.path.join(save_dir, f"{condition}_{data_type}_linear_regression_results.npz")
 
     # Define patches
-    _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=0)
+    _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
 
     # Find preceding XY length for each patch
     if condition == 'AB':
