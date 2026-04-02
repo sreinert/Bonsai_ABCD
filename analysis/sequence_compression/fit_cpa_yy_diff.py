@@ -26,10 +26,10 @@ cohort = args.cohort
 # Load functions according to cohort 
 if cohort == '2':
     import preprocessing.parse_session_functions_cohort2 as parse_session_functions
-    base_path = Path("/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/")
+    base_path = Path("/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/")
 elif cohort == '3':
     import preprocessing.parse_session_functions_cohort3 as parse_session_functions
-    base_path = Path("/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives")
+    base_path = Path("/Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives")
 
 importlib.reload(parse_session_functions)
 importlib.reload(neural_analysis_helpers)
@@ -52,6 +52,11 @@ if cohort == '2':
     t = parse_session_functions.extract_int(session['stage'])
     save_dir = os.path.join(data_path, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
 
+    # Define save path
+    data_path = parse_session_functions.find_base_path_npz(mouse, date)
+    t = parse_session_functions.extract_int(session['stage'])
+    save_dir = os.path.join(data_path, mouse, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
+
 elif cohort == '3':
     # Load dF and valid neurons
     session_path = parse_session_functions.find_base_path(mouse, session_id, base_path)
@@ -63,9 +68,14 @@ elif cohort == '3':
     else:
         world = 'stable'
 
-    behav_path = parse_session_functions.find_base_path(mouse, session_id, '/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata')
+    behav_path = parse_session_functions.find_base_path(mouse, session_id, '/Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata')
+    behav_path = parse_session_functions.find_base_path(mouse, session_id, '/Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata')
     session = parse_session_functions.analyse_npz_pre7(mouse, session_id, base_path, stage, world, plot=False)
     session['stim_order'] = 'random'
+
+    # Define save path
+    t = parse_session_functions.extract_int(session['stage'])
+    save_dir = os.path.join(session_path, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
 
     # Define save path
     t = parse_session_functions.extract_int(session['stage'])

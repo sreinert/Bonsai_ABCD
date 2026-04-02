@@ -1067,7 +1067,7 @@ def calc_transition_matrix(sess_dataframe, ses_settings):
     if isinstance(trial, list):
         trial = trial[0]['trial']
 
-    num_landmarks = len(trial['all_landmarks'])
+    num_landmarks = len(trial['landmarks'])
 
     lick_sequence = lm_id_sequence[licked_all==1]
     ideal_sequence = lm_id_sequence[ideal_licks==1]
@@ -1108,8 +1108,7 @@ def calc_distance_transition_matrix(sess_dataframe, ses_settings, binning=True):
     if isinstance(trial, list):
         trial = trial[0]['trial']
     lm_size = trial['landmarks'][0][0]['size']
-    # lm_size = ses_settings['trial']['landmarks'][0][0]['size']
-    num_landmarks = len(trial['all_landmarks'])
+    num_landmarks = len(trial['landmarks'])
 
     target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
     hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
