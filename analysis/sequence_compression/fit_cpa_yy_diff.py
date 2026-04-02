@@ -47,6 +47,11 @@ if cohort == '2':
     session = parse_session_functions.analyse_npz_pre7(mouse, date, stage, plot=False)
     session['stim_order'] = 'pseudorandom'
 
+    # Define save path
+    data_path = parse_session_functions.find_base_path_npz(mouse, date)
+    t = parse_session_functions.extract_int(session['stage'])
+    save_dir = os.path.join(data_path, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
+
 elif cohort == '3':
     # Load dF and valid neurons
     session_path = parse_session_functions.find_base_path(mouse, session_id, base_path)
@@ -62,12 +67,20 @@ elif cohort == '3':
     session = parse_session_functions.analyse_npz_pre7(mouse, session_id, base_path, stage, world, plot=False)
     session['stim_order'] = 'random'
 
+    # Define save path
+    t = parse_session_functions.extract_int(session['stage'])
+    save_dir = os.path.join(session_path, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
+
 # Collect all events
 event_idx = np.sort(np.concatenate([session['reward_idx'], session['miss_rew_idx'], session['nongoal_rew_idx'], session['test_rew_idx']])).astype(int)
 if mouse == 'TAA0000066' and stage == 't3':
     lick_end_idx = 160
     event_idx = event_idx[:lick_end_idx]
 session['event_idx'] = event_idx
+
+# Create save path 
+if not os.path.exists(save_dir):
+    os.makedirs(save_dir, exist_ok=True)
 
 #%% Bin YY data 
 bins = 20 
@@ -78,34 +91,39 @@ if session['stim_order'] == 'random':
 elif session['stim_order'] == 'pseudorandom':
     ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, include_next=False, precede_XY=False)
 
-# Find start, reward and end timepoints inside YY events 
-events_AA = alternation.get_YY_events(session, BAA_patches)
-events_BB = alternation.get_YY_events(session, ABB_patches)
+if BAA_patches:
+    # Find start, reward and end timepoints inside YY events 
+    events_AA = alternation.get_YY_events(session, BAA_patches)
 
-# Temporal binning within XYY patch
-binned_AA_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, BAA_patches, events_AA, bins, condition='AA', plot=False)
-binned_BB_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, ABB_patches, events_BB, bins, condition='BB', plot=False)
+    # Temporal binning within XYY patch
+    binned_AA_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, BAA_patches, events_AA, bins, condition='AA', plot=False)
 
-# Get the difference between two YYs 
-AA_diff = {}
-BB_diff = {}
-for cell in neurons:
-    AA_diff[cell] = binned_AA_phase_activity['temporal_XYY_firing'][cell][:, bins:] - binned_AA_phase_activity['temporal_XYY_firing'][cell][:, :bins]
-    BB_diff[cell] = binned_BB_phase_activity['temporal_XYY_firing'][cell][:, bins:] - binned_BB_phase_activity['temporal_XYY_firing'][cell][:, :bins]
+    # Get the difference between two YYs 
+    AA_diff = {}
+    for cell in neurons:
+        AA_diff[cell] = binned_AA_phase_activity['temporal_XYY_firing'][cell][:, bins:] - binned_AA_phase_activity['temporal_XYY_firing'][cell][:, :bins]
 
-# Define save path
-t = parse_session_functions.extract_int(session['stage'])
-save_dir = os.path.join(base_path, mouse, 't3_t4', 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
-if not os.path.exists(save_dir):
-    os.makedirs(save_dir, exist_ok=True)
-
-# Cluster-based permutation analysis (CPA) 
-BB_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, BB_diff, session, condition='AB', 
+    # Cluster-based permutation analysis (CPA) 
+    AA_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, AA_diff, session, condition='BA', 
                                                                             shuffle=True, nreps=10000, cluster_thres=0.1, plot=True, 
                                                                             sort_heatmap=True, save_dir=save_dir, save_plot=True, 
-                                                                            plot_dir=save_dir)
-AA_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, AA_diff, session, condition='BA', 
-                                                                            shuffle=True, nreps=10000, cluster_thres=0.1, plot=True, 
-                                                                            sort_heatmap=True, save_dir=save_dir, save_plot=True, 
-                                                                            plot_dir=save_dir)
+                                                                            plot_dir=save_dir, reload=True)
+  
+if ABB_patches:
+    # Find start, reward and end timepoints inside YY events 
+    events_BB = alternation.get_YY_events(session, ABB_patches)
 
+    # Temporal binning within XYY patch
+    binned_BB_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, ABB_patches, events_BB, bins, condition='BB', plot=False)
+
+    # Get the difference between two YYs 
+    BB_diff = {}
+    for cell in neurons:
+        BB_diff[cell] = binned_BB_phase_activity['temporal_XYY_firing'][cell][:, bins:] - binned_BB_phase_activity['temporal_XYY_firing'][cell][:, :bins]
+
+    # Cluster-based permutation analysis (CPA) 
+    BB_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, BB_diff, session, condition='AB', 
+                                                                                shuffle=True, nreps=10000, cluster_thres=0.1, plot=True, 
+                                                                                sort_heatmap=True, save_dir=save_dir, save_plot=True, 
+                                                                                plot_dir=save_dir, reload=True)
+                                                                        

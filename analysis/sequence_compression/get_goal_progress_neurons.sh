@@ -1,24 +1,22 @@
 #!/bin/bash
 #SBATCH --job-name=goal_progress
-#SBATCH --output=goal_progress_%A_%a.out
-#SBATCH --error=goal_progress_%A_%a.err
+#SBATCH --output=goal_progress_%j.out
+#SBATCH --error=goal_progress_%j.err
 #
 #SBATCH -p gpu
 #SBATCH -n 1
-#SBATCH -t 8:00:00
+#SBATCH -t 16:00:00
 #SBATCH --mem=32G
 #SBATCH --gres gpu:1
 #SBATCH --mail-type ALL
 #SBATCH --mail-user athina.apostolelli.24@ucl.ac.uk
 
-# source ~/.bashrc
+source ~/.bashrc
 
 module load mamba
-source activate bonsai_abcd 
+conda activate bonsai_abcd 
 
 PAIRS=(
-  "mouse=TAA0000059 cohort=2 t5:t5 t6:t6"
-  "mouse=TAA0000066 cohort=2 t5:t5 t6:t6"
   "mouse=004 cohort=3 full020:t5 full030:t6"
   "mouse=006 cohort=3 full011:t5 full014:t6"
   "mouse=007 cohort=3 full010:t5 full012:t6"
@@ -47,6 +45,8 @@ for ENTRY in "${PAIRS[@]}"; do
             --session "$session" \
             --stage "$stage" \
             --cohort "$cohort"
+
+        echo "Finished extracting goal progress for mouse=$mouse session=$session stage=$stage cohort=$cohort"
     done
 done
 

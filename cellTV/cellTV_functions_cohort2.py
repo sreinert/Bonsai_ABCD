@@ -920,7 +920,7 @@ def calc_goal_tuningix(dF, cell, session, condition='goal', period='goal', event
     if condition == 'goal':
         binned_all, _ = extract_goal_progress(dF, cell, session, frame_rate=frame_rate, bins=bins, plot=False, shuffle=False)
     elif condition == 'arb':
-        binned_all = extract_arb_progress(dF, cell, session, event_frames, n_goals, bins, period=period, plot=True, shuffle=False)
+        binned_all = extract_arb_progress(dF, cell, session, event_frames, n_goals, bins, period=period, plot=False, shuffle=False)
 
     av_binned = np.nanmean(binned_all, axis=0)
     ngoals = av_binned.shape[0]/bins

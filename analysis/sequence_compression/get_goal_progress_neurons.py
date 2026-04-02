@@ -32,6 +32,7 @@ importlib.reload(parse_session_functions)
 importlib.reload(neural_analysis_helpers)
 
 if int(cohort) == 3:
+    print('Cohort 3 mice')
     root = f"/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives" 
     session_path = parse_session_functions.find_base_path(mouse, session_id, root)
 
@@ -46,9 +47,10 @@ if int(cohort) == 3:
     session = parse_session_functions.analyse_npz_pre7(mouse, session_id, root, stage, world)
 
 elif int(cohort) == 2:
-    root = f"/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2" 
+    print('Cohort 2 mice')
+    root = f"/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2" 
     _, _, _, _, date = parse_session_functions.get_session_folders(root, mouse, stage)
-    session_path = parse_session_functions.find_base_path_npz(mouse, date)
+    # session_path = parse_session_functions.find_base_path_npz(mouse, date)
 
     # Load dF and valid neurons
     dF, neurons = parse_session_functions.load_dF(root, mouse, stage)

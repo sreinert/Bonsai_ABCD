@@ -1637,6 +1637,14 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
             linear_regression_result[cell] = {}
             for t in range(nbins):
                 y = Y_data[cell][:,t]
+
+                # Ensure there are more than 1 x values (repeats)
+                if len(x) < 2 or len(y) < 2:
+                    continue
+                # Ensure the x values are different (different patch sizes)
+                if np.all(x == x[0]) or np.all(np.isnan(y)):
+                    continue
+                
                 linear_regression_result[cell][t] = stats.linregress(x, y, alternative='two-sided')
 
         slopes = {cell: np.array([res.slope for t, res in linear_regression_result[cell].items()]) for cell in neurons}
