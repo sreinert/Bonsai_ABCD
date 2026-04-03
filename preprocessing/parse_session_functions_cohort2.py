@@ -73,7 +73,7 @@ def find_session_base_path(mouse, date, root):
     return base_path
 
 def find_base_path(mouse, date):
-    root = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'
+    root = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'
     data_dir = root + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
@@ -104,7 +104,7 @@ def find_base_path(mouse, date):
     return base_path
 
 def find_base_path_npz(mouse, date):
-    data_dir = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
+    data_dir = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
     base_path = os.path.join(data_dir, sessions[0])
@@ -1520,9 +1520,61 @@ def get_landmark_category_rew_idx(session, VR_data=None, nidaq_data=None):
     print('Reward time lag from lm entry: ', rew_time_lag)
 
     # Find where reward would be on average if these landmarks were rewarded
-    miss_rew_idx = miss_lm_entry_idx + rew_time_lag
-    nongoal_rew_idx = nongoal_lm_entry_idx + rew_time_lag  
-    test_rew_idx = test_lm_entry_idx + rew_time_lag
+    lm_entry_idx, lm_exit_idx = get_lm_entry_exit(session)
+    
+    miss_rew_idx = []
+    miss_goals_idx = np.array([i for i in session['goals_idx'] if i not in session['rewarded_landmarks']])
+    for i in miss_goals_idx:
+        entry_idx = lm_entry_idx[i]
+        exit_idx = lm_exit_idx[i]
+        candidate_idx = int(entry_idx + rew_time_lag)
+
+        if candidate_idx > exit_idx:
+            entry_pos = session['total_dist'][entry_idx]
+            exit_pos = session['total_dist'][exit_idx]
+            mid_pos = entry_pos + (exit_pos - entry_pos) / 2
+            midpoint = np.argmin(np.abs(session['total_dist'] - mid_pos))
+            miss_rew_idx.append(midpoint)
+        else:
+            miss_rew_idx.append(candidate_idx)
+
+    nongoal_rew_idx = []
+    for i in session['non_goals_idx']:
+        entry_idx = lm_entry_idx[i]
+        exit_idx = lm_exit_idx[i]
+        candidate_idx = int(entry_idx + rew_time_lag)
+
+        if candidate_idx > exit_idx:
+            entry_pos = session['total_dist'][entry_idx]
+            exit_pos = session['total_dist'][exit_idx]
+            mid_pos = entry_pos + (exit_pos - entry_pos) / 2
+            midpoint = np.argmin(np.abs(session['total_dist'] - mid_pos))           
+            nongoal_rew_idx.append(midpoint)
+        else:
+            nongoal_rew_idx.append(int(entry_idx + rew_time_lag))
+
+    test_rew_idx = []
+    if session['test_idx'] is not None:
+        for i in session['test_idx']:
+            entry_idx = lm_entry_idx[i]
+            exit_idx = lm_exit_idx[i]
+            candidate_idx = int(entry_idx + rew_time_lag)
+
+            if candidate_idx > exit_idx:
+                entry_pos = session['total_dist'][entry_idx]
+                exit_pos = session['total_dist'][exit_idx]
+                mid_pos = entry_pos + (exit_pos - entry_pos) / 2
+                midpoint = np.argmin(np.abs(session['total_dist'] - mid_pos)) 
+                test_rew_idx.append(midpoint)
+            else:
+                test_rew_idx.append(int(entry_idx + rew_time_lag))
+            
+    miss_rew_idx = np.array(miss_rew_idx)
+    nongoal_rew_idx = np.array(nongoal_rew_idx)
+    test_rew_idx = np.array(test_rew_idx)
+    # miss_rew_idx = miss_lm_entry_idx + rew_time_lag
+    # nongoal_rew_idx = nongoal_lm_entry_idx + rew_time_lag  
+    # test_rew_idx = test_lm_entry_idx + rew_time_lag
 
     session['rew_time_lag'] = rew_time_lag
     session['miss_rew_idx'] = miss_rew_idx

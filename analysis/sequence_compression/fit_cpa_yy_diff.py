@@ -52,11 +52,6 @@ if cohort == '2':
     t = parse_session_functions.extract_int(session['stage'])
     save_dir = os.path.join(data_path, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
 
-    # Define save path
-    data_path = parse_session_functions.find_base_path_npz(mouse, date)
-    t = parse_session_functions.extract_int(session['stage'])
-    save_dir = os.path.join(data_path, mouse, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
-
 elif cohort == '3':
     # Load dF and valid neurons
     session_path = parse_session_functions.find_base_path(mouse, session_id, base_path)
@@ -69,7 +64,6 @@ elif cohort == '3':
         world = 'stable'
 
     behav_path = parse_session_functions.find_base_path(mouse, session_id, '/Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata')
-    behav_path = parse_session_functions.find_base_path(mouse, session_id, '/Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata')
     session = parse_session_functions.analyse_npz_pre7(mouse, session_id, base_path, stage, world, plot=False)
     session['stim_order'] = 'random'
 
@@ -77,13 +71,9 @@ elif cohort == '3':
     t = parse_session_functions.extract_int(session['stage'])
     save_dir = os.path.join(session_path, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
 
-    # Define save path
-    t = parse_session_functions.extract_int(session['stage'])
-    save_dir = os.path.join(session_path, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
-
 # Collect all events
 event_idx = np.sort(np.concatenate([session['reward_idx'], session['miss_rew_idx'], session['nongoal_rew_idx'], session['test_rew_idx']])).astype(int)
-if mouse == 'TAA0000066' and stage == 't3':
+if (mouse == 'TAA0000066' and stage == 't3') or (mouse == 'TAA0000059' and stage == 't3'):
     lick_end_idx = 160
     event_idx = event_idx[:lick_end_idx]
 session['event_idx'] = event_idx
@@ -93,13 +83,16 @@ if not os.path.exists(save_dir):
     os.makedirs(save_dir, exist_ok=True)
 
 #%% Bin YY data 
-bins = 20 
 
 # Define patches
 if session['stim_order'] == 'random':
     ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, include_next=False, precede_XY=True)
 elif session['stim_order'] == 'pseudorandom':
     ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, include_next=False, precede_XY=False)
+
+# Define bins based on min distance between landmarks
+frames_around = alternation.get_min_frames_between_lms(session)
+bins = 2 * frames_around
 
 if BAA_patches:
     # Find start, reward and end timepoints inside YY events 

@@ -87,6 +87,18 @@ def get_YY_events(session, XYY_patches):
 
     return events_YY
 
+def get_min_frames_between_lms(session):
+    '''Find the minimum number of frames between two landmarks'''
+
+    lm_entry_idx, lm_exit_idx = parse_session_functions.get_lm_entry_exit(session)
+    d_idx = lm_entry_idx[1:] - lm_exit_idx[:-1]
+    frames_around = np.min(d_idx)
+    frames_around = int(np.round(frames_around / 10) * 10)
+
+    print(f'The min distance in frames between two landmarks is {frames_around}, equivalent to {np.round(frames_around/45,2)} s.')
+
+    return frames_around
+
 def get_repeating_XY_patches(session, min_length=2):
     # Find patches of alternating AB/BA 
     non_goals = session['non_goals_idx'][session['non_goals_idx'] < len(session['event_idx'])]
@@ -703,32 +715,66 @@ def temporal_bin_lm_firing(lm, cell, dF, bins=90):
 
     return binned_phase_firing
 
-def temporal_bin_lm_firing_reward_aligned(event, cell, dF, bins_pre=45, bins_post=45):
-    """
-    Reward-aligned temporal binning.
-    Reward always lands at bin bins_pre.
-    """
-    start = event["start"]
-    reward = event["reward"]
-    end = event["end"]
+def temporal_bin_lm_firing_reward_aligned(cell, dF, event, frames_around, bins=90):
+    '''
+    Temporal binning around reward:
+    [reward - frames_around → reward + frames_around]
+    For non-rewarded landmarks, the event corresponds to where reward would be on average, 
+    or the midpoint of the landmark if average reward exceeds landmark boundaries
+    '''
+    event = event["reward"]
+    start = int(event - frames_around)
+    end   = int(event + frames_around)
 
-    binned_phase_firing = np.zeros((bins_pre) + (bins_post))
+    # Safety check (avoid out-of-bounds)
+    if start < 0 or end >= dF.shape[1]:
+        return None  # or np.full(bins, np.nan)
 
-    pre_idx = np.arange(start, reward + 1)
-    post_idx = np.arange(reward, end + 1)
+    # Extract window
+    frames = np.arange(start, end)
+    firing = dF[cell, frames]
 
-    pre_bins = np.linspace(0, bins_pre, len(pre_idx))
-    post_bins = np.linspace(bins_pre, bins_pre + bins_post, len(post_idx))
+    # Define bins over fixed window
+    bin_edges = np.linspace(0, len(frames), bins + 1)
+    bin_ix = np.digitize(np.arange(len(frames)), bin_edges)
 
-    idx = np.concatenate([pre_idx, post_idx[1:]])
-    bins = np.concatenate([pre_bins, post_bins[1:]])
+    binned_phase_firing = np.zeros(bins)
 
-    phase_firing = dF[cell, idx]
-
-    bin_edges = np.linspace(0, bins_pre + bins_post, bins_pre + bins_post + 1)
-    binned_phase_firing, _, _ = stats.binned_statistic(bins, phase_firing, bins=bin_edges)
+    for j in range(bins):
+        values = firing[bin_ix == j + 1]
+        if len(values) > 0:
+            binned_phase_firing[j] = np.mean(values)
+        else:
+            binned_phase_firing[j] = np.nan  # safer than 0
 
     return binned_phase_firing
+
+# def temporal_bin_lm_firing_reward_aligned(event, cell, dF, bins_pre=45, bins_post=45):
+#     """
+#     Reward-aligned temporal binning.
+#     Reward always lands at bin bins_pre.
+#     """
+#     start = event["start"]
+#     reward = event["reward"]
+#     end = event["end"]
+
+#     binned_phase_firing = np.zeros((bins_pre) + (bins_post))
+
+#     pre_idx = np.arange(start, reward + 1)
+#     post_idx = np.arange(reward, end + 1)
+
+#     pre_bins = np.linspace(0, bins_pre, len(pre_idx))
+#     post_bins = np.linspace(bins_pre, bins_pre + bins_post, len(post_idx))
+
+#     idx = np.concatenate([pre_idx, post_idx[1:]])
+#     bins = np.concatenate([pre_bins, post_bins[1:]])
+
+#     phase_firing = dF[cell, idx]
+
+#     bin_edges = np.linspace(0, bins_pre + bins_post, bins_pre + bins_post + 1)
+#     binned_phase_firing, _, _ = stats.binned_statistic(bins, phase_firing, bins=bin_edges)
+
+#     return binned_phase_firing
 
 def get_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='ABB', plot=True):
     '''Binning of neural activity inside a XYY patch from the beginning to the end of each landmark in the the patch.'''
@@ -807,7 +853,6 @@ def get_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=
 
     return binned_XYY_phase_activity
 
-
 def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='ABB', plot=True):
     '''Binning of neural activity inside a XYY patch from the beginning to the end of each landmark in the the patch.'''
     
@@ -815,16 +860,13 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
     binned_XYY_phase_firing = {cell: [] for cell in neurons}
  
     n_lms = len(XYY_patches[0]) - 1
-
+    
     for n, cell in enumerate(neurons):
         for patch in XYY_patches:
             if condition == 'BB' or condition == 'AA':
                 assert n_lms == 2, 'Each patch should have 3 landmarks - XYY'
-                patch_bin_list = [temporal_bin_lm_firing_reward_aligned(event_idx[lm], cell, dF, bins_pre=bins//2, bins_post=bins//2) for lm in patch[1:]]
-            else:
-                assert n_lms == 3, 'Each patch should have 4 landmarks - XYYX'
-                patch_bin_list = [temporal_bin_lm_firing([event_idx[lm], event_idx[lm+1]], cell, dF, bins=bins) for lm in patch[:-1]]
-
+                patch_bin_list = [temporal_bin_lm_firing_reward_aligned(cell, dF, event_idx[lm], frames_around=bins/2, bins=bins) for lm in patch[1:]]
+                
             linear_patch_binned = np.concatenate(patch_bin_list)  # convert list to array and flatten
             binned_XYY_phase_firing[cell].append(linear_patch_binned)
 
@@ -893,6 +935,92 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
     binned_XYY_phase_activity['zscored_sorted_temporal'] = sorted_zscored_avg_binned_XYY
 
     return binned_XYY_phase_activity
+
+# def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='ABB', plot=True):
+#     '''Binning of neural activity inside a XYY patch from the beginning to the end of each landmark in the the patch.'''
+    
+#     # Collect all landmark pair binnings for all patches
+#     binned_XYY_phase_firing = {cell: [] for cell in neurons}
+ 
+#     n_lms = len(XYY_patches[0]) - 1
+
+#     for n, cell in enumerate(neurons):
+#         for patch in XYY_patches:
+#             if condition == 'BB' or condition == 'AA':
+#                 assert n_lms == 2, 'Each patch should have 3 landmarks - XYY'
+#                 patch_bin_list = [temporal_bin_lm_firing_reward_aligned(event_idx[lm], cell, dF, bins_pre=bins//2, bins_post=bins//2) for lm in patch[1:]]
+#             else:
+#                 assert n_lms == 3, 'Each patch should have 4 landmarks - XYYX'
+#                 patch_bin_list = [temporal_bin_lm_firing([event_idx[lm], event_idx[lm+1]], cell, dF, bins=bins) for lm in patch[:-1]]
+
+#             linear_patch_binned = np.concatenate(patch_bin_list)  # convert list to array and flatten
+#             binned_XYY_phase_firing[cell].append(linear_patch_binned)
+
+#     for cell in neurons:
+#         binned_XYY_phase_firing[cell] = np.array(binned_XYY_phase_firing[cell])
+
+#     # Average across patches
+#     avg_binned_XYY_phase_firing = np.empty((len(neurons), bins * n_lms))
+#     for n, cell in enumerate(neurons):
+#         avg_binned_XYY_phase_firing[n] = np.nanmean(binned_XYY_phase_firing[cell], axis=0)
+
+#     # Z-score
+#     zscored_avg_binned_XYY_phase_firing = stats.zscore(avg_binned_XYY_phase_firing, axis=1)
+#     vmax = np.nanmax(np.abs(zscored_avg_binned_XYY_phase_firing))
+#     vmin = -vmax
+
+#     # Sort according to max firing 
+#     peak_bins = np.argmax(zscored_avg_binned_XYY_phase_firing, axis=1)
+#     sort_order = np.argsort(peak_bins)
+#     sorted_zscored_avg_binned_XYY = zscored_avg_binned_XYY_phase_firing[sort_order]
+
+#     # Plotting
+#     if plot:
+#         fig, axes = plt.subplots(1, 2, figsize=(4, 3), sharey=True)
+
+#         lm_data = [
+#             sorted_zscored_avg_binned_XYY[:, :bins],
+#             sorted_zscored_avg_binned_XYY[:, bins:]
+#         ]
+
+#         reward_bin = bins // 2
+
+#         if condition == 'AA':
+#             titles = ['A1', 'A2']
+#         elif condition == 'BB':
+#             titles = ['B1', 'B2']
+#         else:
+#             titles = ['Y1', 'Y2']
+
+#         for ax, data, title in zip(axes, lm_data, titles):
+#             im = ax.imshow(data, aspect='auto', cmap='viridis', vmin=vmin, vmax=vmax, interpolation='none')
+#             ax.axvline(reward_bin, linestyle='--', color='white', linewidth=1)
+
+#             ax.set_xticks([0, bins - 1])
+#             ax.set_xticklabels(['entry', 'exit'], rotation=0)
+#             ax.set_title(title)
+#             # ax.set_xlabel('Time bins')
+
+#         # Y axis (shared)
+#         axes[0].set_ylabel('Neurons', labelpad=-5)
+#         axes[0].set_yticks([0, len(neurons) - 1])
+#         axes[0].set_yticklabels([0, len(neurons)])
+
+#         # Single colorbar
+#         cax = fig.add_axes([0.97, 0.15, 0.02, 0.7])  # [left, bottom, width, height]
+#         cb = fig.colorbar(im, cax=cax)
+#         cb.set_label('z-scored dF/F')
+#         cb.set_ticks([vmin, 0, vmax])
+#         cb.set_ticklabels([np.round(vmin,1), 0, np.round(vmax,1)])
+#         fig.tight_layout()
+
+#     # Collect all data into a dict - maintain similar structure to get_spatial_and_temporal_ABB_binning
+#     binned_XYY_phase_activity = {}
+#     binned_XYY_phase_activity['temporal_XYY_firing'] = binned_XYY_phase_firing
+#     binned_XYY_phase_activity['avg_temporal_XYY_firing'] = avg_binned_XYY_phase_firing
+#     binned_XYY_phase_activity['zscored_sorted_temporal'] = sorted_zscored_avg_binned_XYY
+
+#     return binned_XYY_phase_activity
 
 
 def get_binning_by_XY_patch_length(neurons, session, dF, condition='AB', bins=90, plot=True, last_lm=False):
@@ -1608,7 +1736,20 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
         patches = BA_patches
 
     XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
-    XY_repeats = XY_repeats[:Y_data[neurons[0]].shape[0]] # exclude last repeat if it doesn't end with an XYY patch
+    # XY_repeats = XY_repeats[:Y_data[neurons[0]].shape[0]] # exclude last repeat if it doesn't end with an XYY patch
+
+    # Select data from patches where there are no nan values (enough time spent before and after the reward)
+    data = Y_data[neurons[0]]
+    nbins = int(data.shape[1] / 2)
+    pre = data[:, :nbins]
+    post = data[:, nbins:]
+
+    valid_mask = (
+        ~np.isnan(pre).any(axis=1) &
+        ~np.isnan(post).any(axis=1)
+    )
+
+    XY_repeats = XY_repeats[valid_mask]
 
     # Perform linear regression per time bin
     if os.path.exists(results_file) and not reload:
@@ -1631,10 +1772,19 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
         print('Fitting linear regression with CPA')
         x = XY_repeats.copy()
 
-        nbins = Y_data[neurons[0]].shape[1]
         linear_regression_result = {}
         for cell in neurons:
             linear_regression_result[cell] = {}
+
+            # Select data from patches where there are no NaN values (enough time spent before and after the reward)
+            data = Y_data[cell]
+            pre = data[:, :nbins]
+            post = data[:, nbins:]
+            pre = pre[valid_mask]
+            post = post[valid_mask]
+
+            Y_data[cell] = post - pre
+
             for t in range(nbins):
                 y = Y_data[cell][:,t]
 
