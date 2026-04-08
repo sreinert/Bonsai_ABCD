@@ -12,9 +12,9 @@ import neural_analysis_helpers
 import alternation_analysis_helpers as alternation
 
 parser = argparse.ArgumentParser(description="Get goal-progress tuned neurons.")
-parser.add_argument('--mouse', type=str, default='010', help="The mouse ID (e.g. '010')")
-parser.add_argument('--session', type=str, default='full010', help="The session ID (e.g. 'full010')")
-parser.add_argument('--stage', type=str, default='t5', help="The imaging timepoint (e.g. t5)")
+parser.add_argument('--mouse', type=str, default='TAA0000059', help="The mouse ID (e.g. '010')")
+parser.add_argument('--session', type=str, default='t3', help="The session ID (e.g. 'full010')")
+parser.add_argument('--stage', type=str, default='t3', help="The imaging timepoint (e.g. t5)")
 parser.add_argument('--cohort', type=str, default='2', help="Behavioural cohort the mouse belongs to")
 args = parser.parse_args()
 
@@ -101,16 +101,11 @@ if BAA_patches:
     # Temporal binning within XYY patch
     binned_AA_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, BAA_patches, events_AA, bins, condition='AA', plot=False)
 
-    # Get the difference between two YYs 
-    AA_diff = {}
-    for cell in neurons:
-        AA_diff[cell] = binned_AA_phase_activity['temporal_XYY_firing'][cell][:, bins:] - binned_AA_phase_activity['temporal_XYY_firing'][cell][:, :bins]
-
     # Cluster-based permutation analysis (CPA) 
-    AA_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, AA_diff, session, condition='BA', 
-                                                                            shuffle=True, nreps=10000, cluster_thres=0.1, plot=True, 
-                                                                            sort_heatmap=True, save_dir=save_dir, save_plot=True, 
-                                                                            plot_dir=save_dir, reload=True)
+    AA_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, binned_AA_phase_activity, session, condition='BA', data_type='YY_diff', 
+                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, plot=True, 
+                                                                                sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
+                                                                                reload=True)
   
 if ABB_patches:
     # Find start, reward and end timepoints inside YY events 
@@ -119,14 +114,8 @@ if ABB_patches:
     # Temporal binning within XYY patch
     binned_BB_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, ABB_patches, events_BB, bins, condition='BB', plot=False)
 
-    # Get the difference between two YYs 
-    BB_diff = {}
-    for cell in neurons:
-        BB_diff[cell] = binned_BB_phase_activity['temporal_XYY_firing'][cell][:, bins:] - binned_BB_phase_activity['temporal_XYY_firing'][cell][:, :bins]
-
     # Cluster-based permutation analysis (CPA) 
-    BB_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, BB_diff, session, condition='AB', 
-                                                                                shuffle=True, nreps=10000, cluster_thres=0.1, plot=True, 
-                                                                                sort_heatmap=True, save_dir=save_dir, save_plot=True, 
-                                                                                plot_dir=save_dir, reload=True)
-                                                                        
+    BB_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, binned_BB_phase_activity, session, condition='AB', data_type='YY_diff', 
+                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, plot=True, 
+                                                                                sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
+                                                                                reload=True)

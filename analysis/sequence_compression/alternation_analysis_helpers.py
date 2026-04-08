@@ -858,18 +858,35 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
     
     # Collect all landmark pair binnings for all patches
     binned_XYY_phase_firing = {cell: [] for cell in neurons}
+    valid_patch_indices = []
  
     n_lms = len(XYY_patches[0]) - 1
     
     for n, cell in enumerate(neurons):
-        for patch in XYY_patches:
+        for p_idx, patch in enumerate(XYY_patches):
             if condition == 'BB' or condition == 'AA':
                 assert n_lms == 2, 'Each patch should have 3 landmarks - XYY'
-                patch_bin_list = [temporal_bin_lm_firing_reward_aligned(cell, dF, event_idx[lm], frames_around=bins/2, bins=bins) for lm in patch[1:]]
                 
-            linear_patch_binned = np.concatenate(patch_bin_list)  # convert list to array and flatten
-            binned_XYY_phase_firing[cell].append(linear_patch_binned)
+                patch_bin_list = []
+                valid_patch = True
 
+                for lm in patch[1:]:
+                    binned = temporal_bin_lm_firing_reward_aligned(cell, dF, event_idx[lm], frames_around=bins/2, bins=bins)
+
+                    if binned is None or np.isnan(binned).any():
+                        valid_patch = False
+                        break
+
+                    patch_bin_list.append(binned)
+
+                # Only keep FULLY valid patches
+                if valid_patch:
+                    linear_patch_binned = np.concatenate(patch_bin_list)
+                    binned_XYY_phase_firing[cell].append(linear_patch_binned)
+
+                    if cell == neurons[0]:  # only track valid patches once
+                        valid_patch_indices.append(p_idx)
+                
     for cell in neurons:
         binned_XYY_phase_firing[cell] = np.array(binned_XYY_phase_firing[cell])
 
@@ -933,6 +950,7 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
     binned_XYY_phase_activity['temporal_XYY_firing'] = binned_XYY_phase_firing
     binned_XYY_phase_activity['avg_temporal_XYY_firing'] = avg_binned_XYY_phase_firing
     binned_XYY_phase_activity['zscored_sorted_temporal'] = sorted_zscored_avg_binned_XYY
+    binned_XYY_phase_activity['valid_patch_indices'] = valid_patch_indices
 
     return binned_XYY_phase_activity
 
@@ -1714,8 +1732,8 @@ def fit_linear_regression_XYlen_shuffle(neurons, Y_data, session, condition='AB'
     return results
     
 
-def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', data_type='YY_diff', 
-                                    shuffle=True, nreps=1000, cluster_thres=0.05, plot=True, 
+def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', data_type='YY_diff', 
+                                    bins=30, shuffle=True, nreps=1000, cluster_thres=0.05, plot=True, 
                                     sort_heatmap=False, save_plot=False, save_dir='', plot_dir='', 
                                     reload=False):
     '''
@@ -1736,20 +1754,13 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
         patches = BA_patches
 
     XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
-    # XY_repeats = XY_repeats[:Y_data[neurons[0]].shape[0]] # exclude last repeat if it doesn't end with an XYY patch
+    XY_repeats = XY_repeats[YY_data['valid_patch_indices']]
 
-    # Select data from patches where there are no nan values (enough time spent before and after the reward)
-    data = Y_data[neurons[0]]
-    nbins = int(data.shape[1] / 2)
-    pre = data[:, :nbins]
-    post = data[:, nbins:]
-
-    valid_mask = (
-        ~np.isnan(pre).any(axis=1) &
-        ~np.isnan(post).any(axis=1)
-    )
-
-    XY_repeats = XY_repeats[valid_mask]
+    # Get the difference between two YYs 
+    YY_diff = {}
+    for cell in neurons:
+        YY_diff[cell] = YY_data['temporal_XYY_firing'][cell][:, bins:] - YY_data['temporal_XYY_firing'][cell][:, :bins]
+    Y_data = YY_diff
 
     # Perform linear regression per time bin
     if os.path.exists(results_file) and not reload:
@@ -1776,16 +1787,8 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
         for cell in neurons:
             linear_regression_result[cell] = {}
 
-            # Select data from patches where there are no NaN values (enough time spent before and after the reward)
-            data = Y_data[cell]
-            pre = data[:, :nbins]
-            post = data[:, nbins:]
-            pre = pre[valid_mask]
-            post = post[valid_mask]
-
-            Y_data[cell] = post - pre
-
-            for t in range(nbins):
+            # Run the regression for each timebin separately
+            for t in range(bins):
                 y = Y_data[cell][:,t]
 
                 # Ensure there are more than 1 x values (repeats)
@@ -1837,15 +1840,15 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
             clusters_shuffled = {cell: {} for cell in neurons}
             cluster_mass_stat_shuffled = {cell: {} for cell in neurons}
 
-            nbins = Y_data[neurons[0]].shape[1]
+            # bins = Y_data[neurons[0]].shape[1]
             for cell in neurons:
-                slopes_shuffled[cell] = np.empty((nreps, nbins))
-                rvalues_shuffled[cell] = np.empty((nreps, nbins))
-                pvalues_shuffled[cell] = np.empty((nreps, nbins))
+                slopes_shuffled[cell] = np.empty((nreps, bins))
+                rvalues_shuffled[cell] = np.empty((nreps, bins))
+                pvalues_shuffled[cell] = np.empty((nreps, bins))
 
                 for i in range(nreps):
                     np.random.shuffle(x)
-                    for t in range(nbins):
+                    for t in range(bins):
                         y = Y_data[cell][:,t]
                         result = stats.linregress(x, y, alternative='two-sided')
                         slopes_shuffled[cell][i,t] = result.slope
@@ -1937,7 +1940,6 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
             ax2 = fig.add_subplot(gs[0,1])
             
             n_trials = Y_data[cell].shape[0]
-            nbins = Y_data[cell].shape[1]
 
             # Regression results
             ax1.plot(slopes[cell], label='slope')
@@ -1945,7 +1947,7 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
             if shuffle:
                 # Plot percentiles of null distribution
                 ax1.plot(median_percentile[cell], color='k', label='shuffle median')
-                ax1.fill_between(np.arange(nbins), low_percentile[cell], high_percentile[cell], color='k', alpha=0.3)
+                ax1.fill_between(np.arange(bins), low_percentile[cell], high_percentile[cell], color='k', alpha=0.3)
             
                 # Plot p-values
                 cell_max_slope = max(np.abs(slopes[cell]))
@@ -1966,10 +1968,10 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
             ax1.set_title(f'Linear Regression results')
             ax1.set_xlabel('Time bins')
             ax1.set_ylim([global_ymin - 0.5, global_ymax])
-            ax1.hlines(y=0, xmin=0, xmax=nbins-1, linestyles='--', colors='grey')
+            ax1.hlines(y=0, xmin=0, xmax=bins-1, linestyles='--', colors='grey')
             # ax1.set_yticks([0, n_trials-1])
             # ax1.set_yticklabels([0, n_trials])
-            ax1.set_xticks([0, nbins-1])
+            ax1.set_xticks([0, bins-1])
             ax1.set_ylabel('Beta coefficients (slopes)', labelpad=0)
 
             axr = ax1.twinx()
@@ -2027,8 +2029,8 @@ def fit_linear_regression_XYlen_cpa(neurons, Y_data, session, condition='AB', da
             cb2.ax.yaxis.labelpad = -10
             ax2.set_yticks([0, n_trials-1])
             ax2.set_yticklabels([0, n_trials-1])
-            ax2.set_xticks([0, nbins-1])
-            ax2.set_xticklabels([0, nbins])
+            ax2.set_xticks([0, bins-1])
+            ax2.set_xticklabels([0, bins])
             ax2.set_xlabel('Time bins')
             
             plt.suptitle(f'{condition}: neuron {cell}') 
