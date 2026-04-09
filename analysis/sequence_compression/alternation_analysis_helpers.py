@@ -95,7 +95,11 @@ def get_min_frames_between_lms(session):
     frames_around = np.min(d_idx)
     frames_around = int(np.round(frames_around / 10) * 10)
 
-    print(f'The min distance in frames between two landmarks is {frames_around}, equivalent to {np.round(frames_around/45,2)} s.')
+    if frames_around > 30:
+        frames_around = 30 
+        print(f'The min distance in frames between two landmarks is {frames_around}, equivalent to {np.round(frames_around/45,2)} s, but capping to 30 frames.')
+    else:
+        print(f'The min distance in frames between two landmarks is {frames_around}, equivalent to {np.round(frames_around/45,2)} s.')
 
     return frames_around
 
@@ -853,7 +857,7 @@ def get_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=
 
     return binned_XYY_phase_activity
 
-def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='ABB', plot=True):
+def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='ABB', zscoring=False, plot=True):
     '''Binning of neural activity inside a XYY patch from the beginning to the end of each landmark in the the patch.'''
     
     # Collect all landmark pair binnings for all patches
@@ -879,9 +883,17 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
 
                     patch_bin_list.append(binned)
 
-                # Only keep FULLY valid patches
+                # Only keep valid patches
                 if valid_patch:
                     linear_patch_binned = np.concatenate(patch_bin_list)
+
+                    # z-score within patch
+                    if zscoring:
+                        if np.std(linear_patch_binned) > 0:
+                            linear_patch_binned = stats.zscore(linear_patch_binned)
+                        else:
+                            linear_patch_binned = np.zeros_like(linear_patch_binned)  # avoid NaNs
+
                     binned_XYY_phase_firing[cell].append(linear_patch_binned)
 
                     if cell == neurons[0]:  # only track valid patches once
@@ -1733,7 +1745,7 @@ def fit_linear_regression_XYlen_shuffle(neurons, Y_data, session, condition='AB'
     
 
 def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', data_type='YY_diff', 
-                                    bins=30, shuffle=True, nreps=1000, cluster_thres=0.05, plot=True, 
+                                    bins=30, shuffle=True, nreps=1000, cluster_thres=0.05, zscored=False, plot=True, 
                                     sort_heatmap=False, save_plot=False, save_dir='', plot_dir='', 
                                     reload=False):
     '''
@@ -2015,7 +2027,10 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                     ax2.set_title(f'B2-B1')
                 elif condition == 'BA':
                     ax2.set_title(f'A2-A1')
-                cb2 = fig.colorbar(cax2, ax=ax2, label='YY diff dF/F', ticks=[vmin, vmax], pad=0.3)
+                if zscored:
+                    cb2 = fig.colorbar(cax2, ax=ax2, label='z-scored Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
+                else:
+                    cb2 = fig.colorbar(cax2, ax=ax2, label='Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
             elif data_type == 'last_Y':
                 vmax = np.max(heatmap_data)
                 vmin = np.min(heatmap_data)

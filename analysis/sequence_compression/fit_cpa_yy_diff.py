@@ -92,30 +92,32 @@ elif session['stim_order'] == 'pseudorandom':
 
 # Define bins based on min distance between landmarks
 frames_around = alternation.get_min_frames_between_lms(session)
-bins = 2 * frames_around
+bins = frames_around
+
+zscoring = True # whether to z-score dF/F inside each patch (across two YYs)
 
 if BAA_patches:
     # Find start, reward and end timepoints inside YY events 
     events_AA = alternation.get_YY_events(session, BAA_patches)
 
     # Temporal binning within XYY patch
-    binned_AA_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, BAA_patches, events_AA, bins, condition='AA', plot=False)
+    binned_AA_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, BAA_patches, events_AA, bins, condition='AA', zscoring=zscoring, plot=True)
 
     # Cluster-based permutation analysis (CPA) 
     AA_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, binned_AA_phase_activity, session, condition='BA', data_type='YY_diff', 
-                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, plot=True, 
-                                                                                sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
+                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, zscored=zscoring, 
+                                                                                plot=True, sort_heatmap=True, save_plot=False, save_dir='', plot_dir='', 
                                                                                 reload=True)
-  
+
 if ABB_patches:
     # Find start, reward and end timepoints inside YY events 
     events_BB = alternation.get_YY_events(session, ABB_patches)
 
     # Temporal binning within XYY patch
-    binned_BB_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, ABB_patches, events_BB, bins, condition='BB', plot=False)
+    binned_BB_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, ABB_patches, events_BB, bins, condition='BB', zscoring=zscoring, plot=False)
 
     # Cluster-based permutation analysis (CPA) 
     BB_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, binned_BB_phase_activity, session, condition='AB', data_type='YY_diff', 
-                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, plot=True, 
-                                                                                sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
+                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, zscored=zscoring, 
+                                                                                plot=True, sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
                                                                                 reload=True)
