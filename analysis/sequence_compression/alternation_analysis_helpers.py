@@ -1767,7 +1767,7 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
 
     XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
     XY_repeats = XY_repeats[YY_data['valid_patch_indices']]
-
+    
     # Get the difference between two YYs 
     YY_diff = {}
     for cell in neurons:
@@ -1776,287 +1776,297 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
 
     # Perform linear regression per time bin
     if os.path.exists(results_file) and not reload:
-            print('Linear regression with CPA file found. Loading...')
-            results = np.load(results_file, allow_pickle=True)
-            slopes = results['slopes'].item() 
-            rvalues = results['rvalues'].item() 
-            pvalues = results['pvalues'].item() 
-            clusters = results['clusters'].item() 
-            cluster_mass_stat = results['cluster_mass_stat'].item() 
-            if 'slopes_shuffled' in results:
-                slopes_shuffled = results['slopes_shuffled'].item() 
-                rvalues_shuffled = results['rvalues_shuffled'].item() 
-                pvalues_shuffled = results['pvalues_shuffled'].item() 
-                clusters_shuffled = results['clusters_shuffled'].item() 
-                cluster_mass_stat_shuffled = results['cluster_mass_stat_shuffled'].item() 
-                pvalue = results['pvalue'].item() 
-                cluster_pvalue = results['cluster_pvalue'].item() 
+        print('Linear regression with CPA file found. Loading...')
+        results = np.load(results_file, allow_pickle=True)
+        slopes = results['slopes'].item() 
+        rvalues = results['rvalues'].item() 
+        pvalues = results['pvalues'].item() 
+        clusters = results['clusters'].item() 
+        cluster_mass_stat = results['cluster_mass_stat'].item() 
+        if 'slopes_shuffled' in results:
+            slopes_shuffled = results['slopes_shuffled'].item() 
+            rvalues_shuffled = results['rvalues_shuffled'].item() 
+            pvalues_shuffled = results['pvalues_shuffled'].item() 
+            clusters_shuffled = results['clusters_shuffled'].item() 
+            cluster_mass_stat_shuffled = results['cluster_mass_stat_shuffled'].item() 
+            pvalue = results['pvalue'].item() 
+            cluster_pvalue = results['cluster_pvalue'].item() 
+    
     else:
-        print('Fitting linear regression with CPA')
+        print('\tFitting linear regression with CPA')
         x = XY_repeats.copy()
 
-        linear_regression_result = {}
-        for cell in neurons:
-            linear_regression_result[cell] = {}
+        # Ensure there are more than 1 x values (repeats)
+        if len(x) < 2 or len(np.unique(x)) < 2:
+            print("Not enough variability in XY repeats — skipping regression.")
 
-            # Run the regression for each timebin separately
-            for t in range(bins):
-                y = Y_data[cell][:,t]
+            # Return empty / NaN structure
+            results = {
+                'slopes': {cell: np.full(bins, np.nan) for cell in neurons},
+                'rvalues': {cell: np.full(bins, np.nan) for cell in neurons},
+                'pvalues': {cell: np.full(bins, np.nan) for cell in neurons},
+                'clusters': {cell: [] for cell in neurons},
+                'cluster_mass_stat': {cell: {} for cell in neurons},
+            }
 
-                # Ensure there are more than 1 x values (repeats)
-                if len(x) < 2 or len(y) < 2:
-                    continue
-                # Ensure the x values are different (different patch sizes)
-                if np.all(x == x[0]) or np.all(np.isnan(y)):
-                    continue
-                
-                linear_regression_result[cell][t] = stats.linregress(x, y, alternative='two-sided')
-
-        slopes = {cell: np.array([res.slope for t, res in linear_regression_result[cell].items()]) for cell in neurons}
-        rvalues = {cell: np.array([res.rvalue for t, res in linear_regression_result[cell].items()]) for cell in neurons}
-        pvalues = {cell: np.array([res.pvalue for t, res in linear_regression_result[cell].items()]) for cell in neurons}
+            return results
         
-        # Compute clusters and cluster-mass slope (statistic of interest here)
-        clusters = {} # cluster = continuous span of timepoints when pvalue < threshold
-        cluster_mass_stat = {cell: {} for cell in neurons}
-        for cell in neurons:
-            sig_bins = np.where(pvalues[cell] < cluster_thres)[0]
-            
-            if len(sig_bins) == 0:
-                clusters[cell] = []
-                continue
-
-            # Split clusters by whether they have high or low slopes to avoid fluctuations around 0 
-            sig_bins_high = sig_bins[slopes[cell][sig_bins] > 0]
-            cluster_change_idx = np.where(np.diff(sig_bins_high) > 1)[0] + 1
-            split_clusters_high = [c for c in np.split(sig_bins_high, cluster_change_idx) if len(c) > 0]
-
-            sig_bins_low = sig_bins[slopes[cell][sig_bins] < 0]
-            cluster_change_idx = np.where(np.diff(sig_bins_low) > 1)[0] + 1
-            split_clusters_low = [c for c in np.split(sig_bins_low, cluster_change_idx) if len(c) > 0]
-
-            # Combine all clusters
-            split_clusters = split_clusters_high + split_clusters_low
-            clusters[cell] = split_clusters
-
-            for c, cluster in enumerate(split_clusters):
-                cluster_mass_stat[cell][c] = np.sum(np.abs(slopes[cell][cluster]))  
-
-        # Permutation test to test against null hypothesis
-        # The null distribution is a collection of the largest cluster-mass statistic from each simulated data. 
-        # If no clusters are detected in a simulation, it contributes a cluster-mass of zero to the null.
-        if shuffle:
-            slopes_shuffled = {}
-            rvalues_shuffled = {}
-            pvalues_shuffled = {}
-            clusters_shuffled = {cell: {} for cell in neurons}
-            cluster_mass_stat_shuffled = {cell: {} for cell in neurons}
-
-            # bins = Y_data[neurons[0]].shape[1]
+        else:
+            linear_regression_result = {}
             for cell in neurons:
-                slopes_shuffled[cell] = np.empty((nreps, bins))
-                rvalues_shuffled[cell] = np.empty((nreps, bins))
-                pvalues_shuffled[cell] = np.empty((nreps, bins))
+                linear_regression_result[cell] = {}
 
-                for i in range(nreps):
-                    np.random.shuffle(x)
-                    for t in range(bins):
-                        y = Y_data[cell][:,t]
-                        result = stats.linregress(x, y, alternative='two-sided')
-                        slopes_shuffled[cell][i,t] = result.slope
-                        rvalues_shuffled[cell][i,t] = result.rvalue
-                        pvalues_shuffled[cell][i,t] = result.pvalue
-
-                    # Compute clusters and cluster stats for each shuffle
-                    sig_bins = np.where(pvalues_shuffled[cell][i,:] < cluster_thres)[0]
+                # Run the regression for each timebin separately
+                for t in range(bins):
+                    y = Y_data[cell][:,t]
                     
-                    # Split clusters by whether they have high or low slopes to avoid fluctuations around 0 
-                    sig_bins_high = sig_bins[slopes[cell][sig_bins] > 0]
-                    cluster_change_idx = np.where(np.diff(sig_bins_high) > 1)[0] + 1
-                    split_clusters_high = [c for c in np.split(sig_bins_high, cluster_change_idx) if len(c) > 0]
+                    linear_regression_result[cell][t] = stats.linregress(x, y, alternative='two-sided')
 
-                    sig_bins_low = sig_bins[slopes[cell][sig_bins] < 0]
-                    cluster_change_idx = np.where(np.diff(sig_bins_low) > 1)[0] + 1
-                    split_clusters_low = [c for c in np.split(sig_bins_low, cluster_change_idx) if len(c) > 0]
-
-                    # Combine all clusters
-                    split_clusters = split_clusters_high + split_clusters_low
-                    clusters_shuffled[cell][i] = split_clusters
-
-                    # Find the largest cluster-mass statistic for this shuffle
-                    all_cluster_masses = []
-                    if len(split_clusters) > 0:
-                        for c, cluster in enumerate(split_clusters):
-                            all_cluster_masses.append(np.sum(np.abs(slopes_shuffled[cell][i,cluster]))) 
-                        max_cluster_mass = np.max(all_cluster_masses) # per shuffle
-                        cluster_mass_stat_shuffled[cell][i] = max_cluster_mass
-                    else:
-                        cluster_mass_stat_shuffled[cell][i] = 0
-
-            # Two-sided p-value (for each time bin) against null hypothesis
-            pvalue = {}
-            cluster_pvalue = {cell: {} for cell in neurons}
+            slopes = {cell: np.array([res.slope for t, res in linear_regression_result[cell].items()]) for cell in neurons}
+            rvalues = {cell: np.array([res.rvalue for t, res in linear_regression_result[cell].items()]) for cell in neurons}
+            pvalues = {cell: np.array([res.pvalue for t, res in linear_regression_result[cell].items()]) for cell in neurons}
+            
+            # Compute clusters and cluster-mass slope (statistic of interest here)
+            clusters = {} # cluster = continuous span of timepoints when pvalue < threshold
+            cluster_mass_stat = {cell: {} for cell in neurons}
             for cell in neurons:
-                null_dist = np.abs(slopes_shuffled[cell])
-                obs = np.abs(slopes[cell])
-                pvalue[cell] = np.mean(null_dist >= obs, axis=0) # pvalues = % null slopes >= observed slope
-
-                null_cluster_dist = np.array(list(cluster_mass_stat_shuffled[cell].values()))
+                sig_bins = np.where(pvalues[cell] < cluster_thres)[0]
                 
-                for c in range(len(clusters[cell])):
-                    cluster_obs = np.abs(cluster_mass_stat[cell][c])
-                    cluster_pvalue[cell][c] = np.mean(null_cluster_dist >= cluster_obs)
+                if len(sig_bins) == 0:
+                    clusters[cell] = []
+                    continue
 
-        # Save results
-        results = {}
-        results['slopes'] = slopes
-        results['rvalues'] = rvalues
-        results['pvalues'] = pvalues
-        results['clusters'] = clusters
-        results['cluster_mass_stat'] = cluster_mass_stat
-        if shuffle:
-            results['slopes_shuffled'] = slopes_shuffled
-            results['rvalues_shuffled'] = rvalues_shuffled
-            results['pvalues_shuffled'] = pvalues_shuffled
-            results['clusters_shuffled'] = clusters_shuffled
-            results['cluster_mass_stat_shuffled'] = cluster_mass_stat_shuffled
-            results['pvalue'] = pvalue
-            results['cluster_pvalue'] = cluster_pvalue
-            
-        if save_dir:
-            np_results = {key: np.array(value, dtype=object) for key, value in results.items()}
-            np.savez(results_file, **np_results)
-            print(f"Saved results to: {results_file}")
-            
-    # Compute percentiles 
-    low_percentile = {cell: np.percentile(slopes_shuffled[cell], 2.5, axis=0) for cell in neurons}
-    high_percentile = {cell: np.percentile(slopes_shuffled[cell], 97.5, axis=0) for cell in neurons}
-    median_percentile = {cell: np.median(slopes_shuffled[cell], axis=0) for cell in neurons}
+                # Split clusters by whether they have high or low slopes to avoid fluctuations around 0 
+                sig_bins_high = sig_bins[slopes[cell][sig_bins] > 0]
+                cluster_change_idx = np.where(np.diff(sig_bins_high) > 1)[0] + 1
+                split_clusters_high = [c for c in np.split(sig_bins_high, cluster_change_idx) if len(c) > 0]
 
-    # Plotting
-    if plot: 
-        max_null = max(max(v) for v in high_percentile.values())
-        min_null = min(min(v) for v in low_percentile.values())
-        max_slope = max(np.max(slopes[cell]) for cell in neurons)
-        min_slope = min(np.min(slopes[cell]) for cell in neurons)
-        max_rvalue = max(np.max(rvalues[cell]) for cell in neurons)
-        min_rvalue = min(np.min(rvalues[cell]) for cell in neurons)
+                sig_bins_low = sig_bins[slopes[cell][sig_bins] < 0]
+                cluster_change_idx = np.where(np.diff(sig_bins_low) > 1)[0] + 1
+                split_clusters_low = [c for c in np.split(sig_bins_low, cluster_change_idx) if len(c) > 0]
 
-        global_ymax = max(max_null, max_slope, max_rvalue) + 0.1
-        global_ymin = min(min_null, min_slope, min_rvalue) - 0.8
+                # Combine all clusters
+                split_clusters = split_clusters_high + split_clusters_low
+                clusters[cell] = split_clusters
 
-        for cell in neurons:
-            fig = plt.figure(figsize=(8,4))
-            gs = plt.GridSpec(1, 2, width_ratios=[5, 3])  
-            ax1 = fig.add_subplot(gs[0,0])
-            ax2 = fig.add_subplot(gs[0,1])
-            
-            n_trials = Y_data[cell].shape[0]
+                for c, cluster in enumerate(split_clusters):
+                    cluster_mass_stat[cell][c] = np.sum(np.abs(slopes[cell][cluster]))  
 
-            # Regression results
-            ax1.plot(slopes[cell], label='slope')
-            
+            # Permutation test to test against null hypothesis
+            # The null distribution is a collection of the largest cluster-mass statistic from each simulated data. 
+            # If no clusters are detected in a simulation, it contributes a cluster-mass of zero to the null.
+            if shuffle:    
+                slopes_shuffled = {}
+                rvalues_shuffled = {}
+                pvalues_shuffled = {}
+                clusters_shuffled = {cell: {} for cell in neurons}
+                cluster_mass_stat_shuffled = {cell: {} for cell in neurons}
+
+                for cell in neurons:
+                    slopes_shuffled[cell] = np.empty((nreps, bins))
+                    rvalues_shuffled[cell] = np.empty((nreps, bins))
+                    pvalues_shuffled[cell] = np.empty((nreps, bins))
+
+                    for i in range(nreps):
+                        x_shuffled = x.copy()
+                        np.random.shuffle(x_shuffled)
+                        for t in range(bins):
+                            y = Y_data[cell][:,t]
+                            result = stats.linregress(x_shuffled, y, alternative='two-sided')
+                            slopes_shuffled[cell][i,t] = result.slope
+                            rvalues_shuffled[cell][i,t] = result.rvalue
+                            pvalues_shuffled[cell][i,t] = result.pvalue
+
+                        # Compute clusters and cluster stats for each shuffle
+                        sig_bins = np.where(pvalues_shuffled[cell][i,:] < cluster_thres)[0]
+                        
+                        # Split clusters by whether they have high or low slopes to avoid fluctuations around 0 
+                        sig_bins_high = sig_bins[slopes_shuffled[cell][i, sig_bins] > 0]
+                        cluster_change_idx = np.where(np.diff(sig_bins_high) > 1)[0] + 1
+                        split_clusters_high = [c for c in np.split(sig_bins_high, cluster_change_idx) if len(c) > 0]
+
+                        sig_bins_low = sig_bins[slopes_shuffled[cell][i, sig_bins] < 0]
+                        cluster_change_idx = np.where(np.diff(sig_bins_low) > 1)[0] + 1
+                        split_clusters_low = [c for c in np.split(sig_bins_low, cluster_change_idx) if len(c) > 0]
+
+                        # Combine all clusters
+                        split_clusters = split_clusters_high + split_clusters_low
+                        clusters_shuffled[cell][i] = split_clusters
+
+                        # Find the largest cluster-mass statistic for this shuffle
+                        all_cluster_masses = []
+                        if len(split_clusters) > 0:
+                            for c, cluster in enumerate(split_clusters):
+                                all_cluster_masses.append(np.sum(np.abs(slopes_shuffled[cell][i,cluster]))) 
+                            max_cluster_mass = np.max(all_cluster_masses) # per shuffle
+                            cluster_mass_stat_shuffled[cell][i] = max_cluster_mass
+                        else:
+                            cluster_mass_stat_shuffled[cell][i] = 0
+
+                # Two-sided p-value (for each time bin) against null hypothesis
+                pvalue = {}
+                cluster_pvalue = {cell: {} for cell in neurons}
+                for cell in neurons:
+                    null_dist = np.abs(slopes_shuffled[cell])
+                    obs = np.abs(slopes[cell])
+                    pvalue[cell] = np.mean(null_dist >= obs, axis=0) # pvalues = % null slopes >= observed slope
+
+                    null_cluster_dist = np.array(list(cluster_mass_stat_shuffled[cell].values()))
+                    
+                    for c in range(len(clusters[cell])):
+                        cluster_obs = np.abs(cluster_mass_stat[cell][c])
+                        cluster_pvalue[cell][c] = np.mean(null_cluster_dist >= cluster_obs)
+
+            # Save results
+            results = {}
+            results['slopes'] = slopes
+            results['rvalues'] = rvalues
+            results['pvalues'] = pvalues
+            results['clusters'] = clusters
+            results['cluster_mass_stat'] = cluster_mass_stat
             if shuffle:
-                # Plot percentiles of null distribution
-                ax1.plot(median_percentile[cell], color='k', label='shuffle median')
-                ax1.fill_between(np.arange(bins), low_percentile[cell], high_percentile[cell], color='k', alpha=0.3)
-            
-                # Plot p-values
-                cell_max_slope = max(np.abs(slopes[cell]))
-                cell_min_slope = min(slopes[cell])
-                sig_bins = np.where(pvalue[cell] < 0.05)[0]
-                ax1.scatter(sig_bins, np.ones(len(sig_bins)) * (cell_min_slope - 0.2), s=10, color='red', marker='*')
-            
-                # Plot significant clusters from CPA and annotate p-value
-                y_pos = cell_min_slope - 0.4
-                for c, seg in enumerate(clusters[cell]):
-                    if cluster_pvalue[cell][c] < 0.05:
-                        ax1.hlines(y_pos, seg[0], seg[-1], color='green', linewidth=3)
-                        text_y = y_pos - 0.10  
-                        text_x = (seg[0] + seg[-1]) / 2  
-                        label = f"p={cluster_pvalue[cell][c]:.3f}"
-                        ax1.annotate(label, xy=(text_x, text_y), ha='center', va='top', fontsize=8)
-            
-            ax1.set_title(f'Linear Regression results')
-            ax1.set_xlabel('Time bins')
-            ax1.set_ylim([global_ymin - 0.5, global_ymax])
-            ax1.hlines(y=0, xmin=0, xmax=bins-1, linestyles='--', colors='grey')
-            # ax1.set_yticks([0, n_trials-1])
-            # ax1.set_yticklabels([0, n_trials])
-            ax1.set_xticks([0, bins-1])
-            ax1.set_ylabel('Beta coefficients (slopes)', labelpad=0)
+                results['slopes_shuffled'] = slopes_shuffled
+                results['rvalues_shuffled'] = rvalues_shuffled
+                results['pvalues_shuffled'] = pvalues_shuffled
+                results['clusters_shuffled'] = clusters_shuffled
+                results['cluster_mass_stat_shuffled'] = cluster_mass_stat_shuffled
+                results['pvalue'] = pvalue
+                results['cluster_pvalue'] = cluster_pvalue
+                
+            if save_dir:
+                np_results = {key: np.array(value, dtype=object) for key, value in results.items()}
+                np.savez(results_file, **np_results)
+                print(f"\tSaved results in: {results_file}")
+                
+        # Compute percentiles 
+        low_percentile = {cell: np.percentile(slopes_shuffled[cell], 2.5, axis=0) for cell in neurons}
+        high_percentile = {cell: np.percentile(slopes_shuffled[cell], 97.5, axis=0) for cell in neurons}
+        median_percentile = {cell: np.median(slopes_shuffled[cell], axis=0) for cell in neurons}
 
-            axr = ax1.twinx()
-            axr.set_ylim(ax1.get_ylim())
-            axr.plot(rvalues[cell], color='orange', alpha=0.7, label="r-value")
-            axr.set_ylabel("Pearson Correlation (r)", color='orange')
-            axr.tick_params(axis='y', labelcolor='orange')
-            lines_left, labels_left = ax1.get_legend_handles_labels()
-            lines_right, labels_right = axr.get_legend_handles_labels()
-            ax1.legend(lines_left + lines_right, labels_left + labels_right, loc="upper right")
-            
-            # Heatmaps
-            XY_repeat_sorting_idx = np.argsort(XY_repeats, kind='stable')
-            sorted_repeats = XY_repeats[XY_repeat_sorting_idx]
-            if sort_heatmap:
-                heatmap_data = Y_data[cell][XY_repeat_sorting_idx]
-                change_rows = np.where(np.diff(sorted_repeats) != 0)[0] + 1
+        # Plotting
+        if plot: 
+            max_null = max(max(v) for v in high_percentile.values())
+            min_null = min(min(v) for v in low_percentile.values())
+            max_slope = max(np.max(slopes[cell]) for cell in neurons)
+            min_slope = min(np.min(slopes[cell]) for cell in neurons)
+            max_rvalue = max(np.max(rvalues[cell]) for cell in neurons)
+            min_rvalue = min(np.min(rvalues[cell]) for cell in neurons)
 
-                block_starts = np.concatenate(([0], change_rows))
-                block_ends   = np.concatenate((change_rows, [len(sorted_repeats)]))
-                block_centers = (block_starts + block_ends) / 2 - 0.5
-                block_values  = [sorted_repeats[start] for start in block_starts]
+            global_ymax = max(max_null, max_slope, max_rvalue) + 0.1
+            global_ymin = min(min_null, min_slope, min_rvalue) - 0.8
 
-            else:
-                heatmap_data = Y_data[cell]
+            for cell in neurons:
+                fig = plt.figure(figsize=(8,4))
+                gs = plt.GridSpec(1, 2, width_ratios=[5, 3])  
+                ax1 = fig.add_subplot(gs[0,0])
+                ax2 = fig.add_subplot(gs[0,1])
+                
+                n_trials = Y_data[cell].shape[0]
 
-            if data_type == 'YY_diff':
-                vmax = np.max(np.abs(heatmap_data))
-                vmin = -vmax
-                cax2 = ax2.imshow(heatmap_data, aspect='auto', cmap='bwr', vmin=vmin, vmax=vmax)
+                # Regression results
+                ax1.plot(slopes[cell], label='slope')
+                
+                if shuffle:
+                    # Plot percentiles of null distribution
+                    ax1.plot(median_percentile[cell], color='k', label='shuffle median')
+                    ax1.fill_between(np.arange(bins), low_percentile[cell], high_percentile[cell], color='k', alpha=0.3)
+                
+                    # Plot p-values
+                    cell_max_slope = max(np.abs(slopes[cell]))
+                    cell_min_slope = min(slopes[cell])
+                    sig_bins = np.where(pvalue[cell] < 0.05)[0]
+                    ax1.scatter(sig_bins, np.ones(len(sig_bins)) * (cell_min_slope - 0.2), s=10, color='red', marker='*')
+                
+                    # Plot significant clusters from CPA and annotate p-value
+                    y_pos = cell_min_slope - 0.4
+                    for c, seg in enumerate(clusters[cell]):
+                        if cluster_pvalue[cell][c] < 0.05:
+                            ax1.hlines(y_pos, seg[0], seg[-1], color='green', linewidth=3)
+                            text_y = y_pos - 0.10  
+                            text_x = (seg[0] + seg[-1]) / 2  
+                            label = f"p={cluster_pvalue[cell][c]:.3f}"
+                            ax1.annotate(label, xy=(text_x, text_y), ha='center', va='top', fontsize=8)
+                
+                ax1.set_title(f'Linear Regression results')
+                ax1.set_xlabel('Time bins')
+                ax1.set_ylim([global_ymin - 0.5, global_ymax])
+                ax1.hlines(y=0, xmin=0, xmax=bins-1, linestyles='--', colors='grey')
+                # ax1.set_yticks([0, n_trials-1])
+                # ax1.set_yticklabels([0, n_trials])
+                ax1.set_xticks([0, bins-1])
+                ax1.set_ylabel('Beta coefficients (slopes)', labelpad=0)
+
+                axr = ax1.twinx()
+                axr.set_ylim(ax1.get_ylim())
+                axr.plot(rvalues[cell], color='orange', alpha=0.7, label="r-value")
+                axr.set_ylabel("Pearson Correlation (r)", color='orange')
+                axr.tick_params(axis='y', labelcolor='orange')
+                lines_left, labels_left = ax1.get_legend_handles_labels()
+                lines_right, labels_right = axr.get_legend_handles_labels()
+                ax1.legend(lines_left + lines_right, labels_left + labels_right, loc="upper right")
+                
+                # Heatmaps
+                XY_repeat_sorting_idx = np.argsort(XY_repeats, kind='stable')
+                sorted_repeats = XY_repeats[XY_repeat_sorting_idx]
                 if sort_heatmap:
-                    for r in change_rows:
-                        ax2.axhline(r - 0.5, color='black', linewidth=0.8, linestyle='--')
-                    # Indicate number of XY repeats  per block
-                    right_ax = ax2.secondary_yaxis('right')
-                    right_ax.set_yticks(block_centers)
-                    right_ax.set_yticklabels(block_values, fontsize=6)
-                    right_ax.set_ylabel('XY repeats', fontsize=8)
+                    heatmap_data = Y_data[cell][XY_repeat_sorting_idx]
+                    change_rows = np.where(np.diff(sorted_repeats) != 0)[0] + 1
 
-                if condition == 'AB':
-                    ax2.set_title(f'B2-B1')
-                elif condition == 'BA':
-                    ax2.set_title(f'A2-A1')
-                if zscored:
-                    cb2 = fig.colorbar(cax2, ax=ax2, label='z-scored Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
+                    block_starts = np.concatenate(([0], change_rows))
+                    block_ends   = np.concatenate((change_rows, [len(sorted_repeats)]))
+                    block_centers = (block_starts + block_ends) / 2 - 0.5
+                    block_values  = [sorted_repeats[start] for start in block_starts]
+
                 else:
-                    cb2 = fig.colorbar(cax2, ax=ax2, label='Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
-            elif data_type == 'last_Y':
-                vmax = np.max(heatmap_data)
-                vmin = np.min(heatmap_data)
-                cax2 = ax2.imshow(heatmap_data, aspect='auto', cmap='viridis')
-                if condition == 'AB':
-                    ax2.set_title(f'last B')
-                elif condition == 'BA':
-                    ax2.set_title(f'last A')
-                cb2 = fig.colorbar(cax2, ax=ax2, label='dF/F', ticks=[vmin, vmax], pad=0.3)
-            cb2.ax.set_yticklabels([f"{vmin:.1f}", f"{vmax:.1f}"])
-            cb2.ax.yaxis.labelpad = -10
-            ax2.set_yticks([0, n_trials-1])
-            ax2.set_yticklabels([0, n_trials-1])
-            ax2.set_xticks([0, bins-1])
-            ax2.set_xticklabels([0, bins])
-            ax2.set_xlabel('Time bins')
-            
-            plt.suptitle(f'{condition}: neuron {cell}') 
-            plt.tight_layout()
+                    heatmap_data = Y_data[cell]
 
-            if save_plot:
-                condition_save_path = os.path.join(plot_dir, condition)
-                os.makedirs(condition_save_path, exist_ok=True)
-                plt.savefig(condition_save_path + f'/{data_type}_neuron{cell}.png', dpi=300)
+                if data_type == 'YY_diff':
+                    vmax = np.max(np.abs(heatmap_data))
+                    vmin = -vmax
+                    cax2 = ax2.imshow(heatmap_data, aspect='auto', cmap='bwr', vmin=vmin, vmax=vmax)
+                    if sort_heatmap:
+                        for r in change_rows:
+                            ax2.axhline(r - 0.5, color='black', linewidth=0.8, linestyle='--')
+                        # Indicate number of XY repeats  per block
+                        right_ax = ax2.secondary_yaxis('right')
+                        right_ax.set_yticks(block_centers)
+                        right_ax.set_yticklabels(block_values, fontsize=6)
+                        right_ax.set_ylabel('XY repeats', fontsize=8)
 
-            if len(neurons) > 100:
-                plt.close(fig)
-            
-    return results
+                    if condition == 'AB':
+                        ax2.set_title(f'B2-B1')
+                    elif condition == 'BA':
+                        ax2.set_title(f'A2-A1')
+                    if zscored:
+                        cb2 = fig.colorbar(cax2, ax=ax2, label='z-scored Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
+                    else:
+                        cb2 = fig.colorbar(cax2, ax=ax2, label='Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
+                elif data_type == 'last_Y':
+                    vmax = np.max(heatmap_data)
+                    vmin = np.min(heatmap_data)
+                    cax2 = ax2.imshow(heatmap_data, aspect='auto', cmap='viridis')
+                    if condition == 'AB':
+                        ax2.set_title(f'last B')
+                    elif condition == 'BA':
+                        ax2.set_title(f'last A')
+                    cb2 = fig.colorbar(cax2, ax=ax2, label='dF/F', ticks=[vmin, vmax], pad=0.3)
+                cb2.ax.set_yticklabels([f"{vmin:.1f}", f"{vmax:.1f}"])
+                cb2.ax.yaxis.labelpad = -10
+                ax2.set_yticks([0, n_trials-1])
+                ax2.set_yticklabels([0, n_trials-1])
+                ax2.set_xticks([0, bins-1])
+                ax2.set_xticklabels([0, bins])
+                ax2.set_xlabel('Time bins')
+                
+                plt.suptitle(f'{condition}: neuron {cell}') 
+                plt.tight_layout()
+
+                if save_plot:
+                    condition_save_path = os.path.join(plot_dir, condition)
+                    os.makedirs(condition_save_path, exist_ok=True)
+                    plt.savefig(condition_save_path + f'/{data_type}_neuron{cell}.png', dpi=300)
+
+                if len(neurons) > 100:
+                    plt.close(fig)
+                
+        return results

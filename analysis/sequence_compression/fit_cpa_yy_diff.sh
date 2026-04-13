@@ -38,7 +38,7 @@ for ENTRY in "${PAIRS[@]}"; do
         session="${session_t%%:*}"
         stage="${session_t##*:}"
 
-        echo "Fitting CPA for mouse=$mouse session=$session stage=$stage cohort=$cohort"
+        echo "\nFitting CPA for mouse=$mouse session=$session stage=$stage cohort=$cohort"
 
         python fit_cpa_yy_diff.py \
             --mouse "$mouse" \
