@@ -1791,7 +1791,7 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
             cluster_mass_stat_shuffled = results['cluster_mass_stat_shuffled'].item() 
             pvalue = results['pvalue'].item() 
             cluster_pvalue = results['cluster_pvalue'].item() 
-    
+
     else:
         print('\tFitting linear regression with CPA')
         x = XY_repeats.copy()
@@ -1821,7 +1821,7 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                     y = Y_data[cell][:,t]
                     
                     linear_regression_result[cell][t] = stats.linregress(x, y, alternative='two-sided')
-
+                
             slopes = {cell: np.array([res.slope for t, res in linear_regression_result[cell].items()]) for cell in neurons}
             rvalues = {cell: np.array([res.rvalue for t, res in linear_regression_result[cell].items()]) for cell in neurons}
             pvalues = {cell: np.array([res.pvalue for t, res in linear_regression_result[cell].items()]) for cell in neurons}
@@ -1840,7 +1840,7 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                 sig_bins_high = sig_bins[slopes[cell][sig_bins] > 0]
                 cluster_change_idx = np.where(np.diff(sig_bins_high) > 1)[0] + 1
                 split_clusters_high = [c for c in np.split(sig_bins_high, cluster_change_idx) if len(c) > 0]
-
+                
                 sig_bins_low = sig_bins[slopes[cell][sig_bins] < 0]
                 cluster_change_idx = np.where(np.diff(sig_bins_low) > 1)[0] + 1
                 split_clusters_low = [c for c in np.split(sig_bins_low, cluster_change_idx) if len(c) > 0]
@@ -1848,7 +1848,7 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                 # Combine all clusters
                 split_clusters = split_clusters_high + split_clusters_low
                 clusters[cell] = split_clusters
-
+                
                 for c, cluster in enumerate(split_clusters):
                     cluster_mass_stat[cell][c] = np.sum(np.abs(slopes[cell][cluster]))  
 
@@ -1861,7 +1861,7 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                 pvalues_shuffled = {}
                 clusters_shuffled = {cell: {} for cell in neurons}
                 cluster_mass_stat_shuffled = {cell: {} for cell in neurons}
-
+            
                 for cell in neurons:
                     slopes_shuffled[cell] = np.empty((nreps, bins))
                     rvalues_shuffled[cell] = np.empty((nreps, bins))

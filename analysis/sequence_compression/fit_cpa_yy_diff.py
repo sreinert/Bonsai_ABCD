@@ -26,10 +26,10 @@ cohort = args.cohort
 # Load functions according to cohort 
 if cohort == '2':
     import preprocessing.parse_session_functions_cohort2 as parse_session_functions
-    base_path = Path("/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/")
+    base_path = Path("/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/")
 elif cohort == '3':
     import preprocessing.parse_session_functions_cohort3 as parse_session_functions
-    base_path = Path("/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives")
+    base_path = Path("/Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives")
 
 importlib.reload(parse_session_functions)
 importlib.reload(neural_analysis_helpers)
@@ -57,13 +57,14 @@ elif cohort == '3':
     session_path = parse_session_functions.find_base_path(mouse, session_id, base_path)
     dF, neurons = parse_session_functions.load_dF(session_path, red_chan=True)
 
+    print(f'Successfully loaded dF data for {mouse} {session_id}')
     # Create session struct
     if stage == 't3' or stage == 't4':
         world = 'random'
     else:
         world = 'stable'
 
-    behav_path = parse_session_functions.find_base_path(mouse, session_id, '/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata')
+    behav_path = parse_session_functions.find_base_path(mouse, session_id, '/Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata')
     session = parse_session_functions.analyse_npz_pre7(mouse, session_id, base_path, stage, world, plot=False)
     session['stim_order'] = 'random'
 
@@ -108,7 +109,7 @@ if BAA_patches:
     # Cluster-based permutation analysis (CPA) 
     AA_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, binned_AA_phase_activity, session, condition='BA', data_type='YY_diff', 
                                                                                 bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, zscored=zscoring, 
-                                                                                plot=True, sort_heatmap=True, save_plot=False, save_dir=save_dir, plot_dir=save_dir, 
+                                                                                plot=True, sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
                                                                                 reload=False)
 
 if ABB_patches:

@@ -73,7 +73,7 @@ def find_session_base_path(mouse, date, root):
     return base_path
 
 def find_base_path(mouse, date):
-    root = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'
+    root = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'
     data_dir = root + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
@@ -104,7 +104,7 @@ def find_base_path(mouse, date):
     return base_path
 
 def find_base_path_npz(mouse, date):
-    data_dir = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
+    data_dir = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
     base_path = os.path.join(data_dir, sessions[0])
