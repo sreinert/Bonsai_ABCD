@@ -103,7 +103,7 @@ if BAA_patches:
     # Find start, reward and end timepoints inside YY events 
     events_AA = alternation.get_YY_events(session, BAA_patches)
 
-    # Temporal binning within XYY patch
+    # Temporal binning within YY patch
     binned_AA_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, BAA_patches, events_AA, bins, condition='AA', zscoring=zscoring, plot=True)
 
     # Cluster-based permutation analysis (CPA) 
@@ -117,7 +117,7 @@ if ABB_patches:
     # Find start, reward and end timepoints inside YY events 
     events_BB = alternation.get_YY_events(session, ABB_patches)
 
-    # Temporal binning within XYY patch
+    # Temporal binning within YY patch
     binned_BB_phase_activity = alternation.get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, ABB_patches, events_BB, bins, condition='BB', zscoring=zscoring, plot=False)
 
     # Cluster-based permutation analysis (CPA) 

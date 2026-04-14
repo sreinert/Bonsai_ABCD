@@ -96,8 +96,11 @@ def get_min_frames_between_lms(session):
     frames_around = int(np.round(frames_around / 10) * 10)
 
     if frames_around > 30:
-        frames_around = 30 
         print(f'The min distance in frames between two landmarks is {frames_around}, equivalent to {np.round(frames_around/45,2)} s, but capping to 30 frames.')
+        frames_around = 30
+    elif frames_around < 20:
+        print(f'The min distance in frames between two landmarks is {frames_around}, equivalent to {np.round(frames_around/45,2)} s, but capping to 20 frames.')
+        frames_around = 20 
     else:
         print(f'The min distance in frames between two landmarks is {frames_around}, equivalent to {np.round(frames_around/45,2)} s.')
 
@@ -1792,6 +1795,8 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
             pvalue = results['pvalue'].item() 
             cluster_pvalue = results['cluster_pvalue'].item() 
 
+        return results
+
     else:
         print('\tFitting linear regression with CPA')
         x = XY_repeats.copy()
@@ -1938,135 +1943,164 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                 np.savez(results_file, **np_results)
                 print(f"\tSaved results in: {results_file}")
                 
-        # Compute percentiles 
-        low_percentile = {cell: np.percentile(slopes_shuffled[cell], 2.5, axis=0) for cell in neurons}
-        high_percentile = {cell: np.percentile(slopes_shuffled[cell], 97.5, axis=0) for cell in neurons}
-        median_percentile = {cell: np.median(slopes_shuffled[cell], axis=0) for cell in neurons}
-
         # Plotting
         if plot: 
-            max_null = max(max(v) for v in high_percentile.values())
-            min_null = min(min(v) for v in low_percentile.values())
-            max_slope = max(np.max(slopes[cell]) for cell in neurons)
-            min_slope = min(np.min(slopes[cell]) for cell in neurons)
-            max_rvalue = max(np.max(rvalues[cell]) for cell in neurons)
-            min_rvalue = min(np.min(rvalues[cell]) for cell in neurons)
-
-            global_ymax = max(max_null, max_slope, max_rvalue) + 0.1
-            global_ymin = min(min_null, min_slope, min_rvalue) - 0.8
-
-            for cell in neurons:
-                fig = plt.figure(figsize=(8,4))
-                gs = plt.GridSpec(1, 2, width_ratios=[5, 3])  
-                ax1 = fig.add_subplot(gs[0,0])
-                ax2 = fig.add_subplot(gs[0,1])
-                
-                n_trials = Y_data[cell].shape[0]
-
-                # Regression results
-                ax1.plot(slopes[cell], label='slope')
-                
-                if shuffle:
-                    # Plot percentiles of null distribution
-                    ax1.plot(median_percentile[cell], color='k', label='shuffle median')
-                    ax1.fill_between(np.arange(bins), low_percentile[cell], high_percentile[cell], color='k', alpha=0.3)
-                
-                    # Plot p-values
-                    cell_max_slope = max(np.abs(slopes[cell]))
-                    cell_min_slope = min(slopes[cell])
-                    sig_bins = np.where(pvalue[cell] < 0.05)[0]
-                    ax1.scatter(sig_bins, np.ones(len(sig_bins)) * (cell_min_slope - 0.2), s=10, color='red', marker='*')
-                
-                    # Plot significant clusters from CPA and annotate p-value
-                    y_pos = cell_min_slope - 0.4
-                    for c, seg in enumerate(clusters[cell]):
-                        if cluster_pvalue[cell][c] < 0.05:
-                            ax1.hlines(y_pos, seg[0], seg[-1], color='green', linewidth=3)
-                            text_y = y_pos - 0.10  
-                            text_x = (seg[0] + seg[-1]) / 2  
-                            label = f"p={cluster_pvalue[cell][c]:.3f}"
-                            ax1.annotate(label, xy=(text_x, text_y), ha='center', va='top', fontsize=8)
-                
-                ax1.set_title(f'Linear Regression results')
-                ax1.set_xlabel('Time bins')
-                ax1.set_ylim([global_ymin - 0.5, global_ymax])
-                ax1.hlines(y=0, xmin=0, xmax=bins-1, linestyles='--', colors='grey')
-                # ax1.set_yticks([0, n_trials-1])
-                # ax1.set_yticklabels([0, n_trials])
-                ax1.set_xticks([0, bins-1])
-                ax1.set_ylabel('Beta coefficients (slopes)', labelpad=0)
-
-                axr = ax1.twinx()
-                axr.set_ylim(ax1.get_ylim())
-                axr.plot(rvalues[cell], color='orange', alpha=0.7, label="r-value")
-                axr.set_ylabel("Pearson Correlation (r)", color='orange')
-                axr.tick_params(axis='y', labelcolor='orange')
-                lines_left, labels_left = ax1.get_legend_handles_labels()
-                lines_right, labels_right = axr.get_legend_handles_labels()
-                ax1.legend(lines_left + lines_right, labels_left + labels_right, loc="upper right")
-                
-                # Heatmaps
-                XY_repeat_sorting_idx = np.argsort(XY_repeats, kind='stable')
-                sorted_repeats = XY_repeats[XY_repeat_sorting_idx]
-                if sort_heatmap:
-                    heatmap_data = Y_data[cell][XY_repeat_sorting_idx]
-                    change_rows = np.where(np.diff(sorted_repeats) != 0)[0] + 1
-
-                    block_starts = np.concatenate(([0], change_rows))
-                    block_ends   = np.concatenate((change_rows, [len(sorted_repeats)]))
-                    block_centers = (block_starts + block_ends) / 2 - 0.5
-                    block_values  = [sorted_repeats[start] for start in block_starts]
-
-                else:
-                    heatmap_data = Y_data[cell]
-
-                if data_type == 'YY_diff':
-                    vmax = np.max(np.abs(heatmap_data))
-                    vmin = -vmax
-                    cax2 = ax2.imshow(heatmap_data, aspect='auto', cmap='bwr', vmin=vmin, vmax=vmax)
-                    if sort_heatmap:
-                        for r in change_rows:
-                            ax2.axhline(r - 0.5, color='black', linewidth=0.8, linestyle='--')
-                        # Indicate number of XY repeats  per block
-                        right_ax = ax2.secondary_yaxis('right')
-                        right_ax.set_yticks(block_centers)
-                        right_ax.set_yticklabels(block_values, fontsize=6)
-                        right_ax.set_ylabel('XY repeats', fontsize=8)
-
-                    if condition == 'AB':
-                        ax2.set_title(f'B2-B1')
-                    elif condition == 'BA':
-                        ax2.set_title(f'A2-A1')
-                    if zscored:
-                        cb2 = fig.colorbar(cax2, ax=ax2, label='z-scored Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
-                    else:
-                        cb2 = fig.colorbar(cax2, ax=ax2, label='Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
-                elif data_type == 'last_Y':
-                    vmax = np.max(heatmap_data)
-                    vmin = np.min(heatmap_data)
-                    cax2 = ax2.imshow(heatmap_data, aspect='auto', cmap='viridis')
-                    if condition == 'AB':
-                        ax2.set_title(f'last B')
-                    elif condition == 'BA':
-                        ax2.set_title(f'last A')
-                    cb2 = fig.colorbar(cax2, ax=ax2, label='dF/F', ticks=[vmin, vmax], pad=0.3)
-                cb2.ax.set_yticklabels([f"{vmin:.1f}", f"{vmax:.1f}"])
-                cb2.ax.yaxis.labelpad = -10
-                ax2.set_yticks([0, n_trials-1])
-                ax2.set_yticklabels([0, n_trials-1])
-                ax2.set_xticks([0, bins-1])
-                ax2.set_xticklabels([0, bins])
-                ax2.set_xlabel('Time bins')
-                
-                plt.suptitle(f'{condition}: neuron {cell}') 
-                plt.tight_layout()
-
-                if save_plot:
-                    condition_save_path = os.path.join(plot_dir, condition)
-                    os.makedirs(condition_save_path, exist_ok=True)
-                    plt.savefig(condition_save_path + f'/{data_type}_neuron{cell}.png', dpi=300)
-
-                if len(neurons) > 100:
-                    plt.close(fig)
+            plot_cpa_results(results, neurons, YY_data, session, Y_data, XY_repeats, condition, data_type, bins, sort_heatmap, zscored, save_plot, plot_dir)
                 
         return results
+    
+
+def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_repeats=None, condition='AB', data_type='YY_diff', bins=30, sort_heatmap=True, zscored=True, save_plot=False, plot_dir=''):
+
+    # Unwrap CPA results
+    cpa_results = {k: v.item() if v.shape == () else v for k, v in cpa_results.items()}
+    
+    # Get patches of XY repeats if not provided
+    if XY_repeats == None:
+        _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
+
+        # Find preceding XY length for each patch
+        if condition == 'AB':
+            patches = AB_patches
+        elif condition == 'BA':
+            patches = BA_patches
+
+        XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
+        XY_repeats = XY_repeats[YY_data['valid_patch_indices']]
+    
+    # Define Y data for CPA if not provided
+    Y_data = {}
+    for cell in neurons:
+        Y_data[cell] = YY_data['temporal_XYY_firing'][cell][:, bins:] - YY_data['temporal_XYY_firing'][cell][:, :bins]
+
+    # Compute percentiles 
+    low_percentile = {cell: np.percentile(cpa_results['slopes_shuffled'][cell], 2.5, axis=0) for cell in neurons}
+    high_percentile = {cell: np.percentile(cpa_results['slopes_shuffled'][cell], 97.5, axis=0) for cell in neurons}
+    median_percentile = {cell: np.median(cpa_results['slopes_shuffled'][cell], axis=0) for cell in neurons}
+
+    # Plotting
+    max_null = max(max(v) for v in high_percentile.values())
+    min_null = min(min(v) for v in low_percentile.values())
+    max_slope = max(np.max(cpa_results['slopes'][cell]) for cell in neurons)
+    min_slope = min(np.min(cpa_results['slopes'][cell]) for cell in neurons)
+    max_rvalue = max(np.max(cpa_results['rvalues'][cell]) for cell in neurons)
+    min_rvalue = min(np.min(cpa_results['rvalues'][cell]) for cell in neurons)
+
+    global_ymax = max(max_null, max_slope, max_rvalue) + 0.1
+    global_ymin = min(min_null, min_slope, min_rvalue) - 0.8
+
+    for cell in neurons:
+        fig = plt.figure(figsize=(8,4))
+        gs = plt.GridSpec(1, 2, width_ratios=[5, 3])  
+        ax1 = fig.add_subplot(gs[0,0])
+        ax2 = fig.add_subplot(gs[0,1])
+        
+        n_trials = Y_data[cell].shape[0]
+
+        # Regression results
+        ax1.plot(cpa_results['slopes'][cell], label='slope')
+        
+        if 'slopes_shuffled' in cpa_results:
+            # Plot percentiles of null distribution
+            ax1.plot(median_percentile[cell], color='k', label='shuffle median')
+            ax1.fill_between(np.arange(bins), low_percentile[cell], high_percentile[cell], color='k', alpha=0.3)
+        
+            # Plot p-values
+            cell_max_slope = max(np.abs(cpa_results['slopes'][cell]))
+            cell_min_slope = min(cpa_results['slopes'][cell])
+            sig_bins = np.where(cpa_results['pvalue'][cell] < 0.05)[0]
+            ax1.scatter(sig_bins, np.ones(len(sig_bins)) * (cell_min_slope - 0.2), s=10, color='red', marker='*')
+        
+            # Plot significant clusters from CPA and annotate p-value
+            y_pos = cell_min_slope - 0.4
+            for c, seg in enumerate(cpa_results['clusters'][cell]):
+                if cpa_results['cluster_pvalue'][cell][c] < 0.05:
+                    ax1.hlines(y_pos, seg[0], seg[-1], color='green', linewidth=3)
+                    text_y = y_pos - 0.10  
+                    text_x = (seg[0] + seg[-1]) / 2  
+                    label = f"p={cpa_results['cluster_pvalue'][cell][c]:.3f}"
+                    ax1.annotate(label, xy=(text_x, text_y), ha='center', va='top', fontsize=8)
+        
+        ax1.set_title(f'Linear Regression results')
+        ax1.set_xlabel('Time bins')
+        ax1.set_ylim([global_ymin - 0.5, global_ymax])
+        ax1.hlines(y=0, xmin=0, xmax=bins-1, linestyles='--', colors='grey')
+        ax1.set_xticks([0, bins-1])
+        ax1.set_ylabel('Beta coefficients (slopes)', labelpad=0)
+
+        axr = ax1.twinx()
+        axr.set_ylim(ax1.get_ylim())
+        axr.plot(cpa_results['rvalues'][cell], color='orange', alpha=0.7, label="r-value")
+        axr.set_ylabel("Pearson Correlation (r)", color='orange')
+        axr.tick_params(axis='y', labelcolor='orange')
+        lines_left, labels_left = ax1.get_legend_handles_labels()
+        lines_right, labels_right = axr.get_legend_handles_labels()
+        ax1.legend(lines_left + lines_right, labels_left + labels_right, loc="upper right")
+        
+        # Heatmaps
+        XY_repeat_sorting_idx = np.argsort(XY_repeats, kind='stable')
+        sorted_repeats = XY_repeats[XY_repeat_sorting_idx]
+        if sort_heatmap:
+            heatmap_data = Y_data[cell][XY_repeat_sorting_idx]
+            change_rows = np.where(np.diff(sorted_repeats) != 0)[0] + 1
+
+            block_starts = np.concatenate(([0], change_rows))
+            block_ends   = np.concatenate((change_rows, [len(sorted_repeats)]))
+            block_centers = (block_starts + block_ends) / 2 - 0.5
+            block_values  = [sorted_repeats[start] for start in block_starts]
+
+        else:
+            heatmap_data = Y_data[cell]
+
+        if data_type == 'YY_diff':
+            vmax = np.max(np.abs(heatmap_data))
+            vmin = -vmax
+            cax2 = ax2.imshow(heatmap_data, aspect='auto', cmap='bwr', vmin=vmin, vmax=vmax)
+            if sort_heatmap:
+                for r in change_rows:
+                    ax2.axhline(r - 0.5, color='black', linewidth=0.8, linestyle='--')
+                # Indicate number of XY repeats  per block
+                right_ax = ax2.secondary_yaxis('right')
+                right_ax.set_yticks(block_centers)
+                right_ax.set_yticklabels(block_values, fontsize=6)
+                right_ax.set_ylabel('XY repeats', fontsize=8)
+
+            if condition == 'AB':
+                ax2.set_title(f'B2-B1')
+            elif condition == 'BA':
+                ax2.set_title(f'A2-A1')
+            if zscored:
+                cb2 = fig.colorbar(cax2, ax=ax2, label='z-scored Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
+            else:
+                cb2 = fig.colorbar(cax2, ax=ax2, label='Y-Y dF/F', ticks=[vmin, vmax], pad=0.3)
+        
+        elif data_type == 'last_Y':
+            vmax = np.max(heatmap_data)
+            vmin = np.min(heatmap_data)
+            cax2 = ax2.imshow(heatmap_data, aspect='auto', cmap='viridis')
+            if condition == 'AB':
+                ax2.set_title(f'last B')
+            elif condition == 'BA':
+                ax2.set_title(f'last A')
+            cb2 = fig.colorbar(cax2, ax=ax2, label='dF/F', ticks=[vmin, vmax], pad=0.3)
+        
+        cb2.ax.set_yticklabels([f"{vmin:.1f}", f"{vmax:.1f}"])
+        cb2.ax.yaxis.labelpad = -10
+        ax2.set_yticks([0, n_trials-1])
+        ax2.set_yticklabels([0, n_trials-1])
+        ax2.set_xticks([0, bins-1])
+        ax2.set_xticklabels([0, bins])
+        ax2.set_xlabel('Time bins')
+        
+        plt.suptitle(f'{condition}: neuron {cell}') 
+        plt.tight_layout()
+
+        if save_plot:
+            if plot_dir == '':
+                plot_dir = session['save_dir']
+            condition_save_path = os.path.join(plot_dir, condition)
+            os.makedirs(condition_save_path, exist_ok=True)
+            plt.savefig(condition_save_path + f'/{data_type}_neuron{cell}.png', dpi=300)
+
+        if len(neurons) > 100:
+            plt.close(fig)
