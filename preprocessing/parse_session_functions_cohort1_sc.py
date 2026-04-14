@@ -36,15 +36,25 @@ class AnalogData(Reader):
         data = np.reshape(data, (-1, self.channels))
         return pd.DataFrame(data, columns=self.columns)
 
-# def find_base_path(mouse, date, root):
-#     mouse_path = Path(root) / f"sub-{mouse}" 
-
-#     for folder in mouse_path.iterdir():
-#         if folder.is_dir() and date in folder.name:
-#             print(f"Found folder: {folder}")
-#             base_path = folder
-#     return base_path
-
+def format_condition_label(cond):
+    # Determine the AB counts
+    if 'abb' in cond and 'abbb' not in cond:
+        base = r"$\mathrm{AB}^2$"
+    elif 'abbb' in cond:
+        base = r"$\mathrm{AB}^3$"
+    elif 'aabb' in cond:
+        base = r"$\mathrm{A}^2\mathrm{B}^2$"
+    else:
+        base = cond
+    
+    # Preserve random/fixed part
+    if 'random' in cond:
+        return f"{base} random"
+    elif 'fixed' in cond:
+        return f"{base} fixed"
+    else:
+        return base
+    
 from datetime import datetime
 
 def find_base_path(mouse, date, root):
@@ -314,7 +324,7 @@ def get_event_parsed(sess_dataframe, ses_settings):
     if isinstance(trial, list):
         trial = trial[0]['trial']
     reward_seq = np.array([lm[0]['rewardSequencePosition'] for lm in trial['landmarks']])
-    
+
     if len(reward_seq) == 4:
         if np.diff(reward_seq)[0] == 0:    
             # AABB: re-order AB so that A is always first
@@ -408,6 +418,68 @@ def parse_random_goal_ids(ses_settings):
                         break
 
     return goals, lm_ids
+
+def get_hit_fa_events_split(sess_dataframe, ses_settings):
+    target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
+    lick_position, *_ = get_event_parsed(sess_dataframe, ses_settings)
+
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+    reward_seq = np.array([lm[0]['rewardSequencePosition'] for lm in trial['landmarks']])
+
+    release_positions = np.sort(np.concatenate([target_positions, distractor_positions]))
+
+    # --- split landmark groups exactly like your function ---
+    A1 = A_landmarks
+    A2 = []
+    B3 = []
+
+    if len(reward_seq) == 3:
+        B1 = B_landmarks[::2]
+        B2 = B_landmarks[1::2]
+
+    elif len(reward_seq) == 4:
+        if len(np.where(reward_seq == -1)[0]) > 2:
+            B1 = B_landmarks[::3]
+            B2 = B_landmarks[1::3]
+            B3 = B_landmarks[2::3]
+        else:
+            A1 = A_landmarks[::2]
+            A2 = A_landmarks[1::2]
+            B1 = B_landmarks[::2]
+            B2 = B_landmarks[1::2]
+
+    # map to positions
+    A1_pos = release_positions[A1]
+    A2_pos = release_positions[A2] if len(A2) else np.array([])
+    B1_pos = release_positions[B1]
+    B2_pos = release_positions[B2]
+    B3_pos = release_positions[B3] if len(B3) else np.array([])
+
+    # helper to compute binary events
+    def compute_events(positions):
+        events = []
+        for pos in positions:
+            events.append(
+                int(np.any((lick_position > pos) & (lick_position < pos + lm_size)))
+            )
+        return np.array(events)
+
+    events = {
+        "A1": compute_events(A1_pos),
+        "B1": compute_events(B1_pos),
+        "B2": compute_events(B2_pos),
+    }
+
+    if len(A2_pos):
+        events["A2"] = compute_events(A2_pos)
+    if len(B3_pos):
+        events["B3"] = compute_events(B3_pos)
+
+    return events
 
 def calc_hit_fa(sess_dataframe, ses_settings):
     '''Calculate average hit and false alarm rate across a session'''
@@ -1093,7 +1165,7 @@ def calc_transition_matrix(sess_dataframe, ses_settings):
         next_lm = int(ideal_sequence[i+1])
         ideal_tm[current_lm, next_lm] += 1
 
-    print(f'target ids {target_id} and distractor ids {distractor_id}')
+    # print(f'target ids {target_id} and distractor ids {distractor_id}')
 
     return transition_matrix, lick_tm, ideal_tm
 
@@ -2183,7 +2255,7 @@ def estimate_lm_events(sess_dataframe):
         initial_lm = pd.DataFrame({
             'time': [pd.NaT],
             'Position': [0],
-            'Index': [-1],
+            'Index': [0], #'Index': [-1],
             'Odour': [0]  # Assume first odour is the initial one
         }).set_index('time')
         lm_df = pd.concat([initial_lm, lm_df]).reset_index().set_index('time')
