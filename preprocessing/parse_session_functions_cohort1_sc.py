@@ -883,7 +883,83 @@ def calc_distance_hit_fa(sess_dataframe, ses_settings, split_lms=False, plot=Tru
     
     else:
         return hit_rate, fa_rate, None
+
+def calc_distance_from_A_hit_fa(sess_dataframe, ses_settings, plot=True):
+    '''Calculate hit and fa rates based on distance from preceding A'''
     
+    lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
+    target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = find_targets_distractors(sess_dataframe, ses_settings)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
+    A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
+
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        trial = trial[0]['trial']
+    lm_size = trial['landmarks'][0][0]['size']
+
+    # Find number of landmarks between two consecutive As
+    num_Bs = len(distractor_positions[(distractor_positions > target_positions[0]) & (distractor_positions < target_positions[1])])
+
+    # Find distances between A and the following last 2 Bs e.g. A-B1 and A-B2 in ABB or A-B2 and A-B3 in ABBB
+    A_A_diff = np.zeros((len(target_positions) - 1))
+    A_B_diff = np.zeros((len(target_positions) - 1, num_Bs))
+    B_positions = np.zeros((len(target_positions) - 1, num_Bs))
+
+    for i, pos in enumerate(target_positions[:-1]):
+        A_A_diff[i] = target_positions[i + 1] - pos
+
+        following_Bs = distractor_positions[(distractor_positions > pos) & (distractor_positions < target_positions[i + 1])]
+        for j in range(num_Bs):
+            B_positions[i, j] = following_Bs[j]
+            A_B_diff[i, j] = B_positions[i, j] - pos       
+
+    # Determine hit rate
+    licked_As = np.zeros((len(target_positions) - 1))
+    for i, pos in enumerate(target_positions[:-1]):
+        if np.any((lick_position > pos) & (lick_position < (pos + lm_size))):
+            licked_As[i] = 1
+    
+    # Determine false alarm rates
+    licked_Bs = np.zeros((len(target_positions) - 1, num_Bs))
+    for i, pos in enumerate(B_positions):
+        for j in range(num_Bs):
+            if np.any((lick_position > pos[j]) & (lick_position < (pos[j] + lm_size))):
+                licked_Bs[i, j] = 1
+
+    if plot:
+        all_distances = np.concatenate([A_A_diff, A_B_diff.flatten()])
+        bins = np.linspace(np.min(all_distances), np.max(all_distances), 20)
+
+        fig = plt.figure(figsize=(6,4))
+
+        cA, mA, sA = compute_binned_lick_rate(A_A_diff, licked_As, bins)
+        plt.errorbar(cA, mA, yerr=sA, label='A', marker='o', color='darkblue')
+
+        for i in range(num_Bs):
+            if i == 0:
+                color = 'orange'
+            elif i == 1:
+                color = 'gold'
+            elif i == 2:
+                color = 'brown'
+            c, m, s = compute_binned_lick_rate(A_B_diff[:, i], licked_Bs[:, i], bins)
+            plt.errorbar(c, m, yerr=s, label=f'B{i+1}', marker='o', color=color)
+
+        plt.ylim([0,1.1])
+        plt.yticks([0,0.5,1])
+        ax = plt.gca()
+        ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        plt.legend(frameon=False, loc='center right')
+        plt.xlabel('Distance A → ')
+        plt.ylabel('Lick rate')
+
+        return A_A_diff, A_B_diff, licked_As, licked_Bs, fig
+    
+    else:
+        return A_A_diff, A_B_diff, licked_As, licked_Bs, None
+
 def calc_time_hit_fa(sess_dataframe, ses_settings, bins=10, plot=True):
     '''Calculate hit and fa rates based on time spent between landmarks'''
 
@@ -999,6 +1075,29 @@ def get_time_between_landmarks(sess_dataframe, ses_settings, bins=20, plot=True)
     
     else:
         return dt, None
+
+def compute_binned_lick_rate(distances, licks, bins):
+    
+    bin_idx = np.digitize(distances, bins)
+    
+    means = []
+    sems = []
+    centers = []
+
+    for b in range(1, len(bins)):
+        mask = bin_idx == b
+        
+        if np.sum(mask) > 0:
+            vals = licks[mask].astype(float)
+            means.append(np.mean(vals))
+            sems.append(np.std(vals) / np.sqrt(len(vals)))
+        else:
+            means.append(np.nan)
+            sems.append(np.nan)
+        
+        centers.append((bins[b] + bins[b-1]) / 2)
+
+    return np.array(centers), np.array(means), np.array(sems)
 
 def extract_int(s: str) -> int:
     m = re.search(r'\d+', s)
