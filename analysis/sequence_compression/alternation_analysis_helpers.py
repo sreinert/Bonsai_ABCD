@@ -1950,13 +1950,16 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
         return results
     
 
-def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_repeats=None, condition='AB', data_type='YY_diff', bins=30, sort_heatmap=True, zscored=True, save_plot=False, plot_dir=''):
+def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_repeats=None, condition='AB', data_type='YY_diff', bins=30, sort_heatmap=True, zscored=True, save_plot=False, plot_dir='', axes=None):
 
     # Unwrap CPA results
-    cpa_results = {k: v.item() if v.shape == () else v for k, v in cpa_results.items()}
+    cpa_results = {
+        k: v.item() if isinstance(v, np.ndarray) and v.shape == () else v
+        for k, v in cpa_results.items()
+    }
     
     # Get patches of XY repeats if not provided
-    if XY_repeats == None:
+    if XY_repeats is None:
         _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
 
         # Find preceding XY length for each patch
@@ -1990,10 +1993,14 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
     global_ymin = min(min_null, min_slope, min_rvalue) - 0.8
 
     for cell in neurons:
-        fig = plt.figure(figsize=(8,4))
-        gs = plt.GridSpec(1, 2, width_ratios=[5, 3])  
-        ax1 = fig.add_subplot(gs[0,0])
-        ax2 = fig.add_subplot(gs[0,1])
+        if axes is None:
+            fig = plt.figure(figsize=(8,4))
+            gs = plt.GridSpec(1, 2, width_ratios=[5, 3])  
+            ax1 = fig.add_subplot(gs[0,0])
+            ax2 = fig.add_subplot(gs[0,1])
+        else:
+            ax1, ax2 = axes
+            fig = ax1.figure 
         
         n_trials = Y_data[cell].shape[0]
 
