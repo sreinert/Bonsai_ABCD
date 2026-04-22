@@ -427,6 +427,8 @@ def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=No
             squeeze=True, return_indices=True
         )
 
+        idx_original_aligned = np.array(idx_original_aligned)
+        
         # Visualize the alignment
         if plot_alignment:
             fig, axs = plt.subplots(2, 2, figsize=(15, 5))
@@ -470,14 +472,16 @@ def roicat_visualize_tracked_rois(roicat_dir, roicat_data_name, sessions_to_alig
     if roicat_results is None:
         roicat_results = load_roicat_results(roicat_dir, roicat_data_name)
 
-    # Define UCIDs / labels
+    # Build mapping: protocol number → index
     protocol_nums = [int(re.search(r'protocol-t(\d+)', s).group(1)) for s in sessions_to_align]
-    protocol_nums = [protocol_nums[i] - protocol_nums[0] for i in range(len(protocol_nums))]
+    protocol_to_index = {p: i for i, p in enumerate(protocol_nums)}
+    indices = [protocol_to_index[p] for p in protocol_nums]
     
+    # Define UCIDs / labels
     labels_bySession = roicat_results['clusters']['labels_bySession']
     rois_bySession = roicat_results['ROIs']['ROIs_aligned']
-    roi_labels = [labels_bySession[p] for p in protocol_nums]
-    rois = [rois_bySession[p] for p in protocol_nums]
+    roi_labels = [labels_bySession[i] for i in indices]
+    rois = [rois_bySession[i] for i in indices]
 
     if tracked_neuron_ids is not None: # visualize selected neurons
         roi_labels = [np.array(labels)[valid_ids] for labels, valid_ids in zip(roi_labels, tracked_neuron_ids)]
