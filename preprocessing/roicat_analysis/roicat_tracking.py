@@ -16,7 +16,7 @@ args = parser.parse_args()
 animal =  args.animal 
 sessions = args.sessions
 
-basepath = f'/media/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/{animal}'
+basepath = f'/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/{animal}'
 dir_save = os.path.join(basepath, 'ROICaT')
 Path(dir_save).mkdir(parents=True, exist_ok=True)
 Path(os.path.join(dir_save, 'visualization')).mkdir(parents=True, exist_ok=True)

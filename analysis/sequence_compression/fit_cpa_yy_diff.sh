@@ -18,13 +18,13 @@ source activate bonsai_abcd
 
 PAIRS=(
     "mouse=TAA0000059 cohort=2 t3:t3 t4:t4"
-    "mouse=TAA0000066 cohort=2 t3:t3 t4:t4"
-    "mouse=001 cohort=3 2LM015:t3"
-    "mouse=002 cohort=3 2LM016:t3"
-    "mouse=003 cohort=3 2LM015:t3"
-    "mouse=005 cohort=3 2LM009:t3"
-    "mouse=009 cohort=3 2LM008:t3"
-    "mouse=014 cohort=3 2LM011:t3"
+    # "mouse=TAA0000066 cohort=2 t3:t3 t4:t4"
+    # "mouse=001 cohort=3 2LM015:t3"
+    # "mouse=002 cohort=3 2LM016:t3"
+    # "mouse=003 cohort=3 2LM015:t3"
+    # "mouse=005 cohort=3 2LM009:t3"
+    # "mouse=009 cohort=3 2LM008:t3"
+    # "mouse=014 cohort=3 2LM011:t3"
 )
 
 for ENTRY in "${PAIRS[@]}"; do
@@ -38,7 +38,7 @@ for ENTRY in "${PAIRS[@]}"; do
         session="${session_t%%:*}"
         stage="${session_t##*:}"
 
-        echo "\nFitting CPA for mouse=$mouse session=$session stage=$stage cohort=$cohort"
+        echo "Fitting CPA for mouse=$mouse session=$session stage=$stage cohort=$cohort"
 
         python fit_cpa_yy_diff.py \
             --mouse "$mouse" \
