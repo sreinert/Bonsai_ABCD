@@ -18,7 +18,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 ## Loading functions 
 
-def get_session_folders(base_path,mouse,stage):
+def get_session_folders(base_path, mouse, stage):
     """
     Get the session folders for a given mouse and state.
     """
@@ -49,24 +49,132 @@ def load_img_data(imaging_path):
         seg = None
     frame_rate = ops['fs']
 
-    return f, fneu, iscell, ops, seg, frame_rate
+    funcimg_data = {
+        'f': f,
+        'fneu': fneu,
+        'iscell': iscell,
+        'ops': ops,
+        'frame_rate': frame_rate,
+        'seg': seg
+    }
 
-def get_dff(f, fneu, frame_ix, ops):
+    return funcimg_data
+
+def get_dff(funcimg_data, frame_ix):
     """
     Calculate the dF/F for the imaging data (suite2p default method).
     """
     from suite2p.extraction import dcnv
 
+    ops = funcimg_data['ops']
+    f = funcimg_data['f']
+    fneu = funcimg_data['fneu']
+
     all_f = f[:, frame_ix['valid_frames']]
     all_fneu = fneu[:, frame_ix['valid_frames']]
-    all_cells_f_corr = all_f - all_fneu*0.7
+    all_cells_f_corr = all_f - all_fneu * 0.7
     dF = dcnv.preprocess(all_cells_f_corr, ops['baseline'], ops['win_baseline'], 
                                     ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
+    
     print(f"Calculated dF/F with the following parameters: "
         f"baseline={ops['baseline']}, win_baseline={ops['win_baseline']}, "
         f"sig_baseline={ops['sig_baseline']}, fs={ops['fs']},perctile_baseline={ops['prctile_baseline']}")
 
     return dF
+
+def load_dF(base_path, mouse, stage, reload=False):
+    '''Load dF and valid frames and find valid neurons'''
+
+    imaging_path, config_path, frame_ix, date1, date2 = get_session_folders(base_path, mouse, stage)
+    
+    # Load or calculate dF
+    dF_file = os.path.join(imaging_path, 'DF_F0.npy')
+
+    if os.path.exists(dF_file) and not reload:
+        print('dF file found. Loading...')
+        dF = np.load(dF_file)
+
+    else:
+        print('dF file not found. Computing dF now only on the behaviour-relevant frames...')
+        funcimg_data = load_img_data(imaging_path)
+        dF = get_dff(funcimg_data, frame_ix)
+        
+        np.save(dF_file, dF)
+
+    # Find valid neurons
+    neurons = get_responsive_neurons(dF, imaging_path, plot_deltas=False, plot_responses=False)
+
+    return dF, neurons
+
+def get_responsive_neurons(dF, imaging_path, save_path=None, plot_deltas=False, n_deltas=20, plot_responses=False, n_responses=20):
+    '''Get ROIs that not just artifacts or constitutively active neurons.'''
+        
+    # 1. Select neurons that have been manually selected as valid ROIs
+    iscell = np.load(os.path.join(imaging_path, 'iscell.npy'))[:,0]
+    neurons = np.where(iscell == 1)[0]
+
+    # 2. Select neurons based on response patterns during the session
+    neurons_considered = []
+
+    for i, n in enumerate(neurons): 
+        deltas = dF[n,:] - np.mean(dF[n,:])
+
+        # Skip cells with very large deviations
+        if len(np.where(~np.isfinite(deltas))[0]) > 0:
+            print(f'{n} is a strange neuron')
+            continue
+
+        if np.max(deltas) > 500:
+            continue
+
+        # Keep cells with different responses below or above the mean
+        skew = stats.skew(deltas)
+        if np.abs(skew) > 0.4: 
+            neurons_considered.append(n)
+
+        if plot_deltas and (i < n_deltas):
+            plt.figure()
+            plt.hist(deltas, bins=100)
+            plt.title(f'{n}, {skew}, {np.max(deltas)}')
+        
+    print(f'Out of the {dF.shape[0]} ROIs, {len(neurons)} are classified as neurons, and {len(neurons_considered)} have time-varying Ca2+ signals and will be considered here.')
+
+    neurons_considered = np.array(neurons_considered)
+    if save_path is None:
+        save_path = imaging_path
+    np.savez(os.path.join(save_path, f'responsive_neurons.npz'), neurons_considered)
+
+    # Plot dF/F for a few responsive neurons
+    if plot_responses:
+        for n in neurons_considered[:n_responses]:
+            plot_range = [10000, 20000]
+            xdata = np.arange(plot_range[0], plot_range[1]) 
+            fig, ax = plt.subplots(1, 1, figsize=(15,4), sharey=True)
+            ax.plot(xdata, dF[n, xdata])
+            ax.set_xlabel('Frame')
+            ax.set_ylabel('DF/F')
+            plt.suptitle(f'neuron {n}')
+
+    return neurons_considered
+
+def load_dF_data(base_path, mouse, stage, reload=False):
+
+    # Load imaging path and valid frames 
+    imaging_path, config_path, frame_ix, date1, date2 = get_session_folders(base_path, mouse, stage)
+
+    # Load funcimg data 
+    funcimg_data = load_img_data(imaging_path)
+
+    # Load or calculate dF
+    dF_path = os.path.join(imaging_path, 'DF_F0.npy')
+    if os.path.exists(dF_path) and not reload:
+        print('dF file found. Loading...')
+        dF = np.load(dF_path)
+    else:
+        dF = get_dff(funcimg_data, frame_ix)
+        np.save(dF_path, dF)
+        
+    return funcimg_data, dF
 
 ## Displaying cell properties
 
@@ -911,7 +1019,7 @@ def extract_arb_progress(dF, cell, session, event_frames, ngoals, bins, period='
 
     return binned_all
 
-def calc_goal_tuningix(dF, cell, session, condition='goal', period='goal', event_frames=None, n_goals=4, frame_rate=45, bins=90, shuffle=True, plot=False):
+def calc_goal_tuningix(dF, cell, session, condition='goal', period='goal', event_frames=None, n_goals=4, frame_rate=45, bins=90, shuffle=True, plot=False, print_results=True):
 
     """
     Calculate the goal tuning index for a specific cell by comparing the real score to shuffled scores.
@@ -940,7 +1048,8 @@ def calc_goal_tuningix(dF, cell, session, condition='goal', period='goal', event
     # phase_preference = np.mean(pref_phase)
     state_preference = np.where(state_max == np.max(state_max))[0][0]  # Find the state with the maximum firing rate
     phase_preference = pref_phase[state_preference.astype(int)] 
-    print(f'Real score for cell {cell} is {real_score:.2f}, phase preference is {phase_preference:.2f}, state preference is {state_preference:.2f}')
+    if print_results:
+        print(f'Real score for cell {cell} is {real_score:.2f}, phase preference is {phase_preference:.2f}, state preference is {state_preference:.2f}')
 
     if shuffle:
         nreps = 100
@@ -965,7 +1074,8 @@ def calc_goal_tuningix(dF, cell, session, condition='goal', period='goal', event
             tuning_score = np.mean(tuning_score)
             shuffled_scores.append(tuning_score)
         p_value = np.sum(shuffled_scores >= real_score) / nreps
-        print(f'P-value for cell {cell} is {p_value:.8f}')
+        if print_results:
+            print(f'P-value for cell {cell} is {p_value:.8f}')
     else:
         shuffled_scores = None
         p_value = None
@@ -1077,6 +1187,142 @@ def cluster_all_corr(dF,plot=False):
 
     return correlation_all, correlation_sorted
 
+## Plotting
+
+def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, period='goal', ax=None, polar=True, heatmap=False):
+    """
+    Extract the progress tuning between arbitrary events.
+    If ax1/ax2 are given, plot into them. Otherwise, create a new figure.
+    """
+    dF_cell = extract_cell_trace(dF, cell, plot=False)
+
+    n_events = len(event_frames)
+    binned_phase_firing = np.zeros((n_events-1, bins))
+
+    # Create a goal vector 
+    if period == 'goal':
+        # Events are organised based on whether they are a goal or not
+        if ('sequence' in session) and ('shuffled' in session['sequence']):
+            assert ngoals == 2
+            goal_vec = np.empty((n_events), dtype=int)
+            for i in range(n_events):
+                if i in session['goals_idx']:
+                    goal_vec[i] = 0
+                elif i in session['non_goals_idx']:
+                    goal_vec[i] = 1
+        else:
+            if ngoals == 10:
+                goal_vec = (np.arange(n_events) - 1) % ngoals # shift by 1 goal so that 0 corresponds to first reward
+            else:
+                goal_vec = np.arange(ngoals)
+                goal_vec = np.tile(goal_vec, n_events//ngoals) 
+
+    elif period == 'landmark':
+        # Events are organised based on the order in which they occur
+        if ngoals == 10:
+            goal_vec = (np.arange(n_events) - 1) % ngoals # shift by 1 goal so that 0 corresponds to first reward
+        else:
+            goal_vec = np.arange(ngoals)
+            goal_vec = np.tile(goal_vec, n_events//ngoals) 
+    goal_vec = goal_vec[:-1]
+    
+    num_trials = np.array([np.sum(goal_vec == i) for i in range(ngoals)])
+    max_trials = np.max(num_trials)
+
+    for i in range(n_events-1):
+        phase_frames = np.arange(event_frames[i], event_frames[i+1])
+        bin_edges = np.linspace(event_frames[i], event_frames[i+1], bins+1)
+        phase_firing = dF_cell[phase_frames]
+        bin_ix = np.digitize(phase_frames, bin_edges)
+        for j in range(bins):
+            binned_phase_firing[i, j] = np.mean(phase_firing[bin_ix == j+1])
+
+    binned_segment = np.zeros((ngoals, max_trials, binned_phase_firing.shape[1]))
+    for i in range(ngoals):
+        idx = np.where(goal_vec == i)[0]
+        binned_segment[i, :len(idx), :] = binned_phase_firing[idx, :]
+
+    min_state = min(seg.shape[0] for seg in binned_segment)
+    binned_all = np.concatenate([binned_segment[i][:min_state, :] for i in range(ngoals)], axis=1)
+
+    avg_bin = np.nanmean(binned_all, axis=0)
+    std_bin = np.nanstd(binned_all, axis=0)
+    sem_bin = std_bin / np.sqrt(binned_all.shape[0])
+
+    if stage == 3:
+        color = '#325235'
+    elif stage == 4:
+        color = '#9E664C'
+    elif stage == 5:
+        color = 'forestgreen' #'blue'
+    elif stage == 6:
+        color = 'firebrick' #'orange'
+    elif stage == 8:
+        color = 'red'
+    elif stage == 12:
+        color = 'teal'
+    else:
+        color = 'gray'
+
+    if ax is None:
+        if heatmap and polar:
+            fig = plt.figure(figsize=(6.5,3))
+            ax = fig.add_subplot(121, projection='polar')
+        elif heatmap and not polar:
+            fig = plt.figure(figsize=(6,2))
+            # ax = fig.add_subplot(111)
+        elif polar and not heatmap:
+            fig = plt.figure(figsize=(4,4))
+            ax = fig.add_subplot(111, projection='polar')
+
+    if polar:
+        angles = np.linspace(0, 2 * np.pi, bins*ngoals, endpoint=False)
+        angles = np.concatenate((angles, [angles[0]]))
+        avg_bin = np.concatenate((avg_bin, [avg_bin[0]]))
+        sem_bin = np.concatenate((sem_bin, [sem_bin[0]]))
+        
+        ax.set_theta_zero_location('N')
+        ax.set_theta_direction(-1)
+        ax.plot(angles[:bins*(ngoals-1)], avg_bin[:bins*(ngoals-1)], color=color, linewidth=2)
+        ax.plot(angles[bins*(ngoals-1):], avg_bin[bins*(ngoals-1):], color=color, linewidth=2)
+        ax.fill_between(angles, avg_bin - sem_bin, avg_bin + sem_bin, color=color, alpha=0.2)
+
+        # label the cardinal directions
+        ax.set_xticks(np.linspace(0, 2 * np.pi, ngoals, endpoint=False))
+        ax.set_xticklabels([])
+        if ngoals == 4:
+            ax.set_xticklabels(['2','4','6','8'], fontsize=20)
+        if ngoals == 5:
+            ax.set_xticklabels(['2','4','6','8','10'], fontsize=20)
+        
+        # color the axial ticks 
+        for i, label in enumerate(ax.get_yticklabels()):
+            label.set_color('grey')
+            label.set_fontsize(10)
+            
+        ax.set_rticks([np.round(np.max(avg_bin),1)])
+
+    if heatmap:
+        if polar:
+            ax = fig.add_subplot(122)
+        else:
+            ax = fig.add_subplot(111)
+        vmax = np.max(binned_all)
+        vmin = np.min(binned_all)
+        cax = ax.imshow(binned_all, aspect='auto', cmap='viridis', interpolation='none', vmin=vmin, vmax=vmax)
+        ax.set_yticks([0, binned_all.shape[0]-1])
+        ax.set_yticklabels([0, binned_all.shape[0]-1], fontsize=10)
+        ax.set_ylabel('Lap', labelpad=-5, fontsize=10)
+        ax.set_xticks(np.arange(0,bins*ngoals,bins))
+        ax.set_xticklabels(['2','4','6','8','10'], fontsize=15)
+        # ax.set_title(f'Cell {cell} - Binned Firing Rates')
+        cbar = plt.colorbar(cax, ax=ax)
+        cbar.set_ticks([vmin, vmax])
+        cbar.set_label('dF/F', labelpad=-5, fontsize=10)
+        cbar.set_ticklabels([f'{vmin:.1f}', f'{vmax:.1f}'], fontsize=10)
+        plt.suptitle(f'Cell {cell}', fontsize=10)
+
+    return ax
 
 def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, stages, period='goal', labels=None, plot=False, shuffle=False, plot_firing=False, plot_speed_limit=False):
 

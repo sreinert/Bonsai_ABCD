@@ -180,43 +180,6 @@ def load_vr_session_info(base_path, VR_data=None, options=None):  # TODO: deprec
 
     return num_landmarks, all_goals, all_lms, total_lm_position, landmarks, start_odour, num_laps
 
-def load_dF(base_path, mouse, stage):
-    '''Load dF and valid frames and find valid neurons'''
-    import cellTV.cellTV_functions_cohort2 as cellTV
-
-    imaging_path, config_path, frame_ix, date1, date2 = get_session_folders(base_path, mouse, stage)
-
-    # Load or calculate dF/F0
-    DF_F_file = os.path.join(imaging_path, 'DF_F0.npy')
-    if os.path.exists(DF_F_file):
-        print('DF_F0 file found. Loading...')
-        
-        DF_F_all = np.load(DF_F_file)
-        dF = DF_F_all[:, frame_ix['valid_frames']] # Select the correct frames that fall within VR behaviour 
-        iscell = np.load(os.path.join(imaging_path, 'iscell.npy'))[:,0]
-
-    else:
-        print('DF_F0 file not found. Computing now...')
-        from scipy.ndimage import percentile_filter
-        # TODO: incorporate this into the main analysis and ensure DF_F is the same everywhere
-        f, fneu, iscell, ops, seg, frame_rate = cellTV.load_img_data(imaging_path)
-        # dF = cellTV.get_dff(f, fneu, frame_ix, ops)
-    
-        Fcorr = f - 0.7 * fneu + 0.7 * np.median(fneu, axis=1).reshape(-1,1)
-        F0 = np.zeros(np.shape(f))
-        f0_window = 60 * frame_rate  # frames
-        for n in range(f.shape[0]):  # Loop over neurons (rows)
-            F0[n, :] = percentile_filter(f[n, :], percentile=25, size=f0_window, mode='nearest')
-
-        DF_F_all = (Fcorr - F0) / F0  # Compute DF/F as (F-F0)/F0 per frame per neuron
-        dF = DF_F_all
-
-        np.save(DF_F_file, dF)
-
-    neurons = np.where(iscell == 1)[0]
-
-    return dF, neurons
-
 def extract_int(s: str) -> int:
     m = re.search(r'\d+', s)
     if m:
