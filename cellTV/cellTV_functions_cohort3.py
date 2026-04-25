@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from skimage.segmentation import find_boundaries
 import scipy.stats as stats
+import parse_nwb_functions as parse_nwb_functions
+from pynwb import NWBHDF5IO
 
 # import h5py
 # from scipy.signal import find_peaks
@@ -58,16 +60,9 @@ def load_img_data(imaging_path):
 
     return funcimg_data
 
-
-def load_dF_data(mouse, session_id, funcimg_root, behav_root, save_path, reload=False):
-
-    # Load funcimg data 
-    imaging_path = get_funcimg_path(mouse, session_id, funcimg_root)
-    funcimg_data = load_img_data(imaging_path)
-
-    # Load valid frames
-    frame_ix = load_valid_frames(mouse, session_id, behav_root)
-
+def load_dF_data(funcimg_data, frame_ix, save_path, reload=False):
+    '''Load or calculate dF and dG/R data if two channels are available'''
+    
     # Load or calculate dF
     dF_path = os.path.join(save_path, 'DF_F0.npy')
     if os.path.exists(dF_path) and not reload:
@@ -98,7 +93,89 @@ def load_dF_data(mouse, session_id, funcimg_root, behav_root, save_path, reload=
         dFred = None
         dF_GR = None
         
-    return funcimg_data, dF, dFred, dF_GR
+    return dF, dFred, dF_GR
+
+def load_dF(mouse, session_id, funcimg_root, behav_root, save_path, reload=False):
+    '''Load dF and valid frames and find valid neurons'''
+
+    # Load funcimg data 
+    imaging_path = get_funcimg_path(mouse, session_id, funcimg_root)
+    funcimg_data = load_img_data(imaging_path)
+    
+    # Load valid frames
+    frame_ix = load_valid_frames(mouse, session_id, behav_root)
+
+    # Load or calculate dF
+    dF, dFred, dF_GR = load_dF_data(funcimg_data, frame_ix, save_path, reload=reload)
+
+    # Find valid neurons
+    neurons = get_responsive_neurons(dF, imaging_path, plot_deltas=False, plot_responses=False)
+
+    return dF, dFred, dF_GR, neurons
+
+def get_responsive_neurons(dF, imaging_path, save_path=None, plot_deltas=False, n_deltas=20, plot_responses=False, n_responses=20):
+    '''Get ROIs that not just artifacts or constitutively active neurons.'''
+        
+    # 1. Select neurons that have been manually selected as valid ROIs
+    iscell = np.load(os.path.join(imaging_path, 'iscell.npy'))[:,0]
+    green = np.where(iscell == 1)[0]
+
+    redcell = np.load(os.path.join(imaging_path, 'redcell.npy')) # TODO what is this
+    red = np.where(redcell == 1)[0]
+
+    neurons = np.intersect1d(red, green)
+    # nwb_path = parse_nwb_functions.find_nwbfile(nwb_base_path)
+    # io = NWBHDF5IO(nwb_path, mode='r')
+    # nwb = io.read()
+    
+    # segmentation = nwb.processing['ophys'].data_interfaces['ImageSegmentation'].plane_segmentations['PlaneSegmentationChan1Plane0'][:]
+    # neurons = np.where(segmentation['Accepted'] == 1)[0] 
+
+    # io.close()
+
+    # 2. Select neurons based on response patterns during the session
+    neurons_considered = []
+
+    for i, n in enumerate(neurons): 
+        deltas = dF[n,:] - np.mean(dF[n,:])
+
+        # Skip cells with very large deviations
+        if len(np.where(~np.isfinite(deltas))[0]) > 0:
+            print(f'{n} is a strange neuron')
+            continue
+
+        if np.max(deltas) > 500:
+            continue
+
+        # Keep cells with different responses below or above the mean
+        skew = stats.skew(deltas)
+        if np.abs(skew) > 0.4: 
+            neurons_considered.append(n)
+
+        if plot_deltas and (i < n_deltas):
+            plt.figure()
+            plt.hist(deltas, bins=100)
+            plt.title(f'{n}, {skew}, {np.max(deltas)}')
+        
+    print(f'Out of the {dF.shape[0]} ROIs, {len(neurons)} are classified as neurons, and {len(neurons_considered)} have time-varying Ca2+ signals and will be considered here.')
+
+    neurons_considered = np.array(neurons_considered)
+    if save_path is None:
+        save_path = imaging_path
+    np.savez(os.path.join(save_path, f'responsive_neurons.npz'), neurons_considered)
+
+    # Plot dF/F for a few responsive neurons
+    if plot_responses:
+        for n in neurons_considered[:n_responses]:
+            plot_range = [10000, 20000]
+            xdata = np.arange(plot_range[0], plot_range[1]) 
+            fig, ax = plt.subplots(1, 1, figsize=(15,4), sharey=True)
+            ax.plot(xdata, dF[n, xdata])
+            ax.set_xlabel('Frame')
+            ax.set_ylabel('DF/F')
+            plt.suptitle(f'neuron {n}')
+
+    return neurons_considered
 
 def get_dff(funcimg_data, frame_ix, chan=1):
     """

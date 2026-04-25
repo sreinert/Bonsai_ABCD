@@ -157,25 +157,6 @@ def get_responsive_neurons(dF, imaging_path, save_path=None, plot_deltas=False, 
 
     return neurons_considered
 
-def load_dF_data(base_path, mouse, stage, reload=False):
-
-    # Load imaging path and valid frames 
-    imaging_path, config_path, frame_ix, date1, date2 = get_session_folders(base_path, mouse, stage)
-
-    # Load funcimg data 
-    funcimg_data = load_img_data(imaging_path)
-
-    # Load or calculate dF
-    dF_path = os.path.join(imaging_path, 'DF_F0.npy')
-    if os.path.exists(dF_path) and not reload:
-        print('dF file found. Loading...')
-        dF = np.load(dF_path)
-    else:
-        dF = get_dff(funcimg_data, frame_ix)
-        np.save(dF_path, dF)
-        
-    return funcimg_data, dF
-
 ## Displaying cell properties
 
 def show_fov(ops, seg):

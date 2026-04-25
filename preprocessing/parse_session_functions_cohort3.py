@@ -209,36 +209,36 @@ def load_session_npz(base_path):
 
     return fixed 
 
-def load_dF(base_path, red_chan=False):
-    '''Load dF and valid frames and find valid neurons'''
+# def load_dF(base_path, red_chan=False):
+#     '''Load dF and valid frames and find valid neurons'''
 
-    nwb_path = parse_nwb_functions.find_nwbfile(base_path)
-    io = NWBHDF5IO(nwb_path, mode='r')
-    nwb = io.read()
+#     nwb_path = parse_nwb_functions.find_nwbfile(base_path)
+#     io = NWBHDF5IO(nwb_path, mode='r')
+#     nwb = io.read()
     
-    # Find valid neurons 
-    segmentation = nwb.processing['ophys'].data_interfaces['ImageSegmentation'].plane_segmentations['PlaneSegmentationChan1Plane0'][:]
-    neurons = np.where(segmentation['Accepted'] == 1)[0] 
+#     # Find valid neurons 
+#     segmentation = nwb.processing['ophys'].data_interfaces['ImageSegmentation'].plane_segmentations['PlaneSegmentationChan1Plane0'][:]
+#     neurons = np.where(segmentation['Accepted'] == 1)[0] 
 
-    if not red_chan:
-        # Load valid frames
-        valid_frames = np.load(os.path.join(base_path, 'valid_frames.npz'))['valid_frames']
+#     if not red_chan:
+#         # Load valid frames
+#         valid_frames = np.load(os.path.join(base_path, 'valid_frames.npz'))['valid_frames']
         
-        # Load data 
-        dF_all = nwb.processing['ophys'].data_interfaces['DfOverF'].roi_response_series['DfOverFChan1Plane0'].data[:]
-        dF = dF_all[valid_frames,:].T
+#         # Load data 
+#         dF_all = nwb.processing['ophys'].data_interfaces['DfOverF'].roi_response_series['DfOverFChan1Plane0'].data[:]
+#         dF = dF_all[valid_frames,:].T
 
-    else:
-        print('Loading dG/R instead of dF')
-        # Load data 
-        dF_GR_path = os.path.join(base_path, 'funcimg', 'DG_R.npy')
-        if os.path.exists(dF_GR_path):
-            dF = np.load(dF_GR_path)
-        else:
-            print('dF_GR file not found - make sure it has been computed already or use dF/F0')            
+#     else:
+#         print('Loading dG/R instead of dF')
+#         # Load data 
+#         dF_GR_path = os.path.join(base_path, 'funcimg', 'DG_R.npy')
+#         if os.path.exists(dF_GR_path):
+#             dF = np.load(dF_GR_path)
+#         else:
+#             print('dF_GR file not found - make sure it has been computed already or use dF/F0')            
 
-    io.close()
-    return dF, neurons
+#     io.close()
+#     return dF, neurons
 
 #%% ##### Session functions #####
 def get_event_parsed(sess_dataframe, ses_settings):
