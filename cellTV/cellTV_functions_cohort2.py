@@ -64,6 +64,7 @@ def get_dff(funcimg_data, frame_ix):
     """
     Calculate the dF/F for the imaging data (suite2p default method).
     """
+    import torch
     from suite2p.extraction import dcnv
 
     ops = funcimg_data['ops']
@@ -74,7 +75,7 @@ def get_dff(funcimg_data, frame_ix):
     all_fneu = fneu[:, frame_ix['valid_frames']]
     all_cells_f_corr = all_f - all_fneu * 0.7
     dF = dcnv.preprocess(all_cells_f_corr, ops['baseline'], ops['win_baseline'], 
-                                    ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
+                            ops['sig_baseline'], ops['fs'], ops['prctile_baseline'], device=torch.device('cpu'))
     
     print(f"Calculated dF/F with the following parameters: "
         f"baseline={ops['baseline']}, win_baseline={ops['win_baseline']}, "

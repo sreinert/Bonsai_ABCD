@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from skimage.segmentation import find_boundaries
 import scipy.stats as stats
-import parse_nwb_functions as parse_nwb_functions
-from pynwb import NWBHDF5IO
+# import parse_nwb_functions as parse_nwb_functions
+# from pynwb import NWBHDF5IO
 
 # import h5py
 # from scipy.signal import find_peaks
@@ -118,12 +118,9 @@ def get_responsive_neurons(dF, imaging_path, save_path=None, plot_deltas=False, 
         
     # 1. Select neurons that have been manually selected as valid ROIs
     iscell = np.load(os.path.join(imaging_path, 'iscell.npy'))[:,0]
-    green = np.where(iscell == 1)[0]
+    neurons = np.where(iscell == 1)[0]
 
-    redcell = np.load(os.path.join(imaging_path, 'redcell.npy')) # TODO what is this
-    red = np.where(redcell == 1)[0]
-
-    neurons = np.intersect1d(red, green)
+    # NOTE these two methods are equivalent - the 'Accepted' neurons are only from iscell (chan1)
     # nwb_path = parse_nwb_functions.find_nwbfile(nwb_base_path)
     # io = NWBHDF5IO(nwb_path, mode='r')
     # nwb = io.read()
@@ -181,6 +178,7 @@ def get_dff(funcimg_data, frame_ix, chan=1):
     """
     Calculate the dF/F for the imaging data (suite2p default method).
     """
+    import torch
     from suite2p.extraction import dcnv
 
     ops = funcimg_data['ops']
@@ -197,7 +195,7 @@ def get_dff(funcimg_data, frame_ix, chan=1):
     all_fneu = fneu[:, frame_ix['valid_frames']]
     all_cells_f_corr = all_f - all_fneu*0.7
     dF = dcnv.preprocess(all_cells_f_corr, ops['baseline'], ops['win_baseline'], 
-                                    ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
+                            ops['sig_baseline'], ops['fs'], ops['prctile_baseline'], device=torch.device('cpu'))
     
     print(f"Calculated dF/F with the following parameters: "
         f"baseline={ops['baseline']}, win_baseline={ops['win_baseline']}, "
@@ -206,6 +204,7 @@ def get_dff(funcimg_data, frame_ix, chan=1):
     return dF
 
 def get_dff_GR(funcimg_data, frame_ix):
+    import torch
     from suite2p.extraction import dcnv
     from scipy.signal import medfilt
 
@@ -241,7 +240,7 @@ def get_dff_GR(funcimg_data, frame_ix):
 
     # Compute dG/R
     dF_GR = dcnv.preprocess(f_ratio, ops['baseline'], ops['win_baseline'], 
-                                    ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
+                                ops['sig_baseline'], ops['fs'], ops['prctile_baseline'], device=torch.device('cpu'))
 
     return dF_GR
 

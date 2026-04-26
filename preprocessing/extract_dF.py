@@ -3,7 +3,6 @@ import importlib
 import sys, os
 import argparse
 
-# sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.append(str(SCRIPT_DIR.parent))
 
@@ -19,14 +18,11 @@ cohort = args.cohort
 
 # Load functions according to cohort 
 if cohort == '2':
-    import preprocessing.parse_session_functions_cohort2 as parse_session_functions
     import cellTV.cellTV_functions_cohort2 as celltv
 
 elif cohort == '3':
-    import preprocessing.parse_session_functions_cohort3 as parse_session_functions
     import cellTV.cellTV_functions_cohort3 as celltv
 
-importlib.reload(parse_session_functions)
 importlib.reload(celltv)
 
 # Calculate dF and find valid neurons

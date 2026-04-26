@@ -17,8 +17,22 @@ module load mamba
 source activate suite2p 
 
 PAIRS=(
-    "mouse=TAA0000059 cohort=2 t3 t4 t5 t6"
-    "mouse=TAA0000060 cohort=2 t3 t4 t5 t6"
+    # "mouse=TAA0000059 cohort=2 t3 t4 t5 t6"
+    # "mouse=TAA0000066 cohort=2 t3 t4 t5 t6"
+    "mouse=001 cohort=3 2LM015"
+    "mouse=002 cohort=3 2LM016"
+    "mouse=003 cohort=3 2LM015"
+    "mouse=005 cohort=3 2LM009"
+    "mouse=009 cohort=3 2LM008"
+    "mouse=014 cohort=3 2LM011"
+    "mouse=004 cohort=3 full020 full030"
+    "mouse=006 cohort=3 full011 full014"
+    "mouse=007 cohort=3 full010 full012"
+    "mouse=008 cohort=3 full011 full014"
+    "mouse=010 cohort=3 full010 full012"
+    "mouse=011 cohort=3 full009 full013"
+    "mouse=012 cohort=3 full011 full017"
+    "mouse=013 cohort=3 full010 full014"
 )
 
 for PAIR in "${PAIRS[@]}"; do
