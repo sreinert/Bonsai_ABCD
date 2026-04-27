@@ -2,9 +2,8 @@ import numpy as np
 from pathlib import Path
 import importlib
 import argparse
-import sys
+import sys, os
 
-# sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT_DIR))
 
@@ -25,35 +24,43 @@ cohort = args.cohort
 # Load functions according to cohort 
 if cohort == '2':
     import preprocessing.parse_session_functions_cohort2 as parse_session_functions
+    import cellTV.cellTV_functions_cohort2 as cellTV
 elif cohort == '3':
     import preprocessing.parse_session_functions_cohort3 as parse_session_functions
+    import cellTV.cellTV_functions_cohort3 as cellTV
 
 importlib.reload(parse_session_functions)
 importlib.reload(neural_analysis_helpers)
+importlib.reload(cellTV)
 
 if int(cohort) == 3:
-    print('Cohort 3 mice')
-    root = f"/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives" 
-    session_path = parse_session_functions.find_base_path(mouse, session_id, root)
+    funcimg_root = Path(f"/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_funcimg_Nov2025/derivatives") 
+    behav_root = Path(f"/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives") 
 
-    # Load dF and valid neurons
-    dF, neurons = parse_session_functions.load_dF(session_path, red_chan=True)
+    mouse_path = Path(behav_root) / f"sub-{mouse}" 
+    for folder in mouse_path.iterdir():
+        if folder.is_dir() and session_id in folder.name:
+            print(f"Found folder: {folder}")
+            save_path = folder / 'funcimg' 
+            if not os.path.exists(save_path):
+                os.makedirs(save_path)
+
+    # Load dF and valid neurons - NOTE dF selected here is dG/R
+    _, _, dF, neurons = cellTV.load_dF(mouse, session_id, funcimg_root, behav_root, save_path)
 
     # Create session struct
     if stage == 't3':
         world = 'random'
     else:
         world = 'stable'
-    session = parse_session_functions.analyse_npz_pre7(mouse, session_id, root, stage, world)
+    session = parse_session_functions.analyse_npz_pre7(mouse, session_id, behav_root, stage, world)
 
 elif int(cohort) == 2:
-    print('Cohort 2 mice')
     root = f"/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2" 
     _, _, _, _, date = parse_session_functions.get_session_folders(root, mouse, stage)
-    # session_path = parse_session_functions.find_base_path_npz(mouse, date)
 
     # Load dF and valid neurons
-    dF, neurons = parse_session_functions.load_dF(root, mouse, stage)
+    dF, neurons = cellTV.load_dF(root, mouse, stage)
 
     # Create session struct
     session = parse_session_functions.analyse_npz_pre7(mouse, date, stage)
@@ -62,6 +69,6 @@ event_idx = np.sort(np.concatenate([session['rewards'], session['miss_rew_idx'],
 
 # Get goal progress neurons
 goal_progress_tuned = neural_analysis_helpers.get_goal_progress_cells(dF, neurons, session, \
-                                              event_frames=event_idx, \
-                                                save_path=session['save_path'], ngoals=5, bins=90, plot=False, \
-                                                    shuffle=True, reload=True)
+                                              event_frames=event_idx, save_path=session['save_path'], \
+                                                ngoals=5, bins=90, plot=False, \
+                                                shuffle=True, reload=True)

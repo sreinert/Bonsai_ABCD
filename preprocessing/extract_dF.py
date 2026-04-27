@@ -40,8 +40,7 @@ elif cohort == '3':
     for folder in mouse_path.iterdir():
         if folder.is_dir() and session in folder.name:
             print(f"Found folder: {folder}")
-            behav_path = folder
-            save_path = behav_path / 'funcimg' 
+            save_path = folder / 'funcimg' 
             if not os.path.exists(save_path):
                 os.makedirs(save_path)
 

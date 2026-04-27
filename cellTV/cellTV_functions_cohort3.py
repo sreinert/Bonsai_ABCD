@@ -109,7 +109,7 @@ def load_dF(mouse, session_id, funcimg_root, behav_root, save_path, reload=False
     dF, dFred, dF_GR = load_dF_data(funcimg_data, frame_ix, save_path, reload=reload)
 
     # Find valid neurons
-    neurons = get_responsive_neurons(dF, imaging_path, plot_deltas=False, plot_responses=False)
+    neurons = get_responsive_neurons(dF, imaging_path, save_path, plot_deltas=False, plot_responses=False)
 
     return dF, dFred, dF_GR, neurons
 
