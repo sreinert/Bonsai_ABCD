@@ -1232,15 +1232,15 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
     sem_bin = std_bin / np.sqrt(binned_all.shape[0])
 
     if stage == 3:
-        color = '#325235'
+        color = 'orange'
     elif stage == 4:
-        color = '#9E664C'
+        color = 'blue'
     elif stage == 5:
-        color = 'forestgreen' #'blue'
+        color = 'forestgreen'
     elif stage == 6:
-        color = 'firebrick' #'orange'
+        color = 'firebrick'
     elif stage == 8:
-        color = 'red'
+        color = 'indigo'
     elif stage == 12:
         color = 'teal'
     else:
@@ -1265,8 +1265,7 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
         
         ax.set_theta_zero_location('N')
         ax.set_theta_direction(-1)
-        ax.plot(angles[:bins*(ngoals-1)], avg_bin[:bins*(ngoals-1)], color=color, linewidth=2)
-        ax.plot(angles[bins*(ngoals-1):], avg_bin[bins*(ngoals-1):], color=color, linewidth=2)
+        ax.plot(angles, avg_bin, color=color, linewidth=2)
         ax.fill_between(angles, avg_bin - sem_bin, avg_bin + sem_bin, color=color, alpha=0.2)
 
         # label the cardinal directions
@@ -1306,7 +1305,9 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
 
     return ax
 
-def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, stages, period='goal', labels=None, plot=False, shuffle=False, plot_firing=False, plot_speed_limit=False):
+def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, stages, period='goal', 
+                             labels=None, plot=False, shuffle=False, plot_firing=False, 
+                             plot_speed_limit=False, ax=None):
 
     """
     Extract the progress tuning between arbitrary events for 2 cells.
@@ -1391,22 +1392,21 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
         colors = np.empty(len(stages), dtype=object)
         
         if all(s == stages[0] for s in stages):
-            
             if stages[0] == 3:
-                colors[0] = '#325235'
-                colors[1] = '#6AC272'
-            elif stages[0] == 4:
-                colors[0] = '#9E664C'
-                colors[1] = '#E68558'
-            elif stages[0] == 5:
-                colors[0] = 'blue'
-                colors[1] = 'deepskyblue'
-            elif stages[0] == 6:
                 colors[0] = 'orange'
                 colors[1] = 'gold'
-            elif stages[0] == 8:
-                colors[0] = 'red'
+            elif stages[0] == 4:
+                colors[0] = 'blue'
+                colors[1] = 'deepskyblue'
+            elif stages[0] == 5:
+                colors[0] = 'forestgreen'
+                colors[1] = 'yellowgreen'
+            elif stages[0] == 6:
+                colors[0] = 'firebrick'
                 colors[1] = 'tomato'
+            elif stages[0] == 8:
+                colors[0] = 'indigo'
+                colors[1] = 'mediumslateblue'
             elif stages[0] == 12:
                 colors[0] = 'teal'
                 colors[1] = 'lightseagreen'
@@ -1429,12 +1429,16 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
                     labels[i] = f'T{stages[i]} - cell {cell[i]}'
 
         # Plot
-        fig = plt.figure(figsize=(10, 5))
-        
-        if not plot_firing:
-            ax1 = fig.add_subplot(111, projection='polar')
+        if ax is None:
+            if not plot_firing:
+                fig = plt.figure(figsize=(5, 5))
+                ax1 = fig.add_subplot(111, projection='polar')
+            else:
+                fig = plt.figure(figsize=(10, 5))
+                ax1 = fig.add_subplot(121, projection='polar')
         else:
-            ax1 = fig.add_subplot(121, projection='polar')
+            ax1 = ax
+            fig = ax.figure
         ax1.set_theta_zero_location('N')
         ax1.set_theta_direction(-1)
         angles = np.linspace(0, 2 * np.pi, bins*ngoals, endpoint=False)
@@ -1467,9 +1471,12 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
         else:
             ax1.set_title(f'Cells {cell} - Average Firing Rate (Polar)')
 
-        plt.legend(loc='upper right')
+        ax1.set_rticks([np.round(np.max(avg_bin),1)])
+        ax1.set_yticks([])
+        ax1.set_yticklabels([])
+        ax1.legend(loc='upper right', frameon=False)
 
-        if plot_firing: 
+        if plot_firing and ax is None:  # Only plot heatmap if NOT embedded in a grid
             ax2 = fig.add_subplot(122)
             cax = ax2.imshow(binned_all[0], aspect='auto', cmap='viridis', interpolation='none')
             ax2.set_yticks([0, len(binned_all[0])-1])
@@ -1497,7 +1504,7 @@ def plot_arb_progress_2cells(dF, cell, sessions, event_frames, ngoals, bins, sta
 
             plt.colorbar(cax, ax=ax2, label='dF/F')
 
-        plt.tight_layout()
+        if ax is None:
+            plt.tight_layout()
 
     return binned_all
-
