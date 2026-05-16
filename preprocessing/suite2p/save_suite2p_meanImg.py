@@ -7,9 +7,13 @@ import os, re
 from pathlib import Path
 from align_images import adjust_intensity
 
-basepath = Path('/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/')
+if Path("/ceph").exists():
+    ROOT = "/ceph/mrsic_flogel/public/projects"
+else:
+    ROOT = "/Volumes/mrsic_flogel/public/projects"
+basepath = f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2"  
 
-sessions = ['TAA0000066/ses-023_date-20250516_protocol-t17']
+sessions = ['TAA0000065/ses-015_date-20250427_protocol-t9']
 
 suite2p_path = 'funcimg/Session/suite2p/plane0'
 n_chan = 1 # 1 / 2

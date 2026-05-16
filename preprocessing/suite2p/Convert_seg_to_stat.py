@@ -1,29 +1,47 @@
 import numpy as np
 from pathlib import Path
+import sys 
+import torch
+import argparse
 
 import suite2p
+print("First sys.path entry:", sys.path[0])
+print("Using suite2p from:", suite2p.__file__)
+
+parser = argparse.ArgumentParser(description="Convert cellpose seg data to stat.npy with animal and session inputs.")
+parser.add_argument('--sessions', nargs="+", type=str, default='TAA0000061/ses-007_date-20250307_protocol-t2', help="Combination of animal and session ID")
+args = parser.parse_args()
+
+sessions = args.sessions
+
+# New suite2p version
 from suite2p.extraction.masks import create_cell_pix, create_neuropil_masks, create_masks, create_cell_mask
-from suite2p.extraction.extract import extract_traces_from_masks
+from suite2p.extraction.extract import extract_traces
 from suite2p.detection import roi_stats
 
-sessions = ['TAA0000066/ses-023_date-20250516_protocol-t17'] 
+if Path("/ceph").exists():
+    ROOT = "/ceph/mrsic_flogel/public/projects"
+else:
+    ROOT = "/Volumes/mrsic_flogel/public/projects"
+basepath = f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2/"  
 
 for session in sessions: 
     print(f"Processing session: {session}")
 
     # Read in mask data from cellpose
-    cellpose_fpath = "/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/" + session + "/funcimg/Session/suite2p/plane0/meanImg_seg.npy"
+    cellpose_fpath = basepath + session + "/funcimg/Session/suite2p/plane0/meanImg_seg.npy"
     cellpose_masks = np.load(cellpose_fpath, allow_pickle=True).item()
 
     # Read in existing data from a suite2p run. We will use the "ops" and registered binary.
     # This should be the folder where processed suite2p files are saved. Consider making a backup copy of this folder before starting
-    wd_path = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + session + '/funcimg/Session/suite2p/plane0/'
+    wd_path = basepath + session + '/funcimg/Session/suite2p/plane0/'
     wd = Path(wd_path)
     ops = np.load(wd/'ops.npy', allow_pickle=True).item()
     Lx = ops['Lx']
     Ly = ops['Ly']
     f_reg = suite2p.io.BinaryFile(Ly, Lx, wd/'data.bin')
 
+    ops["device"] = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Using these inputs, we will first mimic the stat array made by suite2p
     masks = cellpose_masks['masks']
@@ -35,29 +53,21 @@ for session in sessions:
     stat = np.array(stat)
     stat = roi_stats(stat, Ly, Lx)  # This function fills in remaining roi properties to make it compatible with the rest of the suite2p pipeline/GUI
 
-    # Using the constructed stat file, get masks
-    cell_masks, neuropil_masks = create_masks(stat, Ly, Lx, ops)
-
     # Feed these values into the wrapper functions
-    stat_after_extraction, F, Fneu, F_chan2, Fneu_chan2 = suite2p.extraction_wrapper(stat, f_reg, f_reg_chan2 = None,ops=ops)
+    F, Fneu, F_chan2, Fneu_chan2 = suite2p.extraction_wrapper(stat, f_reg, f_reg_chan2 = None)
 
     # Do cell classification
     classfile = suite2p.classification.builtin_classfile
-    iscell = suite2p.classify(stat=stat_after_extraction, classfile=classfile)
+    iscell = suite2p.classify(stat=stat, classfile=classfile)
 
     # Apply preprocessing step for deconvolution
-    dF = F.copy() - ops['neucoeff']*Fneu
-    dF = suite2p.extraction.preprocess(
-            F=dF,
-            baseline=ops['baseline'],
-            win_baseline=ops['win_baseline'],
-            sig_baseline=ops['sig_baseline'],
-            fs=ops['fs'],
-            prctile_baseline=ops['prctile_baseline']
-        )
+    dF = F.copy() - ops["extraction"]["neuropil_coefficient"] * Fneu
+    dF = suite2p.extraction.preprocess(F=dF, fs=ops["fs"], device=ops["device"],
+                           batch_size=ops["extraction"]["batch_size"],
+                           **ops["dcnv_preprocess"])
+    
     # Identify spikes
-    spks = suite2p.extraction.oasis(F=dF, batch_size=ops['batch_size'], tau=ops['tau'], fs=ops['fs'])
-
+    spks = suite2p.extraction.oasis(F=dF, batch_size=ops['extraction']['batch_size'], tau=ops['tau'], fs=ops['fs'])
 
     # Overwrite files in wd folder (consider backing up this folder first)
     np.save(wd/'F.npy', F)
@@ -68,3 +78,76 @@ for session in sessions:
     np.save(wd/'stat.npy', stat)
 
     print(f"Finished updating session: {session}")
+
+# Older suite2p version
+# from suite2p.extraction.masks import create_cell_pix, create_neuropil_masks, create_masks, create_cell_mask
+# from suite2p.extraction.extract import extract_traces_from_masks
+# from suite2p.detection import roi_stats
+
+# sessions = ['TAA0000065/ses-015_date-20250427_protocol-t9'] 
+
+# if Path("/ceph").exists():
+#     ROOT = "/ceph/mrsic_flogel/public/projects"
+# else:
+#     ROOT = "/Volumes/mrsic_flogel/public/projects"
+# basepath = f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2/"  
+
+# for session in sessions: 
+#     print(f"Processing session: {session}")
+
+#     # Read in mask data from cellpose
+#     cellpose_fpath = basepath + session + "/funcimg/Session/suite2p/plane0/meanImg_seg.npy"
+#     cellpose_masks = np.load(cellpose_fpath, allow_pickle=True).item()
+
+#     # Read in existing data from a suite2p run. We will use the "ops" and registered binary.
+#     # This should be the folder where processed suite2p files are saved. Consider making a backup copy of this folder before starting
+#     wd_path = basepath + session + '/funcimg/Session/suite2p/plane0/'
+#     wd = Path(wd_path)
+#     ops = np.load(wd/'ops.npy', allow_pickle=True).item()
+#     Lx = ops['Lx']
+#     Ly = ops['Ly']
+#     f_reg = suite2p.io.BinaryFile(Ly, Lx, wd/'data.bin')
+
+#     # Using these inputs, we will first mimic the stat array made by suite2p
+#     masks = cellpose_masks['masks']
+#     stat = []
+#     for u_ix, u in enumerate(np.unique(masks)[1:]):
+#         ypix,xpix = np.nonzero(masks==u)
+#         npix = len(ypix)
+#         stat.append({'ypix': ypix, 'xpix': xpix, 'npix': npix, 'lam': np.ones(npix, np.float32), 'med': [np.mean(ypix), np.mean(xpix)]})
+#     stat = np.array(stat)
+#     stat = roi_stats(stat, Ly, Lx)  # This function fills in remaining roi properties to make it compatible with the rest of the suite2p pipeline/GUI
+
+#     # Using the constructed stat file, get masks
+#     cell_masks, neuropil_masks = create_masks(stat, Ly, Lx, ops)
+
+#     # Feed these values into the wrapper functions
+#     stat_after_extraction, F, Fneu, F_chan2, Fneu_chan2 = suite2p.extraction_wrapper(stat, f_reg, f_reg_chan2=None, ops=ops)
+
+#     # Do cell classification
+#     classfile = suite2p.classification.builtin_classfile
+#     iscell = suite2p.classify(stat=stat_after_extraction, classfile=classfile)
+
+#     # Apply preprocessing step for deconvolution
+#     dF = F.copy() - ops['neucoeff']*Fneu
+#     dF = suite2p.extraction.preprocess(
+#             F=dF,
+#             baseline=ops['baseline'],
+#             win_baseline=ops['win_baseline'],
+#             sig_baseline=ops['sig_baseline'],
+#             fs=ops['fs'],
+#             prctile_baseline=ops['prctile_baseline']
+#         )
+#     # Identify spikes
+#     spks = suite2p.extraction.oasis(F=dF, batch_size=ops['batch_size'], tau=ops['tau'], fs=ops['fs'])
+
+
+#     # Overwrite files in wd folder (consider backing up this folder first)
+#     np.save(wd/'F.npy', F)
+#     np.save(wd/'Fneu.npy', Fneu)
+#     np.save(wd/'iscell.npy', iscell)
+#     np.save(wd/'ops.npy', ops)
+#     np.save(wd/'spks.npy', spks)
+#     np.save(wd/'stat.npy', stat)
+
+#     print(f"Finished updating session: {session}")
