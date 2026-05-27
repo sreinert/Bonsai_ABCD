@@ -11,15 +11,20 @@ if Path("/ceph").exists():
     ROOT = "/ceph/mrsic_flogel/public/projects"
 else:
     ROOT = "/Volumes/mrsic_flogel/public/projects"
-basepath = f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2"  
+basepath = Path(f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2")
 
-sessions = ['TAA0000065/ses-015_date-20250427_protocol-t9']
+sessions = ['TAA0000062/ses-016_date-20250426_protocol-t9']
 
 suite2p_path = 'funcimg/Session/suite2p/plane0'
+if os.path.exists(suite2p_path):
+    print('yes')
 n_chan = 1 # 1 / 2
 
 for session in sessions:
     img_path = basepath / session / suite2p_path / 'ops.npy'
+    if not os.path.exists(img_path):
+        img_path = basepath / session / suite2p_path / 'settings.npy'
+
     cellpose_path = basepath / session / suite2p_path / 'meanImg_seg.npy'
 
     # check suite2p registration
