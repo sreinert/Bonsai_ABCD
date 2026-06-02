@@ -8,7 +8,6 @@ import sys, os
 ROOT_DIR = Path(__file__).resolve().parents[2]
 sys.path.append(str(ROOT_DIR))
 
-import neural_analysis_helpers
 import alternation_analysis_helpers as alternation
 
 parser = argparse.ArgumentParser(description="Get goal-progress tuned neurons.")
@@ -23,24 +22,32 @@ session_id = args.session
 stage = args.stage
 cohort = args.cohort
 
+if Path("/ceph").exists():
+    ROOT = "/ceph/mrsic_flogel/public/projects"
+else:
+    ROOT = "/Volumes/mrsic_flogel/public/projects"
+
 # Load functions according to cohort 
 if cohort == '2':
     import preprocessing.parse_session_functions_cohort2 as parse_session_functions
-    base_path = Path("/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/")
+    import cellTV.cellTV_functions_cohort2 as cellTV
+    base_path = Path(f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2"  )
 elif cohort == '3':
     import preprocessing.parse_session_functions_cohort3 as parse_session_functions
-    base_path = Path("/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives")
+    import cellTV.cellTV_functions_cohort3 as cellTV
+    base_path = Path(f"/{ROOT}/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives")
+    funcimg_root = Path(f"{ROOT}/SuKuSaRe_20250923_HFScohort3/preprocessed_funcimg_Nov2025/derivatives") 
 
 importlib.reload(parse_session_functions)
-importlib.reload(neural_analysis_helpers)
 importlib.reload(alternation)
+importlib.reload(cellTV)
 alternation.set_parse_session_functions(parse_session_functions)
 
 #%% Load data 
 
 if cohort == '2':
     # Load dF and valid neurons
-    dF, neurons = parse_session_functions.load_dF(base_path, mouse, stage)
+    dF, neurons = cellTV.load_dF(base_path, mouse, stage)
     
     # Create session struct
     _, _, _, _, date = parse_session_functions.get_session_folders(base_path, mouse, stage)
@@ -53,24 +60,30 @@ if cohort == '2':
     save_dir = os.path.join(data_path, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
 
 elif cohort == '3':
-    # Load dF and valid neurons
-    session_path = parse_session_functions.find_base_path(mouse, session_id, base_path)
-    dF, neurons = parse_session_functions.load_dF(session_path, red_chan=True)
+    mouse_path = Path(base_path) / f"sub-{mouse}" 
+    for folder in mouse_path.iterdir():
+        if folder.is_dir() and session_id in folder.name:
+            print(f"Found folder: {folder}")
+            save_path = folder / 'funcimg' 
+            analysis_path = folder / 'analysis'
 
-    print(f'Successfully loaded dF data for {mouse} {session_id}')
+    # Load dF and valid neurons - NOTE we are using dG/R
+    _, _, dF, neurons = cellTV.load_dF(mouse, session_id, funcimg_root, base_path, save_path)
+
     # Create session struct
     if stage == 't3' or stage == 't4':
         world = 'random'
     else:
         world = 'stable'
 
-    behav_path = parse_session_functions.find_base_path(mouse, session_id, '/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/rawdata')
     session = parse_session_functions.analyse_npz_pre7(mouse, session_id, base_path, stage, world, plot=False)
     session['stim_order'] = 'random'
 
     # Define save path
     t = parse_session_functions.extract_int(session['stage'])
-    save_dir = os.path.join(session_path, 'analysis', f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
+    save_dir = os.path.join(analysis_path, f't{t}_linear_regression_YY_diff_rew_aligned_XYrepeats_cpa')
+
+print(f'Successfully loaded dF data for {mouse} {session_id}')
 
 # Collect all events
 event_idx = np.sort(np.concatenate([session['reward_idx'], session['miss_rew_idx'], session['nongoal_rew_idx'], session['test_rew_idx']])).astype(int)
@@ -108,7 +121,7 @@ if BAA_patches:
 
     # Cluster-based permutation analysis (CPA) 
     AA_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, binned_AA_phase_activity, session, condition='BA', data_type='YY_diff', 
-                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, zscored=zscoring, 
+                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.05, zscored=zscoring, 
                                                                                 plot=True, sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
                                                                                 reload=True)
 
@@ -122,6 +135,6 @@ if ABB_patches:
 
     # Cluster-based permutation analysis (CPA) 
     BB_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, binned_BB_phase_activity, session, condition='AB', data_type='YY_diff', 
-                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, zscored=zscoring, 
+                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.05, zscored=zscoring, 
                                                                                 plot=True, sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
                                                                                 reload=True)

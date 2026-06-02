@@ -860,55 +860,54 @@ def get_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=
 
     return binned_XYY_phase_activity
 
-def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='ABB', zscoring=False, plot=True):
+def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='AA', zscoring=False, plot=True):
     '''Binning of neural activity inside a XYY patch from the beginning to the end of each landmark in the the patch.'''
     
-    # Collect all landmark pair binnings for all patches
-    binned_XYY_phase_firing = {cell: [] for cell in neurons}
-    valid_patch_indices = []
- 
     n_lms = len(XYY_patches[0]) - 1
+    if condition in {"AA", "BB"}:
+        assert n_lms == 2, "Each patch should have 3 landmarks - XYY"
+
+    # Compute valid patches i.e. making sure that there are enough frames within all landmarks considered
+    valid_patch_indices = []
     
+    for p_idx, patch in enumerate(XYY_patches):
+        valid_patch = True
+
+        for lm in patch[1:]:
+            binned = temporal_bin_lm_firing_reward_aligned(neurons[0], dF, event_idx[lm], frames_around=bins/2, bins=bins) # using the first neuron as reference
+
+            if binned is None or np.isnan(binned).any():
+                valid_patch = False
+                break
+
+        if valid_patch:
+            valid_patch_indices.append(p_idx)
+
+    # Collect all landmark pair (YY) binnings for all valid patches
+    binned_XYY_phase_firing = {cell: [] for cell in neurons}
+     
     for n, cell in enumerate(neurons):
-        for p_idx, patch in enumerate(XYY_patches):
-            if condition == 'BB' or condition == 'AA':
-                assert n_lms == 2, 'Each patch should have 3 landmarks - XYY'
-                
-                patch_bin_list = []
-                valid_patch = True
+        cell_patches = []
 
-                for lm in patch[1:]:
-                    binned = temporal_bin_lm_firing_reward_aligned(cell, dF, event_idx[lm], frames_around=bins/2, bins=bins)
+        for p_idx in valid_patch_indices:
+            patch_bin_list = [temporal_bin_lm_firing_reward_aligned(cell, dF, event_idx[lm], frames_around=bins/2, bins=bins) for lm in XYY_patches[p_idx][1:]]
 
-                    if binned is None or np.isnan(binned).any():
-                        valid_patch = False
-                        break
+            # combine data from two landmarks
+            linear_patch_binned = np.concatenate(patch_bin_list)
 
-                    patch_bin_list.append(binned)
+            # z-score within patch
+            if zscoring:
+                if np.std(linear_patch_binned) > 0:
+                    linear_patch_binned = stats.zscore(linear_patch_binned)
+                else:
+                    linear_patch_binned = np.zeros_like(linear_patch_binned)  # avoid NaNs
 
-                # Only keep valid patches
-                if valid_patch:
-                    linear_patch_binned = np.concatenate(patch_bin_list)
+            cell_patches.append(linear_patch_binned)
 
-                    # z-score within patch
-                    if zscoring:
-                        if np.std(linear_patch_binned) > 0:
-                            linear_patch_binned = stats.zscore(linear_patch_binned)
-                        else:
-                            linear_patch_binned = np.zeros_like(linear_patch_binned)  # avoid NaNs
+        binned_XYY_phase_firing[cell] = np.asarray(cell_patches)
 
-                    binned_XYY_phase_firing[cell].append(linear_patch_binned)
-
-                    if cell == neurons[0]:  # only track valid patches once
-                        valid_patch_indices.append(p_idx)
-                
-    for cell in neurons:
-        binned_XYY_phase_firing[cell] = np.array(binned_XYY_phase_firing[cell])
-
-    # Average across patches
-    avg_binned_XYY_phase_firing = np.empty((len(neurons), bins * n_lms))
-    for n, cell in enumerate(neurons):
-        avg_binned_XYY_phase_firing[n] = np.nanmean(binned_XYY_phase_firing[cell], axis=0)
+    # Average across patches [n_neurons x n_bins * n_lms))]
+    avg_binned_XYY_phase_firing = np.array([np.nanmean(binned_XYY_phase_firing[cell], axis=0) for cell in neurons])
 
     # Z-score
     zscored_avg_binned_XYY_phase_firing = stats.zscore(avg_binned_XYY_phase_firing, axis=1)
@@ -1952,6 +1951,7 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
 
 def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_repeats=None, condition='AB', data_type='YY_diff', bins=30, sort_heatmap=True, zscored=True, save_plot=False, plot_dir='', axes=None):
 
+    print(YY_data['temporal_XYY_firing'].keys())
     # Unwrap CPA results
     cpa_results = {
         k: v.item() if isinstance(v, np.ndarray) and v.shape == () else v
@@ -2040,10 +2040,22 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
         axr.plot(cpa_results['rvalues'][cell], color='orange', alpha=0.7, label="r-value")
         axr.set_ylabel("Pearson Correlation (r)", color='orange')
         axr.tick_params(axis='y', labelcolor='orange')
-        lines_left, labels_left = ax1.get_legend_handles_labels()
-        lines_right, labels_right = axr.get_legend_handles_labels()
-        ax1.legend(lines_left + lines_right, labels_left + labels_right, loc="upper right")
         
+        # legend
+        handles = []
+        labels = []
+        for ax in [ax1, axr]:
+            h, l = ax.get_legend_handles_labels()
+            handles.extend(h)
+            labels.extend(l)
+
+        leg = ax1.legend(handles, labels, loc="lower right", frameon=False, handlelength=0, handletextpad=0)
+
+        for txt, h in zip(leg.get_texts(), handles):   # color text to match lines + remove handles
+            txt.set_color(h.get_color())
+        for item in leg.legend_handles:
+            item.set_visible(False)
+         
         # Heatmaps
         XY_repeat_sorting_idx = np.argsort(XY_repeats, kind='stable')
         sorted_repeats = XY_repeats[XY_repeat_sorting_idx]
