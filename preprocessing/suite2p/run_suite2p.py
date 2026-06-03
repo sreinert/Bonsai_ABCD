@@ -55,5 +55,3 @@ db['save_path'] = [data_path]
 
 # Run suite2p 
 output_ops = suite2p.run_s2p(settings=ops, db=db)
-
-

@@ -5,8 +5,8 @@
 #
 #SBATCH -p gpu
 #SBATCH -n 1
-#SBATCH -t 4:00:00
-#SBATCH --mem=32G
+#SBATCH -t 1:00:00
+#SBATCH --mem=16G
 #SBATCH --gres gpu:1
 #SBATCH --mail-type ALL
 #SBATCH --mail-user athina.apostolelli.24@ucl.ac.uk
@@ -19,4 +19,5 @@ source activate suite2p
 animal=TAA0000065
 session=ses-015_date-20250427_protocol-t9
 
-python run_suite2p.py --animal ${animal} --session ${session} 
+# python run_suite2p.py --animal ${animal} --session ${session} 
+python Convert_seg_to_stat.py 

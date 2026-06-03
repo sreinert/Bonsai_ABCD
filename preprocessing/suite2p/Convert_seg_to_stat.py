@@ -3,7 +3,6 @@ from pathlib import Path
 import sys 
 import torch
 import argparse
-
 import suite2p
 print("First sys.path entry:", sys.path[0])
 print("Using suite2p from:", suite2p.__file__)

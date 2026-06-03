@@ -121,7 +121,7 @@ if BAA_patches:
 
     # Cluster-based permutation analysis (CPA) 
     AA_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, binned_AA_phase_activity, session, condition='BA', data_type='YY_diff', 
-                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.05, zscored=zscoring, 
+                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, zscored=zscoring, 
                                                                                 plot=True, sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
                                                                                 reload=True)
 
@@ -135,6 +135,6 @@ if ABB_patches:
 
     # Cluster-based permutation analysis (CPA) 
     BB_diff_regression_results_cpa = alternation.fit_linear_regression_XYlen_cpa(neurons, binned_BB_phase_activity, session, condition='AB', data_type='YY_diff', 
-                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.05, zscored=zscoring, 
+                                                                                bins=bins, shuffle=True, nreps=1000, cluster_thres=0.1, zscored=zscoring, 
                                                                                 plot=True, sort_heatmap=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, 
                                                                                 reload=True)
