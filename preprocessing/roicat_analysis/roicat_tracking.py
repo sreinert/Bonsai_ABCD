@@ -5,19 +5,47 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import roicat
-import os
+import os, re
+import roi_tracking_helpers
 
 #%% Define inputs and basic variables
 parser = argparse.ArgumentParser(description="Run ROICaT with animal and session inputs.")
 parser.add_argument('--animal', type=str, default='TAA0000066', help="The animal ID (e.g. 'TAA0000066')")
+parser.add_argument('--cohort', type=str, default='2', help="The cohort the animal belongs to (e.g. '2')")
 parser.add_argument('--sessions', type=str, nargs='+', help="List of sessions to run ROICaT on")
 args = parser.parse_args()
 
 animal =  args.animal 
+cohort = args.cohort
 sessions = args.sessions
 
-basepath = f'/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/{animal}'
-dir_save = os.path.join(basepath, 'ROICaT')
+timepoints = [s.split(":")[-1] for s in sessions]
+tp_string = "_".join(timepoints)
+
+if Path("/ceph").exists():
+    ROOT = "/ceph/mrsic_flogel/public/projects"
+else:
+    ROOT = "/Volumes/mrsic_flogel/public/projects"
+
+if cohort == "2":
+    basepath = f'{ROOT}/AtApSuKuSaRe_20250129_HFScohort2/{animal}'
+
+    # Extract t-values if present
+    timepoints = []
+    for s in sessions:
+        match = re.search(r'(t\d+)', s)
+        if match:
+            timepoints.append(match.group(1))
+    if len(timepoints) > 0:
+        suffix = "_".join(timepoints)        
+    dir_save = os.path.join(basepath, f'ROICaT/{suffix}')
+
+elif cohort == "3":
+    basepath = f'{ROOT}/SuKuSaRe_20250923_HFScohort3/preprocessed_funcimg_Nov2025/derivatives/sub-{animal}'
+    basepath_behav = f'{ROOT}/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives/sub-{animal}'
+    suffix = "_".join(sessions)
+    dir_save = os.path.join(basepath_behav, f'ROICaT/{suffix}')
+
 Path(dir_save).mkdir(parents=True, exist_ok=True)
 Path(os.path.join(dir_save, 'visualization')).mkdir(parents=True, exist_ok=True)
 
@@ -31,7 +59,14 @@ dir_allOuterFolders = basepath
 pathSuffixToStat = 'stat.npy'
 pathSuffixToOps = 'ops.npy'
 
-paths_allStat = [str(Path(dir_allOuterFolders) / session / 'funcimg/Session/suite2p/plane0' / pathSuffixToStat) for session in sessions]
+if cohort == "2":
+    paths_allStat = [str(Path(dir_allOuterFolders) / session / 'funcimg/Session/suite2p/plane0' / pathSuffixToStat) for session in sessions]
+elif cohort == "3":
+    session_dirs = roi_tracking_helpers.find_session_folders(dir_allOuterFolders, sessions)
+    paths_allStat = [
+        str(session_dir / 'funcimg/suite2p/plane0' / pathSuffixToStat)
+        for session_dir in session_dirs
+    ]
 paths_allOps  = [str(Path(path).resolve().parent / pathSuffixToOps) for path in paths_allStat]
 
 print(f'paths to all stat files:')

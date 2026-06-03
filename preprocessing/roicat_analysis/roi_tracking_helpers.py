@@ -16,20 +16,50 @@ import torch
 import datetime
 import hashlib
 
+def find_session_folders(basepath, session_ids):
+    """
+    Keep the folder with the highest ses-XXX index for each session_id.
+    """
 
-def load_neural_data(basepath, animal, sessions_to_align, data_type='F'):
+    all_dirs = [p for p in Path(basepath).iterdir() if p.is_dir()]
+    selected = {}
+
+    for session_id in session_ids:
+
+        matches = [
+            p for p in all_dirs
+            if f"_id-{session_id}_" in p.name
+        ]
+
+        if not matches:
+            print(f"WARNING: No folder found for {session_id}")
+            continue
+
+        def get_ses_number(p):
+            m = re.search(r"ses-(\d+)", p.name)
+            return int(m.group(1)) if m else float("inf")
+
+        oldest_ses = max(matches, key=get_ses_number)
+
+        selected[session_id] = oldest_ses
+        print(f"{session_id} -> {oldest_ses.name}")
+
+    return list(selected.values())
+
+
+def load_neural_data(basepath, cohort, sessions_to_align):
     # Load neural data 
-    data = [[] for s in range(len(sessions_to_align))]
+    data = [[] for _ in range(len(sessions_to_align))]
     for s, sess in enumerate(sessions_to_align):
         print(f'Loading neural data for session {sess}')
-        if data_type == 'F':
-            datapath = basepath / animal / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'F.npy'
-        elif data_type == 'DF_F0':
-            datapath = basepath / animal / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'DF_F0.npy'
-            if not os.path.exists(datapath):
-                raise FileNotFoundError('The DF_F0.npy file does not exist in this directory.')
-        else:
-            raise KeyError('This is not a valid data format for ROI alignment.')
+        if cohort == 2:
+            datapath = basepath / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'F.npy'
+        elif cohort == 3:
+            datapath = basepath / sess / 'funcimg' / 'suite2p' / 'plane0' / 'F.npy'
+
+        if not os.path.exists(datapath):
+            raise FileNotFoundError(f'{datapath} not found.')
+           
         data[s] = np.load(datapath)
 
     return data
@@ -58,13 +88,17 @@ def load_roicat_results(roicat_dir, roicat_data_name):
     return results
 
 
-def get_neuron_count(basepath, animal, sessions_to_align):
+def get_neuron_count(basepath, cohort, sessions_to_align):
     # Load iscell data 
     num_valid_neurons = np.zeros(len(sessions_to_align))
     num_neurons = np.zeros(len(sessions_to_align))
     for s, sess in enumerate(sessions_to_align):
         print(f'Loading iscell data for session {sess}')
-        datapath = basepath / animal / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy'
+        if cohort == 2:
+            datapath = basepath / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy'
+        elif cohort == 3:
+            datapath = basepath / sess / 'funcimg' / 'suite2p' / 'plane0' / 'iscell.npy'
+        print(datapath)
         if not os.path.exists(datapath):
             raise FileNotFoundError('The iscell.npy file does not exist in this directory.')
         iscell = np.load(datapath)[:,0]
@@ -378,7 +412,7 @@ def visualize_output(results=None, roicat_dir=None, roicat_data_name=None, dir_s
             save_gif(FOV_clusters, dir_save, filename='tracked_FOV_clusters')
         
 
-def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=None, animal=None, alignment_method='F', 
+def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=None, cohort=2,
                neural_data=None, roicat_results=None, plot_alignment=False, save_results=False, force_reload=False,
                alignment_dir=None, filename=None):
     '''Align the neural data according to the ROI they belong to, 
@@ -391,27 +425,44 @@ def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=No
         return None, idx_original_aligned
 
     else:
-        protocol_nums = [int(re.search(r'protocol-t(\d+)', s).group(1)) for s in sessions_to_align]
-        protocol_nums = [protocol_nums[i] - protocol_nums[0] for i in range(len(protocol_nums))]
-
         # Load neural data
         if neural_data is None:
-            neural_data = load_neural_data(basepath, animal, sessions_to_align, data_type=alignment_method)
+            neural_data = load_neural_data(basepath, cohort, sessions_to_align)
         
         # Load roicat results
         if roicat_results is None:
             if not roicat_dir or not roicat_data_name:
                 raise ValueError("If `results` is not provided, both `roicat_dir` and `roicat_data_name` must be specified.")
             roicat_results = load_roicat_results(roicat_dir, roicat_data_name)
+            print('Loaded ROICaT results')
+
+        # Sub-select sessions to align 
+        if cohort == 2:
+            session_keys = [int(re.search(r'protocol-t(\d+)', str(s)).group(1)) for s in sessions_to_align]
+            
+            # find all sessions in the roicat tracking data 
+            roicat_keys = [int(re.search(r'protocol-t(\d+)', p).group(1)) for p in roicat_results["input_data"]["paths_stat"]]
+
+        elif cohort == 3:
+            session_keys = [re.search(r'(full\d+)', str(s)).group(1) for s in sessions_to_align]
+
+            # find all sessions in the roicat tracking data 
+            roicat_keys = [re.search(r'(full\d+)', p).group(1) for p in roicat_results["input_data"]["paths_stat"]]
+
+        # select roicat results using the indices of the sessions to align inside the results dict
+        selected_idx = [roicat_keys.index(k) for k in session_keys if k in roicat_keys]
 
         # Define UCIDs 
         labels_bySession = roicat_results['clusters']['labels_bySession']#.load()
-        roi_labels = [rois for rois in labels_bySession[protocol_nums[0]:protocol_nums[-1]+1]]  
-
+        roi_labels = [labels_bySession[i] for i in selected_idx]
+        
         # Update UCIDs with valid cells
         iscell = [[] for s in range(len(sessions_to_align))]
         for s, sess in enumerate(sessions_to_align):
-            datapath = basepath / animal / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy'
+            if cohort == 2:
+                datapath = basepath / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy'
+            elif cohort == 3:
+                datapath = basepath / sess / 'funcimg' / 'suite2p' / 'plane0' / 'iscell.npy'
             iscell[s] = np.load(datapath)[:,0]
         
         # Apply the mask to the aligned data
@@ -420,6 +471,21 @@ def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=No
         # Squeeze the labels to remove the unassigned labels (not necessary, but reduces the number of unique labels)
         labels_iscell = roicat.util.squeeze_UCID_labels(ucids=labels_iscell, return_array=True)  ## [(n_rois,)] * n_sessions
 
+        for i, u in enumerate(labels_iscell):
+            print(
+                f"session {i}",
+                "len(labels_iscell) =", len(u),
+                "max enum index =", len(u) - 1,
+                "max UCID =", np.max(u),
+                "min UCID =", np.min(u),
+            )
+        for i, arr in enumerate(neural_data):
+            print(
+                f"session {i}",
+                "n_rois =", arr.shape[0]
+            )
+        
+        
         # Align the data with the masked labels
         data_aligned_masked, idx_original_aligned = roicat.util.match_arrays_with_ucids(
             arrays=neural_data,  ## expects list (length n_sessions) of numpy arrays (shape (n_rois, n_timepoints))
@@ -450,12 +516,14 @@ def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=No
         # Save indices of aligned data 
         if save_results:
             if alignment_dir is None:
-                alignment_dir = os.path.join(basepath, animal)
-            else:
-                if not os.path.exists(alignment_dir):
-                    os.makedirs(alignment_dir)
+                alignment_dir = basepath
+            if not os.path.exists(alignment_dir):
+                os.makedirs(alignment_dir)
             if filename is None:
-                filename = f"roicat_aligned_ROIs_{'_'.join(['t' + str(n) for n in protocol_nums])}.npy"
+                if cohort == 2:
+                    filename = f"roicat_aligned_ROIs_{'_'.join(['t' + str(n) for n in session_keys])}.npy"
+                elif cohort == 3:
+                    filename = f"roicat_aligned_ROIs_{'_'.join([str(n) for n in session_keys])}.npy"
             np.save(os.path.join(alignment_dir, filename), idx_original_aligned)
 
     return data_aligned_masked, idx_original_aligned
