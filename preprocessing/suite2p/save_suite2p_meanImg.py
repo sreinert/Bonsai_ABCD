@@ -1,15 +1,21 @@
 import numpy as np
 import matplotlib.pyplot as plt
-
-from skimage import io, img_as_float, img_as_ubyte
+from skimage import img_as_ubyte
 from skimage.exposure import rescale_intensity
-import os, re
+import os
 from pathlib import Path
 from align_images import adjust_intensity
+import tifffile
 
-basepath = Path('/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/')
+if Path("/ceph").exists():
+    ROOT = "/ceph/mrsic_flogel/public/projects"
+elif Path("/Volumes/mrsic_flogel").exists():
+    ROOT = "/Volumes/mrsic_flogel/public/projects"
+else:
+    ROOT = "Y:/public/projects"
+basepath = Path(ROOT) / "AtApSuKuSaRe_20250129_HFScohort2" 
 
-sessions = ['TAA0000066/ses-023_date-20250516_protocol-t17']
+sessions = ['TAA0000062/ses-016_date-20250426_protocol-t9']
 
 suite2p_path = 'funcimg/Session/suite2p/plane0'
 n_chan = 1 # 1 / 2
@@ -55,18 +61,28 @@ for session in sessions:
 
     else: 
         plt.imsave(os.path.join(basepath, session, suite2p_path, 'meanImg.png'), img1, cmap='gray')
-        plt.imsave(os.path.join(basepath, session, suite2p_path, 'meanImg.tiff'), img1, cmap='gray')
+        tifffile.imwrite(os.path.join(basepath, session, suite2p_path, 'meanImg.tiff'), img1)
 
+# Check reference image (verify suite2p registration quality)
+for session in sessions: 
+    reg_path = basepath / session / suite2p_path / 'reg_outputs.npy'
+    settings_path = basepath / session / suite2p_path / 'settings.npy'
+    cellpose_path = basepath / session / suite2p_path / 'meanImg_seg.npy'
 
-# Check reference image
-# for session in sessions: 
-#     img_path = basepath / session / suite2p_path / 'ops.npy'
-#     cellpose_path = basepath / session / suite2p_path / 'meanImg_seg.npy'
+    if not os.path.exists(reg_path):
+        print(f"Session {session} has no reg_outputs.npy.")
+        continue
 
-#     ops = np.load(img_path, allow_pickle=True).item()
-#     refImg = ops['refImg']
+    reg_outputs = np.load(reg_path, allow_pickle=True).item()
+    settings = np.load(settings_path, allow_pickle=True).item()
+    
+    refImg = reg_outputs['refImg']
 
-#     print(ops['smooth_sigma_time'], ops['smooth_sigma'], ops['nimg_init'])
-#     plt.imshow(refImg, cmap='gray')
-#     plt.title('Reference Image')
-#     plt.show()
+    print(f"smooth_sigma_time: {settings['registration']['smooth_sigma_time']}")
+    print(f"smooth_sigma: {settings['registration']['smooth_sigma']}")
+    print(f"nimg_init: {settings['registration']['nimg_init']}")
+    
+    plt.imshow(refImg, cmap='gray')
+    plt.title('Reference Image')
+    plt.savefig(basepath / session / suite2p_path / 'refImg.png', dpi=300, bbox_inches='tight')
+    plt.close()
