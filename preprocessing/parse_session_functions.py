@@ -168,8 +168,8 @@ def create_session_struct_npz(data,options):
 def get_lap_idx(session):
     # get lap idx
     flip_ix = signal.find_peaks(session['position'], height=session['tunnel_length']-1,distance=100)[0]
-    if (session['position'][0] - session['landmarks'][-1,1]) < (session['position'][0] - session['landmarks'][0,0]):
-        flip_ix = flip_ix[1:]  # Remove the first peak index - the mouse accidentally moved backwards first
+    # if (session['position'][0] - session['landmarks'][-1,1]) < (session['position'][0] - session['landmarks'][0,0]):
+    #     flip_ix = flip_ix[1:]  # Remove the first peak index - the mouse accidentally moved backwards first
         
     if len(flip_ix) > 0:
         # a lap is between two flips
@@ -576,11 +576,68 @@ def calc_speed_per_lap(session):
 
     return session
 
+def get_lm_entry_exit(session, positions=None):
+    '''Find data idx closest to landmark entry and exit.'''
+
+    positions = session['position']
+    
+    lm_entry_idx = []
+    lm_exit_idx = []
+
+    if session['num_laps'] > 1:
+        search_start = 0  
+
+        for i, (lm_start, lm_end) in enumerate(session['all_lms'][:-1]):
+
+            next_lm_start = session['all_lms'][i+1,0]
+            next_lm_start_idx = np.where(positions[search_start:] >= next_lm_start)[0][0] + search_start                
+            if next_lm_start < lm_start:    # position reset 
+                # print('Lap change')
+                lap_change_idx = signal.find_peaks(positions[search_start:], height=session['tunnel_length']-1, distance=100)[0][0] + 10 
+                next_lm_start_idx = search_start + lap_change_idx + 1
+                
+            start_candidates = np.where(positions[search_start:next_lm_start_idx] >= lm_start)[0]
+            entry_idx = start_candidates[0] + search_start
+
+            end_candidates = np.where(positions[entry_idx:next_lm_start_idx] >= lm_end)[0]
+            exit_idx = end_candidates[0] + entry_idx
+
+            search_start = next_lm_start_idx 
+
+            lm_entry_idx.append(entry_idx)
+            lm_exit_idx.append(exit_idx)
+
+        # last landmark 
+        last_lm_start_idx = np.where(positions[search_start:] >= session['all_lms'][-1,0])[0][0] + search_start
+        last_lm_end_idx = np.where(positions[search_start:] >= session['all_lms'][-1,1])[0]
+        if len(last_lm_end_idx) != 0:
+            last_lm_end_idx = last_lm_end_idx[0] + search_start
+            lm_entry_idx.append(last_lm_start_idx)  
+            lm_exit_idx.append(last_lm_end_idx)
+        else:
+            return np.array(lm_entry_idx), np.array(lm_exit_idx)  # terminate early 
+    
+    else:
+        # consider if the mouse accidentally moved backwards first
+        backward_idx = np.where(np.abs(positions[:2000] - session['all_lms'][-1,1]) < np.abs(positions[:2000] - session['all_lms'][0,0]))[0]
+        if backward_idx.size > 0:
+            search_start = backward_idx[-1] + 1
+        else:
+            search_start = 0
+
+        for lm_start in session['all_lms'][:,0]:
+            lm_entry_idx.append(np.where(positions[search_start:] >= lm_start)[0][0] + search_start)
+
+        for lm_end in session['all_lms'][:,1]:
+            lm_exit_idx.append(np.where(positions[search_start:] <= lm_end)[0][-1] + search_start)
+
+    return np.array(lm_entry_idx), np.array(lm_exit_idx)
+
 
 def calc_speed_per_lap_pre7(session):
     actual_num_laps = np.round((len(session['all_lms']) // session['num_landmarks']) )
 
-    _, lm_exit_idx = neural_analysis_helpers.get_lm_entry_exit(session)
+    _, lm_exit_idx = get_lm_entry_exit(session)
     lap_change_idx = lm_exit_idx[session['num_landmarks']-1::session['num_landmarks']]
 
     x = 0
@@ -1099,6 +1156,20 @@ def analyse_session(mouse,date,plot=True):
 
     return session
 
+def analyse_npz_t2(mouse,date,plot=True):
+    base_path = find_base_path_npz(mouse,date)
+    data = load_session_npz(base_path)
+    base_path2 = find_base_path(mouse,date)
+    options = load_config(base_path2)
+
+    session = create_session_struct_npz(data,options)
+    session['mouse'] = mouse
+    session['date'] = date    
+
+    print('Number of rewards = ', len(session['rewards']))
+
+    return session
+
 def analyse_npz(mouse,date,plot=True):
     base_path = find_base_path_npz(mouse,date)
     data = load_session_npz(base_path)
@@ -1117,9 +1188,6 @@ def analyse_npz(mouse,date,plot=True):
     session = get_licked_lms(session)
     session = get_rewarded_lms(session)
     session = get_lms_visited(options, session)
-
-    VR_data = load_session(base_path2)
-    session = neural_analysis_helpers.get_rewards(VR_data, data, session, print_output=True)
     
     session = get_active_goal(session)
     session = get_transition_prob(session)
@@ -1141,7 +1209,7 @@ def analyse_npz(mouse,date,plot=True):
 
     return session
 
-def analyse_npz_pre7(mouse,date,stage,plot=False):
+def analyse_npz_pre7(mouse,date,plot=False):
     base_path = find_base_path_npz(mouse,date)
     data = load_session_npz(base_path)
     base_path2 = find_base_path(mouse,date)
@@ -1150,7 +1218,6 @@ def analyse_npz_pre7(mouse,date,stage,plot=False):
     session = create_session_struct_npz(data,options)
     session['mouse'] = mouse
     session['date'] = date
-    session['stage'] = stage
     
     session = get_num_landmarks(session, options)
     session = get_lap_idx(session)
@@ -1161,15 +1228,6 @@ def analyse_npz_pre7(mouse,date,stage,plot=False):
     session = get_rewarded_lms(session)
     session = get_lms_visited(options, session)
 
-    VR_data = load_session(base_path2)
-    session = neural_analysis_helpers.get_rewards(VR_data, data, session, print_output=True)
-    session = neural_analysis_helpers.get_AB_sequence(session, mouse, stage)
-    session = neural_analysis_helpers.get_landmark_categories(session)
-    session = neural_analysis_helpers.get_licks(data, session)
-    session = neural_analysis_helpers.get_rewarded_landmarks(VR_data, data, session)
-    session = neural_analysis_helpers.get_landmark_category_rew_idx(session, VR_data, data)
-    session = neural_analysis_helpers.get_lick_rate(data, session)
-
     session = get_active_goal(session)
     session = get_transition_prob(session)
     session = get_all_transitions(session)
@@ -1179,13 +1237,6 @@ def analyse_npz_pre7(mouse,date,stage,plot=False):
     session = give_lap_state_id(session)
     session = plot_licks_per_state(session)
     session = calc_speed_per_lap_pre7(session)
-
-    # Get lick profile 
-    neural_analysis_helpers.plot_lick_maps(session)
-
-    # Get speed profile
-    stage = int(stage[-1])
-    plot_speed_profile(session, stage=stage)
 
     print('Number of laps = ', session['num_laps'])
     

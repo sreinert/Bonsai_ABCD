@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import h5py
 from skimage.segmentation import find_boundaries
 from scipy.signal import find_peaks
+from sklearn.utils import shuffle
 # from barcode import barcode_util
 # from barcode import extract_barcodes
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
@@ -281,12 +282,40 @@ def show_cell_fov(cell:int, meanImg: np.array, mask: np.array):
     crop_mask = meanImg[x_min:x_max, y_min:y_max]
 
     fig, ax = plt.subplots(1,2, figsize=(10,5))
-    ax[0].imshow(crop_mask, cmap='gray')
-    ax[0].imshow(mask_br[x_min:x_max, y_min:y_max], alpha=mask_bool[x_min:x_max, y_min:y_max], cmap='bwr')
+    ax[0].imshow(crop_mask.T, cmap='gray')
+    ax[0].imshow(mask_br[x_min:x_max, y_min:y_max].T, alpha=mask_bool[x_min:x_max, y_min:y_max].T, cmap='bwr')
     ax[0].set_title(f'Cell {cell} zoomed in')
 
-    ax[1].imshow(meanImg, cmap='gray')
-    ax[1].imshow(mask_br,alpha=mask_bool,cmap='bwr')
+    ax[1].imshow(meanImg.T, cmap='gray')
+    ax[1].imshow(mask_br.T,alpha=mask_bool.T,cmap='bwr')
+    ax[1].set_title(f'Cell {cell} in full field of view')
+    plt.tight_layout()
+    plt.show()
+
+def show_cell_fov_alternative(cell:int, meanImg: np.array, image_mask):
+    """
+    Show the cell's field of view, as a zoom in and the full field of view.
+    """
+    cell_mask = image_mask.loc[cell]
+
+    #create a crop box around the cell
+    x, y = np.where(cell_mask > 0)
+    x_min = max(0, x.min() - 10)
+    x_max = min(cell_mask.shape[0], x.max() + 10)
+    y_min = max(0, y.min() - 10)
+    y_max = min(cell_mask.shape[1], y.max() + 10)
+    crop_mask = meanImg[x_min:x_max, y_min:y_max]
+    crop_cell_mask = cell_mask[x_min:x_max, y_min:y_max]
+    binary_cell_mask = (crop_cell_mask > 0).astype(float)
+    binary_full_mask = (image_mask.loc[cell] > 0).astype(float)
+
+    fig, ax = plt.subplots(1,2, figsize=(10,5))
+    ax[0].imshow(crop_mask.T, cmap='gray')
+    ax[0].imshow(binary_cell_mask.T, alpha=binary_cell_mask.T*0.5, cmap='bwr')
+    ax[0].set_title(f'Cell {cell} zoomed in')
+
+    ax[1].imshow(meanImg.T, cmap='gray')
+    ax[1].imshow(binary_full_mask.T,alpha=binary_full_mask.T*0.5,cmap='bwr')
     ax[1].set_title(f'Cell {cell} in full field of view')
     plt.tight_layout()
     plt.show()
@@ -298,8 +327,8 @@ def show_fov(meanImg: np.array, mask: np.array):
     mask_bool = (mask != 0).astype(float)
 
     plt.figure(figsize=(5,5))
-    plt.imshow(meanImg, cmap='gray')
-    plt.imshow(mask,alpha=mask_bool,cmap='bwr')
+    plt.imshow(meanImg.T, cmap='gray')
+    plt.imshow(mask.T,alpha=mask_bool.T,cmap='bwr')
     plt.tight_layout()
     plt.show()
 
@@ -344,19 +373,24 @@ def extract_cell_trace(dF,cell,plot=False,session=None,frame_range=None):
 
     if plot:
         if frame_range is not None:
-            plt.figure(figsize=(15, 3))
-            plt.plot(dF_cell[frame_range[0]:frame_range[1]], label='Fluorescence (F)', color='blue', alpha=0.5)
+            fig, ax = plt.subplots(1,1,figsize=(15, 3))
+            ax.plot(dF_cell[frame_range[0]:frame_range[1]], label='Fluorescence (F)', color='blue', alpha=0.5)
+            ax2 = ax.secondary_yaxis('right')
+            #on a second y axis plot the position of the mouse, if session is provided
+
             if session is not None:
                 for r in session['rewards']:
                     if frame_range[0] <= r < frame_range[1]:
-                        plt.axvline(r - frame_range[0], color='black', linestyle='--', label='Reward' if r == session['rewards'][0] else "")
+                        ax.axvline(r - frame_range[0], color='black', linestyle='--', label='Reward' if r == session['rewards'][0] else "")
                 # for m1 in session['modd1']:
                 #     if frame_range[0] <= m1 < frame_range[1]:
                 #         plt.axvline(m1 - frame_range[0], color='orange', linestyle='--', label='Modulation 1', alpha=0.5 if m1 == session['modd1'][0] else 0.5)
                 # for m2 in session['modd2']:
                 #     if frame_range[0] <= m2 < frame_range[1]:
                 #         plt.axvline(m2 - frame_range[0], color='purple', linestyle='--', label='Modulation 2', alpha=0.5 if m2 == session['modd2'][0] else 0.5)
-                plt.plot(session['position'][frame_range[0]:frame_range[1]], label='Position X', color='red', alpha=0.5)
+                position = session['position'] % session['tunnel_length']
+                ax2 = ax.twinx()
+                ax2.plot(position[frame_range[0]:frame_range[1]], label='Position X', color='red', alpha=0.5)
                 #plot landmarks as dots on the position line
                 for l in session['landmarks']:
                     l = l[0]
@@ -364,7 +398,8 @@ def extract_cell_trace(dF,cell,plot=False,session=None,frame_range=None):
                     l_ix = l_ix[l_ix > frame_range[0]]
                     l_ix = l_ix[l_ix < frame_range[1]]
                     l_ix = l_ix - frame_range[0]
-                    plt.plot(l_ix, np.ones_like(l_ix) * l, 'o', color='green', label='Landmark')
+                    l = l % session['tunnel_length']
+                    ax2.plot(l_ix, np.ones_like(l_ix) * l, 'o', color='green', label='Landmark')
         else:
             if session is not None:
                 plt.figure(figsize=(15, 3))
@@ -464,14 +499,81 @@ def extract_reward_tuning(dF, cell, session, frame_rate=45 ,window_size = [-1,5]
         ax2 = ax[0].twinx()
         ax2.plot(lick_rewards_avg, label='Lick rate', color='grey', alpha=0.5)
         ax2.fill_between(np.arange(len(lick_rewards_avg)), lick_rewards_avg-lick_rewards_sem, lick_rewards_avg+lick_rewards_sem, color='grey', alpha=0.2)
-        ax[0].plot(position_rewards_avg, label='Position', color='orange', alpha=0.5)
-        ax[0].fill_between(np.arange(len(position_rewards_avg)), position_rewards_avg-position_rewards_sem, position_rewards_avg+position_rewards_sem, color='orange', alpha=0.2)
-        ax[0].legend(loc='best')
+        # ax[0].plot(position_rewards_avg, label='Position', color='orange', alpha=0.5)
+        # ax[0].fill_between(np.arange(len(position_rewards_avg)), position_rewards_avg-position_rewards_sem, position_rewards_avg+position_rewards_sem, color='orange', alpha=0.2)
+        # ax[0].legend(loc='best')
         ax[0].set_title(f'Cell {cell} - Reward Aligned')
         ax[0].set_xlabel('Time (frames)')
         ax[0].set_ylabel('dF/F')
         ax[1].imshow(cell_rewards, aspect='auto', cmap='viridis', interpolation='none')
-        ax[1].axvline(45, color='black', linestyle='--', label='Reward time')
+        ax[1].axvline(np.where(window == 0)[0][0], color='black', linestyle='--', label='Reward time')
+        ax[1].set_title(f'Cell {cell} - All trials {cell_rewards.shape[0]}')
+    return cell_rewards
+
+def extract_reward_tuning_cohort2(dF, cell, session, frame_rate=45 ,window_size = [-1,5], plot=False):
+    """
+    Extract the reward tuning for a specific cell. 
+    The plotting option shows the average dF/F trace around rewards, the mouses licking rate, and the position of the mouse relative to the reward.
+    """
+    dF_cell = extract_cell_trace(dF, cell, plot=False, session=session)
+    lick_rate = extract_lick_rate_cohort2(dF, cell, session)
+
+    #outlier detection and removal
+    print(f"Number of rewards: {len(session['rewards'])}")
+    #calculate the frame intervals between rewards
+    frame_intervals = np.diff(session['rewards'])
+    #get rid of reward outliers of under 2s (manual rewards, find better way of extracting in the future)
+    outliers = np.where(frame_intervals < 2 * frame_rate)[0]
+    print(f"Number of outliers: {len(outliers)}")
+    #remove outliers from session['rewards']
+    session['rewards'] = np.delete(session['rewards'], outliers + 1)
+    print(f"Number of rewards after removing outliers: {len(session['rewards'])}")
+
+    window_start = window_size[0]* frame_rate
+    window_end = window_size[1] * frame_rate
+    window = np.arange(window_start, window_end)
+    window_frames = len(window)
+
+    cell_rewards = np.zeros((len(session["rewards"]), window_frames))
+    lick_rewards = np.zeros((len(session["rewards"]), window_frames))
+    position_rewards = np.zeros((len(session["rewards"]), window_frames))
+    for i,r in enumerate(session["rewards"]):
+        rew_frames = np.arange(r + window_start, r + window_end)
+        if max(rew_frames) < len(dF_cell):
+            cell_rewards[i,:] = dF_cell[rew_frames]
+            lick_rewards[i,:] = lick_rate[rew_frames]
+            position_rewards[i,:] = session["position"][rew_frames] - session["position"][r]
+        else:
+            print("ignoring last reward,too close to end of session")
+            continue
+    cell_rewards_avg = np.mean(cell_rewards, axis=0)
+    cell_rewards_std = np.std(cell_rewards, axis=0)
+    cell_rewards_sem = cell_rewards_std/np.sqrt(len(session["rewards"]))
+
+    lick_rewards_avg = np.mean(lick_rewards, axis=0)
+    lick_rewards_std = np.std(lick_rewards, axis=0)
+    lick_rewards_sem = lick_rewards_std/np.sqrt(len(session["rewards"]))
+
+    position_rewards_avg = np.mean(position_rewards, axis=0)
+    position_rewards_std = np.std(position_rewards, axis=0)
+    position_rewards_sem = position_rewards_std/np.sqrt(len(session["rewards"]))
+
+    if plot:
+        fig, ax = plt.subplots(1,2,figsize=(10, 5))
+        ax[0].plot(cell_rewards_avg, label='Average', color='blue')
+        ax[0].fill_between(np.arange(len(cell_rewards_avg)), cell_rewards_avg-cell_rewards_sem, cell_rewards_avg+cell_rewards_sem, color='blue', alpha=0.2)
+        ax[0].axvline(np.where(window == 0)[0][0], color='grey', linestyle='--', label='Reward time')
+        ax2 = ax[0].twinx()
+        ax2.plot(lick_rewards_avg, label='Lick rate', color='grey', alpha=0.5)
+        ax2.fill_between(np.arange(len(lick_rewards_avg)), lick_rewards_avg-lick_rewards_sem, lick_rewards_avg+lick_rewards_sem, color='grey', alpha=0.2)
+        # ax[0].plot(position_rewards_avg, label='Position', color='orange', alpha=0.5)
+        # ax[0].fill_between(np.arange(len(position_rewards_avg)), position_rewards_avg-position_rewards_sem, position_rewards_avg+position_rewards_sem, color='orange', alpha=0.2)
+        # ax[0].legend(loc='best')
+        ax[0].set_title(f'Cell {cell} - Reward Aligned')
+        ax[0].set_xlabel('Time (frames)')
+        ax[0].set_ylabel('dF/F')
+        ax[1].imshow(cell_rewards, aspect='auto', cmap='viridis', interpolation='none')
+        ax[1].axvline(np.where(window == 0)[0][0], color='black', linestyle='--', label='Reward time')
         ax[1].set_title(f'Cell {cell} - All trials {cell_rewards.shape[0]}')
     return cell_rewards
 
@@ -483,7 +585,7 @@ def extract_position_tuning_cohort2(dF, cell, stage, session, frame_rate=45, bin
     assert session['num_laps'] > 1, 'This function has not been adapted to continuous corridors yet.'
     
     dF_cell = extract_cell_trace(dF, cell, plot=False, session=session)
-    lick_rate = extract_lick_rate(dF, cell, session)
+    lick_rate = extract_lick_rate_cohort2(dF, cell, session)
 
     lm = np.copy(session['landmarks'])
     goal_a = session['goal_idx'][0]
@@ -593,11 +695,17 @@ def extract_position_tuning(dF, cell, session, bins=200, plot=False):
     lick_rate = extract_lick_rate(dF, cell, session)
 
     lm = np.copy(session['landmarks'])
-    lm = lm[:10]
-    goal_a = session['goal_idx'][0]
-    goal_b = session['goal_idx'][1]
-    goal_c = session['goal_idx'][2]
-    goal_d = session['goal_idx'][3]
+    lm = lm[10:20] - session['tunnel_length'] + 4 #use the second set of landmarks for estimating their position in the corridor and add an offset of 4..
+    try:
+        goal_a = session['goal_idx'][0]
+        goal_b = session['goal_idx'][1]
+        goal_c = session['goal_idx'][2]
+        goal_d = session['goal_idx'][3]
+    except:
+        goal_a = session['goal_ids'][0]
+        goal_b = session['goal_ids'][1]
+        goal_c = session['goal_ids'][2]
+        goal_d = session['goal_ids'][3]
 
 
     bins_pos = bins
@@ -611,7 +719,7 @@ def extract_position_tuning(dF, cell, session, bins=200, plot=False):
         fr_per_lap = dF_cell[lap_idx]
         lr_per_lap = lick_rate[lap_idx]
         pos_discount = i*session['tunnel_length']
-        bin_ix = np.digitize(session['position'][lap_idx]-pos_discount, bin_edges)
+        bin_ix = np.digitize(session['position'][lap_idx]+4-pos_discount, bin_edges)
         for j in range(bins_pos):
             fr_per_bin[i,j] = np.mean(fr_per_lap[bin_ix == j])
             lr_per_bin[i,j] = np.mean(lr_per_lap[bin_ix == j])
@@ -869,10 +977,16 @@ def extract_lm_tuning(dF, cell, session, stage, frame_rate=45, window_size=[-1, 
     window = np.arange(window_start, window_end)
     window_frames = len(window)
 
-    goal_a = session['goal_idx'][0]
-    goal_b = session['goal_idx'][1]
-    goal_c = session['goal_idx'][2]
-    goal_d = session['goal_idx'][3]
+    try:
+        goal_a = session['goal_idx'][0]
+        goal_b = session['goal_idx'][1]
+        goal_c = session['goal_idx'][2]
+        goal_d = session['goal_idx'][3]
+    except:
+        goal_a = session['goal_ids'][0]
+        goal_b = session['goal_ids'][1]
+        goal_c = session['goal_ids'][2]
+        goal_d = session['goal_ids'][3]
     unique_lms = len(np.unique(session['all_lms'])) # works for single and multiple laps
     # unique_lms = len(np.unique(session['lm_idx']))-1
 
@@ -1065,7 +1179,11 @@ def extract_goal_progress(dF,cell,session,frame_rate = 45,bins=90,plot=False,shu
     reward_ix = session['rewards']
 
     binned_phase_firing = np.zeros((len(reward_ix)-1, bins))
-    ngoals = len(np.unique(session['goal_idx']))
+    try:
+        ngoals = len(np.unique(session['goal_idx']))
+    except:
+        ngoals = len(np.unique(session['goal_ids']))
+
     goal_rew_vec = np.arange(ngoals)
     goal_rew_vec = np.tile(goal_rew_vec, len(session['rewards'])//ngoals)
     goal_rew_vec = goal_rew_vec[:-1]
@@ -1116,6 +1234,111 @@ def extract_goal_progress(dF,cell,session,frame_rate = 45,bins=90,plot=False,shu
         plt.colorbar(cax, ax=ax2, label='dF/F')
         plt.tight_layout()
     return binned_all, reward_ix
+
+def extract_goal_progress_unsorted(dF,cell,session,frame_rate = 45,bins=90,plot=False,shuffle=False):
+    """
+    Extract the goal progress for a specific cell.
+    """
+    #outlier detection and removal
+    #calculate the frame intervals between rewards
+    frame_intervals = np.diff(session['rewards'])
+    #get rid of reward outliers of under 2s (manual rewards, find better way of extracting in the future)
+    outliers = np.where(frame_intervals < 2 * frame_rate)[0]
+    #remove outliers from session['rewards']
+    session['rewards'] = np.delete(session['rewards'], outliers + 1)
+    reward_ix = session['rewards']
+
+    binned_phase_firing = np.zeros((len(reward_ix)-1, bins))
+    dF_cell = extract_cell_trace(dF, cell, plot=False, session=session)
+
+    for i in range(len(reward_ix)-1):
+        phase_frames = np.arange(reward_ix[i], reward_ix[i+1]-1)
+        bin_edges = np.linspace(reward_ix[i], reward_ix[i+1]-1, bins+1)
+        phase_firing = dF_cell[phase_frames]
+        if shuffle:
+            np.random.shuffle(phase_firing)
+        bin_ix = np.digitize(phase_frames, bin_edges)
+        for j in range(bins):
+            binned_phase_firing[i,j] = np.mean(phase_firing[bin_ix == j+1])
+    
+    avg_bin = np.nanmean(binned_phase_firing, axis=0)
+    std_bin = np.nanstd(binned_phase_firing, axis=0)
+    sem_bin = std_bin / np.sqrt(binned_phase_firing.shape[0])
+
+    if plot:
+        fig = plt.figure(figsize=(10, 5))
+        ax1 = fig.add_subplot(111, projection='polar')
+        ax1.set_theta_zero_location('N')
+        ax1.set_theta_direction(-1)
+        angles = np.linspace(0, 2 * np.pi, bins*4, endpoint=False)
+        # add the first angle to close the circle
+        angles = np.concatenate((angles, [angles[0]]))
+        avg_bin = np.concatenate((avg_bin, [avg_bin[0]]))
+        sem_bin = np.concatenate((sem_bin, [sem_bin[0]]))
+        
+    return binned_phase_firing,avg_bin, reward_ix
+
+def plot_goal_progress(dF_cell, session,frame_rate=45,bins=90,plot=True):
+
+    frame_intervals = np.diff(session['rewards'])
+    #get rid of reward outliers of under 2s (manual rewards, find better way of extracting in the future)
+    outliers = np.where(frame_intervals < 2 * frame_rate)[0]
+    #remove outliers from session['rewards']
+    session['rewards'] = np.delete(session['rewards'], outliers + 1)
+    reward_ix = session['rewards']
+
+    binned_phase_firing = np.zeros((len(reward_ix)-1, bins))
+    try:
+        ngoals = len(np.unique(session['goal_idx']))
+    except:
+        ngoals = len(np.unique(session['goal_ids']))
+
+    goal_rew_vec = np.arange(ngoals)
+    goal_rew_vec = np.tile(goal_rew_vec, len(session['rewards'])//ngoals)
+    goal_rew_vec = goal_rew_vec[:-1]
+    for i in range(len(reward_ix)-1):
+        phase_frames = np.arange(reward_ix[i], reward_ix[i+1]-1)
+        bin_edges = np.linspace(reward_ix[i], reward_ix[i+1]-1, bins+1)
+        phase_firing = dF_cell[phase_frames]
+        bin_ix = np.digitize(phase_frames, bin_edges)
+        for j in range(bins):
+            binned_phase_firing[i,j] = np.mean(phase_firing[bin_ix == j+1])
+    if ngoals == 4:
+        binned_B = binned_phase_firing[np.where(goal_rew_vec==0)[0],:]
+        binned_C = binned_phase_firing[np.where(goal_rew_vec==1)[0],:]
+        binned_D = binned_phase_firing[np.where(goal_rew_vec==2)[0],:]
+        binned_A = binned_phase_firing[np.where(goal_rew_vec==3)[0],:]
+        min_state = np.min([binned_A.shape[0],binned_B.shape[0],binned_C.shape[0],binned_D.shape[0]], axis=0)
+        binned_all = np.concatenate(( binned_B[:min_state,:], binned_C[:min_state,:], binned_D[:min_state,:],binned_A[:min_state,:]), axis=1)
+    else:
+        print("Only 4 goals are supported for this goal progress extraction for now. Check extract_arb_progress for other specs.")
+    avg_bin = np.nanmean(binned_all, axis=0)
+    std_bin = np.nanstd(binned_all, axis=0)
+    sem_bin = std_bin / np.sqrt(binned_all.shape[0])
+    if plot:
+        fig = plt.figure(figsize=(10, 5))
+        ax1 = fig.add_subplot(111, projection='polar')
+        ax1.set_theta_zero_location('N')
+        ax1.set_theta_direction(-1)
+        angles = np.linspace(0, 2 * np.pi, bins*4, endpoint=False)
+        # add the first angle to close the circle
+        angles = np.concatenate((angles, [angles[0]]))
+        avg_bin = np.concatenate((avg_bin, [avg_bin[0]]))
+        sem_bin = np.concatenate((sem_bin, [sem_bin[0]]))
+        ax1.plot(angles, avg_bin, color='blue', linewidth=2)
+        ax1.fill_between(angles, avg_bin - sem_bin, avg_bin + sem_bin, color='blue', alpha=0.2)
+        #label the cardinal directions
+        ax1.set_xticks(np.linspace(0, 2 * np.pi, 4, endpoint=False))
+        ax1.set_xticklabels(['A', 'B', 'C', 'D'])
+        ax1.set_title('Average Firing Rate (Polar)')
+        # ax2 = fig.add_subplot(122)
+        # cax = ax2.imshow(binned_all, aspect='auto', cmap='viridis', interpolation='none')
+        # ax2.set_title('Binned Firing Rates')
+        # plt.colorbar(cax, ax=ax2, label='dF/F')
+        plt.tight_layout()
+
+    return binned_all
+
 
 def extract_arb_progress(dF, cell, event_frames, ngoals, bins, plot=False,shuffle=False):
     """
@@ -1190,6 +1413,8 @@ def calc_goal_tuningix(dF, cell, session, condition='goal',event_frames=None,n_g
         binned_all = extract_arb_progress(dF, cell, event_frames, n_goals, bins, plot=False, shuffle=False)
 
     av_binned = np.nanmean(binned_all, axis=0)
+    std_bin = np.nanstd(binned_all, axis=0)
+    sem_bin = std_bin / np.sqrt(binned_all.shape[0])
     ngoals = av_binned.shape[0]/bins
     ngoals = int(ngoals)
     state_max = np.zeros(ngoals)
@@ -1202,7 +1427,6 @@ def calc_goal_tuningix(dF, cell, session, condition='goal',event_frames=None,n_g
         state_min[i] = np.min(av_binned[bins*i:bins*(i+1)])
         state_mean[i] = np.mean(av_binned[bins*i:bins*(i+1)])
         pref_phase[i] = np.where(av_binned[bins*i:bins*(i+1)] == state_max[i])[0][0] 
-    print(state_max)
     tuning_score = (state_max - state_min)/state_mean
     real_score = np.mean(tuning_score)
     state_preference = np.where(state_max == np.max(state_max))[0][0]  # Find the state with the maximum firing rate
@@ -1248,7 +1472,7 @@ def calc_goal_tuningix(dF, cell, session, condition='goal',event_frames=None,n_g
         plt.legend()
         plt.show()
 
-    return real_score,shuffled_scores,phase_preference,state_preference,state_score
+    return av_binned,sem_bin,real_score,shuffled_scores,phase_preference,state_preference,state_score
 
 ## Correlations with other cells
 
@@ -1387,3 +1611,713 @@ def cluster_all_corr(dF,plot=False):
         plt.tight_layout()
 
     return correlation_all, correlation_sorted
+
+def get_alt_lagged_positions(dF, session, phase_bins, n_pos_bins):
+    #get a value of task lag for each frame
+    bins = phase_bins
+    reward_ix = session['rewards']
+    ngoals = len(np.unique(session['goal_idx']))
+    goal_rew_vec = np.arange(ngoals)
+    goal_rew_vec = np.tile(goal_rew_vec, len(session['rewards'])+4//ngoals)
+    goal_rew_vec = goal_rew_vec[:-1]
+    bin_ids = np.zeros_like(session['position'])
+    phase_ids = np.zeros_like(session['position'])
+    trial_count = 0
+    trial_counts = np.zeros_like(session['position'])
+    for i in range(len(reward_ix)-1):
+        phase_frames = np.arange(reward_ix[i], reward_ix[i+1])
+        bin_edges = np.linspace(reward_ix[i], reward_ix[i+1], bins+1)
+        bin_ix = np.digitize(phase_frames, bin_edges)
+        phase_ids[phase_frames] = bin_ix
+        
+        if goal_rew_vec[i]>0:
+            bin_ix += bins*goal_rew_vec[i]    
+        bin_ids[phase_frames] = bin_ix
+        trial_counts[phase_frames] = trial_count
+        if goal_rew_vec[i]==3:
+            trial_count += 1
+    lag = bin_ids
+    pos = session['position']
+    all_cells = dF
+    all_cells_pd = pd.DataFrame(all_cells.T[1:])
+    trial_data = pd.DataFrame({'lag': lag.astype(int),
+                    'trial_n': trial_counts.astype(int)})
+    nonlagged_data = pd.DataFrame({'lag': lag.astype(int),
+                    'trial_n': trial_counts.astype(int),
+                    'now': np.round(n_pos_bins*(pos-min(pos))/(max(pos)-min(pos))).astype(int)})
+    data_w_cells = pd.concat([trial_data, all_cells_pd], axis=1)
+
+    test_w_cells = data_w_cells.groupby(['trial_n', 'lag'], as_index=False).mean()
+    test = nonlagged_data.groupby(['trial_n', 'lag'], as_index=False)['now'].apply(lambda x: stats.mode(x)[0])
+    for lag in range(1,12):
+        test[f'now+{lag}'] = np.nan * np.zeros_like(test['now'])
+        test[f'now+{lag}'].values[:-lag] = test['now'].values[lag:].astype(int)
+
+    full_data = pd.merge(test, test_w_cells, on=['trial_n', 'lag'], how='inner')
+    
+    return full_data
+
+def get_lagged_placefields(full_data,gp_mask, mask_pref=True):
+    place_field_activity = np.zeros((full_data[14:].shape[1], 12, 10)) * np.nan
+    if mask_pref:
+        gp_mask = gp_mask
+    else:
+        gp_mask = np.arange(1,13)
+    for c in full_data.columns[14:]:
+        for l in range(12):
+            for p in range(10):
+                if l==0:
+                    cells_activity = full_data[full_data['lag'].isin(gp_mask) & (full_data['now']==p)][['now',c]].values
+                else:
+                    cells_activity = full_data[full_data['lag'].isin(gp_mask) & (full_data[f'now+{l}']==p)][[f'now+{l}',c]].values
+                if len(cells_activity)>0:
+                    place_field_activity[c,l,p] = np.nanmean(cells_activity[:,1])
+
+    return place_field_activity
+
+def plot_lagged_placefields(roicat_data,interest_stage,all_place_fields, cell,custom_cmap,plot=True):
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    if cells.size == 0:
+        print(f"Cell {cell} not found in any session for stage {interest_stage}.")
+        return None
+    else:
+        print(f"Cell {cell}, cell IDs: {cells}")
+    num_lags = all_place_fields[next(iter(all_place_fields))].shape[1]
+    num_pos_bins = all_place_fields[next(iter(all_place_fields))].shape[2]
+    all_session_lag_fr = np.zeros((len(cells), num_lags, num_pos_bins)) * np.nan
+    for i,img_session in enumerate(all_place_fields.keys()):
+        example_cell = cells[i]
+        if example_cell == 0:  # Skip if cell ID is 0 (not identified)
+            continue
+        cell_lags = all_place_fields[img_session][example_cell,:,:]
+        all_session_lag_fr[i,:,:] = cell_lags
+    if plot:
+        plt.figure(figsize=(3, 10))
+        for lag in range(all_session_lag_fr.shape[1]):
+            plt.subplot(all_session_lag_fr.shape[1], 1, lag+1)
+            #ignore nans and zscore across sessions for each lag
+            zscore_av_binned_all = stats.zscore(all_session_lag_fr[:,lag,:], axis=1, nan_policy='omit')
+            plt.imshow(zscore_av_binned_all, aspect='auto', cmap=custom_cmap,interpolation='none')
+    return all_session_lag_fr
+
+def corr_lagged_placefields(all_session_lag_fr, cell, plot=False):
+    #correlate the place fields across lags for the example cell
+    lag_corrs = np.zeros((all_session_lag_fr.shape[1], all_session_lag_fr.shape[0], all_session_lag_fr.shape[0]))
+    for lag in range(all_session_lag_fr.shape[1]):
+        for i in range(all_session_lag_fr.shape[0]):
+            #if that session has no identified cell, skip it
+            if np.all(all_session_lag_fr[i,lag] == 0):
+                continue
+            for j in range(i+1, all_session_lag_fr.shape[0]):
+                if np.all(all_session_lag_fr[j,lag] == 0):
+                    continue
+                #ignore nans in the correlation
+                valid_mask = ~np.isnan(all_session_lag_fr[i,lag]) & ~np.isnan(all_session_lag_fr[j,lag])
+                corr = np.corrcoef(all_session_lag_fr[i,lag][valid_mask], all_session_lag_fr[j,lag][valid_mask])[0, 1]
+                lag_corrs[lag, i, j] = corr
+    #average the upper triangle of the correlation matrices for each lag
+    avg_lag_corrs = np.zeros(all_session_lag_fr.shape[1])
+    std_lag_corrs = np.zeros(all_session_lag_fr.shape[1])
+    for lag in range(all_session_lag_fr.shape[1]):
+        upper_triangle = lag_corrs[lag][np.triu_indices(all_session_lag_fr.shape[0], k=1)]
+        avg_lag_corrs[lag] = np.nanmean(upper_triangle)
+        std_lag_corrs[lag] = np.nanstd(upper_triangle)
+    if plot:
+        plt.figure(figsize=(5, 3))
+        plt.fill_between(range(all_session_lag_fr.shape[1]), avg_lag_corrs - std_lag_corrs, avg_lag_corrs + std_lag_corrs, alpha=0.3)
+        plt.plot(range(all_session_lag_fr.shape[1]), avg_lag_corrs, '-o')
+        plt.xlabel('Lag')
+        plt.ylabel('Average Correlation of Place Fields')
+        plt.axhline(0, color='gray', linestyle='dashed')
+        plt.title(f'Cell {cell}')
+        plt.xticks(range(all_session_lag_fr.shape[1]))
+    return avg_lag_corrs, std_lag_corrs
+
+def get_cv_lag_correlation(all_session_lag_fr):
+    lag_corrs = np.zeros((all_session_lag_fr.shape[1], all_session_lag_fr.shape[0], all_session_lag_fr.shape[0]))
+    for lag in range(all_session_lag_fr.shape[1]):
+        for i in range(all_session_lag_fr.shape[0]):
+            #if that session has no identified cell, skip it
+            if np.all(all_session_lag_fr[i,lag] == 0):
+                continue
+            for j in range(i+1, all_session_lag_fr.shape[0]):
+                if np.all(all_session_lag_fr[j,lag] == 0):
+                    continue
+                #ignore nans in the correlation
+                valid_mask = ~np.isnan(all_session_lag_fr[i,lag]) & ~np.isnan(all_session_lag_fr[j,lag])
+                corr = np.corrcoef(all_session_lag_fr[i,lag][valid_mask], all_session_lag_fr[j,lag][valid_mask])[0, 1]
+                lag_corrs[lag, i, j] = corr
+    
+    num_sessions = 0
+    for i in range(all_session_lag_fr.shape[0]):
+        if not np.all(np.isnan(all_session_lag_fr[i])):
+            num_sessions += 1
+    print(f"Number of sessions with identified cell: {num_sessions} out of {all_session_lag_fr.shape[0]}")
+    if num_sessions < 3:
+        print("Not enough sessions with identified cells for cross-validation. Need at least 3.")
+        return np.nan, np.nan
+
+    cv_corr = np.zeros(all_session_lag_fr.shape[0]) * np.nan
+    max_lag = np.zeros(all_session_lag_fr.shape[0]) * np.nan
+    for i in range(all_session_lag_fr.shape[0]):
+        if np.all(np.isnan(all_session_lag_fr[i])):
+            print(f"Session {i} has no identified cell, skipping.")
+            continue
+
+        held_out_task = i
+        test_corrs = lag_corrs.copy()
+        test_corrs[:,held_out_task,:] = np.nan
+        test_corrs[:,:,held_out_task] = np.nan
+        avg_lag_corrs = np.zeros(all_session_lag_fr.shape[1])
+        std_lag_corrs = np.zeros(all_session_lag_fr.shape[1])
+        for lag in range(all_session_lag_fr.shape[1]):
+            upper_triangle = test_corrs[lag][np.triu_indices(all_session_lag_fr.shape[0], k=1)]
+            avg_lag_corrs[lag] = np.nanmean(upper_triangle)
+            std_lag_corrs[lag] = np.nanstd(upper_triangle)
+        max_lag[i] = np.nanargmax(avg_lag_corrs)
+        held_out_field = all_session_lag_fr[held_out_task,max_lag[i].astype(int),:]
+        test_spatial_field = all_session_lag_fr[:,max_lag[i].astype(int),:].copy()
+        test_spatial_field[held_out_task,:] = np.nan
+        max_spatial_field = np.nanmean(test_spatial_field, axis=0)
+        valid_mask = ~np.isnan(max_spatial_field) & ~np.isnan(held_out_field)
+        cv_corr[i] = np.corrcoef(max_spatial_field[valid_mask], held_out_field[valid_mask])[0, 1]
+    #find the mode of the max_lag across sessions
+    best_lag = stats.mode(max_lag, nan_policy='omit')[0]
+    av_cv_corr = np.nanmean(cv_corr)
+    print(f"Average cross-validated correlation across sessions: {av_cv_corr:.3f}")
+    return av_cv_corr,best_lag
+
+def get_lap_lags(dF, session, lap_bins, n_pos_bins):
+    bins = lap_bins
+    lap_lag = np.zeros((len(session['lap_idx'])))
+    state_ids = np.zeros((len(session['lap_idx'])))
+    num_laps = np.max(session['lap_idx']).astype(int)
+    position = session['position']
+    for lap in range(0, num_laps):
+        lap_mask = session['lap_idx'] == lap
+        phase_frames = np.where(lap_mask)[0]
+        bin_edges = np.linspace(phase_frames[0], phase_frames[-1], bins+1)
+        bin_ix = np.digitize(phase_frames, bin_edges)
+        
+        if session['state_id'][lap] == 1:
+            state_ids[phase_frames] = 1
+        elif session['state_id'][lap] == 2:
+            state_ids[phase_frames] = 2
+        if session['state_id'][lap]>0:
+            bin_ix += bins*session['state_id'][lap].astype(int)
+        lap_lag[phase_frames] = bin_ix
+    binned_pos = np.round(n_pos_bins*(position-min(position))/(max(position)-min(position))).astype(int)
+    data_df = pd.DataFrame({
+        'now+0': binned_pos,
+        'lap_idx': session['lap_idx'].astype(int),
+        'state_id': state_ids.astype(int),
+        'lap_lag': lap_lag.astype(int)
+    })
+    test = data_df.groupby(['lap_idx', 'lap_lag','state_id'], as_index=False)['now+0'].apply(lambda x: stats.mode(x)[0])
+    for lag in range(1,10):
+        test[f'now+{lag}'] = np.nan * np.zeros_like(test['now+0'])
+        test[f'now+{lag}'].values[:-lag] = test['now+0'].values[lag:].astype(int)
+    all_cells = dF
+    all_cells_pd = pd.DataFrame(all_cells.T[1:])
+    all_cells_pd['lap_idx'] = session['lap_idx'].astype(int)
+    all_cells_pd['state_id'] = state_ids.astype(int)
+    all_cells_pd['lap_lag'] = lap_lag.astype(int)
+    test_w_cells = all_cells_pd.groupby(['lap_idx', 'lap_lag','state_id'], as_index=False).mean()
+    full_data = pd.merge(test, test_w_cells, on=['lap_idx', 'lap_lag','state_id'])
+    return full_data
+
+def get_lap_placefields(full_data,gp_mask, mask_pref=True):
+    if mask_pref:
+        gp_mask = gp_mask
+    else:
+        gp_mask = np.arange(1,11)
+    lap_activity = np.zeros((full_data[12:].shape[1], 10, 10)) * np.nan
+    for c in full_data.columns[13:]:
+        print(f"Processing cell {c}")
+        for l in range(10):
+            for p in range(10):
+                cells_activity = full_data[full_data['state_id'].isin([gp_mask]) & (full_data[f'now+{l}']==p)][[f'now+{l}',c]].values
+                if len(cells_activity)>0:
+                    lap_activity[c,l,p] = np.nanmean(cells_activity[:,1])
+    return lap_activity
+
+def plot_lap_placefields(roicat_data,interest_stage,all_lap_fields, cell,custom_cmap,plot=True):
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    if cells.size == 0:
+        print(f"Cell {cell} not found in any session for stage {interest_stage}.")
+        return None
+    else:
+        print(f"Cell {cell}, cell IDs: {cells}")
+    all_session_lag_fr = np.zeros((len(cells), 12, 10)) * np.nan
+    for i,img_session in enumerate(all_lap_fields.keys()):
+        example_cell = cells[i]
+        if example_cell == 0:  # Skip if cell ID is 0 (not identified)
+            continue
+        cell_lags = all_lap_fields[img_session][example_cell,:,:]
+        all_session_lag_fr[i,:,:] = cell_lags
+    if plot:
+        plt.figure(figsize=(3, 10))
+        for lag in range(all_session_lag_fr.shape[1]):
+            plt.subplot(all_session_lag_fr.shape[1], 1, lag+1)
+            #ignore nans and zscore across sessions for each lag
+            zscore_av_binned_all = stats.zscore(all_session_lag_fr[:,lag,:], axis=1, nan_policy='omit')
+            plt.imshow(zscore_av_binned_all, aspect='auto', cmap=custom_cmap,interpolation='none')
+    return all_session_lag_fr
+
+# ---------------
+#old
+def get_lagged_positions(dF, cell, session, phase_bins, n_pos_bins, plot=False):
+    """
+    Get the firing rate of a cell to lagged positions based on task state bins (n_bins*n_goals).
+    """
+    reward_ix = session['rewards']
+    ngoals = len(np.unique(session['goal_idx']))
+    goal_rew_vec = np.arange(ngoals)
+    goal_rew_vec = np.tile(goal_rew_vec, (len(session['rewards'])+4)//ngoals)
+    # goal_rew_vec = goal_rew_vec[:-1]
+    bin_ids = np.zeros_like(session['position'])
+    bin_count = 0
+    bin_counts = np.zeros_like(session['position'])
+    for i in range(len(reward_ix)-1):
+        phase_frames = np.arange(reward_ix[i], reward_ix[i+1]-1)
+        bin_edges = np.linspace(reward_ix[i], reward_ix[i+1]-1, phase_bins+1)
+        ids = np.arange(len(phase_frames))
+        bin_ix = np.digitize(phase_frames, bin_edges)
+        
+        if goal_rew_vec[i]>0:
+            bin_ix += phase_bins*goal_rew_vec[i]    
+        bin_ids[phase_frames] = bin_ix
+        bin_counts[phase_frames] = bin_ix + (ngoals* phase_bins* bin_count)
+        if goal_rew_vec[i]==3:
+            bin_count += 1
+
+    av_position_perlag = np.zeros(np.max(bin_counts).astype(int)+1)
+    for i in np.unique(bin_counts).astype(int):
+        av_position_perlag[i] = np.max(session['position'][np.where(bin_counts==i)])
+    n_counts = np.unique(bin_counts).astype(int)
+    n_counts = n_counts[n_counts>0]
+    all_lags = range(phase_bins*ngoals)
+    all_lag_positions = np.zeros((len(all_lags), len(session['position'])))
+    for lag in all_lags:
+        lagged_position = np.full_like(session['position'], np.nan, dtype=float)
+        for i in n_counts:
+            lagged_position[np.where(bin_counts==i)[0].astype(int)] = av_position_perlag[i-lag]
+        all_lag_positions[lag] = lagged_position
+    
+    dF_cell = extract_cell_trace(dF, cell, plot=False, session=None)
+    dF_cell = dF_cell[1:]  # Remove the first frame to match the length of positions
+
+    #firing rate for example cell for all lags by positions
+    all_lag_fr = np.zeros((len(all_lags), n_pos_bins-1))
+    for lag in all_lags:
+        test_lag = all_lag_positions[lag]  
+        pos_bins = np.linspace(np.nanmin(test_lag), np.nanmax(test_lag), n_pos_bins)
+        av_fr = np.zeros(n_pos_bins-1)
+        for i in range(len(pos_bins)-1):
+            bin_mask = (test_lag >= pos_bins[i]) & (test_lag < pos_bins[i+1])
+            av_fr[i] = np.nanmean(dF_cell[bin_mask])
+        all_lag_fr[lag] = av_fr
+    
+    if plot:
+        plt.figure(figsize=(2, 5))
+        zscore_av_binned_all = stats.zscore(all_lag_fr, axis=1, nan_policy='omit')
+        plt.imshow(zscore_av_binned_all, aspect='auto', cmap='viridis',interpolation='none')
+        plt.xlabel('Position bin')
+        plt.ylabel('Lag')
+    
+    return all_lag_fr
+
+#old
+def get_masked_lagged_positions(dF, cell, session, phase_bins, n_pos_bins, gp_mask,mask_pref=True,plot=False):
+    """
+    Get the firing rate of a cell to lagged positions based on task state bins (n_bins*n_goals).
+    """
+    reward_ix = session['rewards']
+    ngoals = len(np.unique(session['goal_idx']))
+    goal_rew_vec = np.arange(ngoals)
+    goal_rew_vec = np.tile(goal_rew_vec, (len(session['rewards'])+4)//ngoals)
+    # goal_rew_vec = goal_rew_vec[:-1]
+    bin_ids = np.zeros_like(session['position'])
+    bin_count = 0
+    bin_counts = np.zeros_like(session['position'])
+    for i in range(len(reward_ix)-1):
+        phase_frames = np.arange(reward_ix[i], reward_ix[i+1]-1)
+        bin_edges = np.linspace(reward_ix[i], reward_ix[i+1]-1, phase_bins+1)
+        ids = np.arange(len(phase_frames))
+        bin_ix = np.digitize(phase_frames, bin_edges)
+        
+        if goal_rew_vec[i]>0:
+            bin_ix += phase_bins*goal_rew_vec[i]    
+        bin_ids[phase_frames] = bin_ix
+        bin_counts[phase_frames] = bin_ix + (ngoals* phase_bins* bin_count)
+        if goal_rew_vec[i]==3:
+            bin_count += 1
+
+    av_position_perlag = np.zeros(np.max(bin_counts).astype(int)+1)
+    for i in np.unique(bin_counts).astype(int):
+        av_position_perlag[i] = np.max(session['position'][np.where(bin_counts==i)])
+    n_counts = np.unique(bin_counts).astype(int)
+    n_counts = n_counts[n_counts>0]
+    all_lags = range(phase_bins*ngoals)
+    all_lag_positions = np.zeros((len(all_lags), len(session['position'])))
+    for lag in all_lags:
+        lagged_position = np.full_like(session['position'], np.nan, dtype=float)
+        for i in n_counts:
+            lagged_position[np.where(bin_counts==i)[0].astype(int)] = av_position_perlag[i-lag]
+        all_lag_positions[lag] = lagged_position
+    
+    dF_cell = extract_cell_trace(dF, cell, plot=False, session=None)
+    dF_cell = dF_cell[1:]  # Remove the first frame to match the length of positions
+    gp_mask = gp_mask[1:]  # Remove the first frame to match the length of positions
+    if mask_pref:
+        dF_cell[np.where(gp_mask==0)] = np.nan
+
+    #firing rate for example cell for all lags by positions
+    all_lag_fr = np.zeros((len(all_lags), n_pos_bins-1))
+    for lag in all_lags:
+        test_lag = all_lag_positions[lag]  
+        pos_bins = np.linspace(np.nanmin(test_lag), np.nanmax(test_lag), n_pos_bins)
+        av_fr = np.zeros(n_pos_bins-1)
+        for i in range(len(pos_bins)-1):
+            bin_mask = (test_lag >= pos_bins[i]) & (test_lag < pos_bins[i+1])
+            av_fr[i] = np.nanmean(dF_cell[bin_mask])
+        all_lag_fr[lag] = av_fr
+    
+    if plot:
+        plt.figure(figsize=(2, 5))
+        zscore_av_binned_all = stats.zscore(all_lag_fr, axis=1, nan_policy='omit')
+        plt.imshow(zscore_av_binned_all, aspect='auto', cmap='viridis',interpolation='none')
+        plt.xlabel('Position bin')
+        plt.ylabel('Lag')
+    
+    return all_lag_fr
+
+#old
+def get_lagged_correlation(data_dict,roicat_data, cell,interest_stage, phase_bins, n_pos_bins,  plot=False):
+    """
+    Get the correlation of a cell's firing rate to lagged positions based on task state bins (n_bins*n_goals).
+    """
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    if cells.size == 0:
+        print(f"Cell {cell} not found in any session for stage {interest_stage}.")
+        return None
+    session_num = len(data_dict.keys())
+    all_lags = range(phase_bins*4)  # Assuming 4 goals for now, can be modified for different number of goals
+    all_session_lag_fr = np.zeros((session_num, len(all_lags), n_pos_bins-1))
+    for i,stage in enumerate(data_dict.keys()):
+        dF = data_dict[stage]['dF']
+        session = data_dict[stage]['session']
+        cell_id = cells[i]  # Get the cell ID for this session
+        if cell_id == 0:  # Skip if cell ID is 0 (not identified)
+            print(f"Cell {cell} not found in session {stage}, skipping.")
+            continue
+        all_lag_fr = get_lagged_positions(dF, cell_id, session, phase_bins, n_pos_bins,plot=False)
+        all_session_lag_fr[i] = all_lag_fr
+
+    #if this cell is found in more than 2 sessions, calculate the correlation of the firing rate to lagged positions across sessions
+    valid_sessions = np.sum(cells != 0)
+    if valid_sessions < 3:
+        print(f"Cell {cell} found in only {valid_sessions} sessions, skipping correlation calculation.")
+        return None
+    lag_corrs = np.zeros((len(all_lags), session_num, session_num))
+    for lag in range(len(all_lags)):
+        for i in range(session_num):
+            #if that session has no identified cell, skip it
+            if np.all(all_session_lag_fr[i,lag] == 0):
+                continue
+            for j in range(i+1, session_num):
+                if np.all(all_session_lag_fr[j,lag] == 0):
+                    continue
+                #ignore nans in the correlation
+                valid_mask = ~np.isnan(all_session_lag_fr[i,lag]) & ~np.isnan(all_session_lag_fr[j,lag])
+                corr = np.corrcoef(all_session_lag_fr[i,lag][valid_mask], all_session_lag_fr[j,lag][valid_mask])[0, 1]
+                lag_corrs[lag, i, j] = corr
+    #average the upper triangle of the correlation matrices for each lag
+    avg_lag_corrs = np.zeros(len(all_lags))
+    std_lag_corrs = np.zeros(len(all_lags))
+    for lag in range(len(all_lags)):
+        upper_triangle = lag_corrs[lag][np.triu_indices(session_num, k=1)]
+        avg_lag_corrs[lag] = np.nanmean(upper_triangle)
+        std_lag_corrs[lag] = np.nanstd(upper_triangle)
+    if plot:
+        plt.figure(figsize=(5, 2))
+        plt.plot(avg_lag_corrs)
+        plt.fill_between(range(len(all_lags)), avg_lag_corrs-std_lag_corrs, avg_lag_corrs+std_lag_corrs, alpha=0.3)
+        plt.xlabel('Lag')
+        plt.ylabel('Correlation Coefficient')
+        plt.title(f'Correlation of Cell {cell} to Lagged Positions')
+
+    return avg_lag_corrs
+
+#old
+def get_masked_lagged_correlation(data_dict,roicat_data, cell,interest_stage, phase_bins, n_pos_bins, goal_progress_dict,interest_phase,mask_pref=False, plot=False):
+    """
+    Get the correlation of a cell's firing rate to lagged positions based on task state bins (n_bins*n_goals).
+    """
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    if cells.size == 0:
+        print(f"Cell {cell} not found in any session for stage {interest_stage}.")
+        return None
+    session_num = len(data_dict.keys())
+    all_lags = range(phase_bins*4)  # Assuming 4 goals for now, can be modified for different number of goals
+    all_session_lag_fr = np.zeros((session_num, len(all_lags), n_pos_bins-1))
+    for i,stage in enumerate(data_dict.keys()):
+        dF = data_dict[stage]['dF']
+        session = data_dict[stage]['session']
+        gp_mask = goal_progress_dict[stage][:,interest_phase]
+        print(dF.shape)
+        print(gp_mask.shape)
+        cell_id = cells[i]  # Get the cell ID for this session
+        if cell_id == 0:  # Skip if cell ID is 0 (not identified)
+            print(f"Cell {cell} not found in session {stage}, skipping.")
+            continue
+        all_lag_fr = get_masked_lagged_positions(dF, cell_id, session, phase_bins, n_pos_bins, gp_mask,mask_pref=mask_pref,plot=False)
+        all_session_lag_fr[i] = all_lag_fr
+
+    #if this cell is found in more than 2 sessions, calculate the correlation of the firing rate to lagged positions across sessions
+    valid_sessions = np.sum(cells != 0)
+    if valid_sessions < 3:
+        print(f"Cell {cell} found in only {valid_sessions} sessions, skipping correlation calculation.")
+        return None
+    lag_corrs = np.zeros((len(all_lags), session_num, session_num))
+    for lag in range(len(all_lags)):
+        for i in range(session_num):
+            #if that session has no identified cell, skip it
+            if np.all(all_session_lag_fr[i,lag] == 0):
+                continue
+            for j in range(i+1, session_num):
+                if np.all(all_session_lag_fr[j,lag] == 0):
+                    continue
+                #ignore nans in the correlation
+                valid_mask = ~np.isnan(all_session_lag_fr[i,lag]) & ~np.isnan(all_session_lag_fr[j,lag])
+                corr = np.corrcoef(all_session_lag_fr[i,lag][valid_mask], all_session_lag_fr[j,lag][valid_mask])[0, 1]
+                lag_corrs[lag, i, j] = corr
+    #average the upper triangle of the correlation matrices for each lag
+    avg_lag_corrs = np.zeros(len(all_lags))
+    std_lag_corrs = np.zeros(len(all_lags))
+    for lag in range(len(all_lags)):
+        upper_triangle = lag_corrs[lag][np.triu_indices(session_num, k=1)]
+        avg_lag_corrs[lag] = np.nanmean(upper_triangle)
+        std_lag_corrs[lag] = np.nanstd(upper_triangle)
+    if plot:
+        plt.figure(figsize=(5, 2))
+        plt.plot(avg_lag_corrs)
+        plt.fill_between(range(len(all_lags)), avg_lag_corrs-std_lag_corrs, avg_lag_corrs+std_lag_corrs, alpha=0.3)
+        plt.xlabel('Lag')
+        plt.ylabel('Correlation Coefficient')
+        plt.title(f'Correlation of Cell {cell} to Lagged Positions')
+
+    return avg_lag_corrs
+
+#old
+def plot_lagged_placefield(data_dict,roicat_data, cell,interest_stage, phase_bins, n_pos_bins):
+    
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    if cells.size == 0:
+        print(f"Cell {cell} not found in any session for stage {interest_stage}.")
+        return None
+    session_num = len(data_dict.keys())
+    all_lags = range(phase_bins*4)  # Assuming 4 goals for now, can be modified for different number of goals
+    all_session_lag_fr = np.zeros((session_num, len(all_lags), n_pos_bins-1))
+    for i,stage in enumerate(data_dict.keys()):
+        dF = data_dict[stage]['dF']
+        session = data_dict[stage]['session']
+        cell_id = cells[i]  # Get the cell ID for this session
+        if cell_id == 0:  # Skip if cell ID is 0 (not identified)
+            print(f"Cell {cell} not found in session {stage}, skipping.")
+            continue
+        all_lag_fr = get_lagged_positions(dF, cell_id, session, phase_bins, n_pos_bins, plot=False)
+        all_session_lag_fr[i] = all_lag_fr
+    
+    avg_lag_corrs = get_lagged_correlation(data_dict,roicat_data, cell,interest_stage, phase_bins, n_pos_bins, plot=False)
+    #one one side plot all place fields in subplots, on the other side plot the average correlation to lagged positions across sessions
+
+    plt.figure(figsize=(3, 10))
+    for lag in range(len(all_lags)):
+        plt.subplot(len(all_lags), 1, lag+1)
+        #ignore nans and zscore across sessions for each lag
+        zscore_av_binned_all = stats.zscore(all_session_lag_fr[:,lag,:], axis=1, nan_policy='omit')
+        #cut the zscore_av_binned_all to only show the part with valid data (cells is not 0)
+        valid_cells = cells != 0
+        zscore_av_binned_all = zscore_av_binned_all[valid_cells, :]
+
+        plt.imshow(zscore_av_binned_all, aspect='auto', cmap='viridis',interpolation='none')
+        plt.xlabel('Position bin')
+        plt.title(f'Lag {lag}', fontsize=6, loc='right')
+
+    plt.figure(figsize=(5, 2))
+    plt.plot(avg_lag_corrs)
+    plt.axhline(0, color='gray', linestyle='dashed', linewidth=1)
+    plt.xlabel('Lag')
+    plt.ylabel('Correlation Coefficient')
+    plt.title(f'Correlation of Cell {cell} to Lagged Positions')
+    plt.show()  
+
+#old
+def plot_masked_lagged_placefield(data_dict,roicat_data, cell,interest_stage, phase_bins, n_pos_bins, goal_progress_dict,interest_phase, mask_pref=False):
+    
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    if cells.size == 0:
+        print(f"Cell {cell} not found in any session for stage {interest_stage}.")
+        return None
+    session_num = len(data_dict.keys())
+    all_lags = range(phase_bins*4)  # Assuming 4 goals for now, can be modified for different number of goals
+    all_session_lag_fr = np.zeros((session_num, len(all_lags), n_pos_bins-1))
+    for i,stage in enumerate(data_dict.keys()):
+        dF = data_dict[stage]['dF']
+        session = data_dict[stage]['session']
+        gp_mask = goal_progress_dict[stage][:,interest_phase]
+        cell_id = cells[i]  # Get the cell ID for this session
+        if cell_id == 0:  # Skip if cell ID is 0 (not identified)
+            print(f"Cell {cell} not found in session {stage}, skipping.")
+            continue
+        all_lag_fr = get_masked_lagged_positions(dF, cell_id, session, phase_bins, n_pos_bins, gp_mask, mask_pref=mask_pref, plot=False)
+        all_session_lag_fr[i] = all_lag_fr
+    
+    avg_lag_corrs = get_masked_lagged_correlation(data_dict,roicat_data, cell,interest_stage, phase_bins, n_pos_bins, goal_progress_dict,interest_phase,mask_pref=mask_pref, plot=False)
+    
+    #one one side plot all place fields in subplots, on the other side plot the average correlation to lagged positions across sessions
+
+    plt.figure(figsize=(3, 10))
+    for lag in range(len(all_lags)):
+        plt.subplot(len(all_lags), 1, lag+1)
+        #ignore nans and zscore across sessions for each lag
+        zscore_av_binned_all = stats.zscore(all_session_lag_fr[:,lag,:], axis=1, nan_policy='omit')
+        #cut the zscore_av_binned_all to only show the part with valid data (cells is not 0)
+        valid_cells = cells != 0
+        zscore_av_binned_all = zscore_av_binned_all[valid_cells, :]
+
+        plt.imshow(zscore_av_binned_all, aspect='auto', cmap='viridis',interpolation='none')
+        plt.xlabel('Position bin')
+        plt.title(f'Lag {lag}', fontsize=6, loc='right')
+
+    plt.figure(figsize=(5, 2))
+    plt.plot(avg_lag_corrs)
+    plt.axhline(0, color='gray', linestyle='dashed', linewidth=1)
+    plt.xlabel('Lag')
+    plt.ylabel('Correlation Coefficient')
+    plt.title(f'Correlation of Cell {cell} to Lagged Positions')
+    plt.show()  
+
+def extract_gp_vector(data_dict,roicat_data, cell,interest_stage, phase_bins):
+
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    if cells.size == 0:
+        print(f"Cell {cell} not found in any session for stage {interest_stage}.")
+        return None
+    session_num = len(data_dict.keys())
+    all_session_binned = np.zeros((session_num, phase_bins))  # Assuming 4 goals for now, can be modified for different number of goals
+    for i,stage in enumerate(data_dict.keys()):
+        dF = data_dict[stage]['dF']
+        session = data_dict[stage]['session']
+        cell_id = cells[i]  # Get the cell ID for this session
+        if cell_id == 0:  # Skip if cell ID is 0 (not identified)
+            print(f"Cell {cell} not found in session {stage}, skipping.")
+            continue
+        binned_phase_firing,avg_bin, _ = extract_goal_progress_unsorted(dF, cell_id, session, frame_rate=45, bins=phase_bins, plot=False, shuffle=False)
+        all_session_binned[i] = avg_bin
+    
+    return all_session_binned
+
+def correlate_gp_vector(data_dict,roicat_data, cell,interest_stage, phase_bins):
+
+    all_session_binned = extract_gp_vector(data_dict,roicat_data, cell,interest_stage, phase_bins)
+    if all_session_binned is None:
+        return None
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    valid_sessions = np.sum(cells != 0)
+    if valid_sessions < 2:
+        print(f"Cell {cell} found in only {valid_sessions} sessions, skipping correlation calculation.")
+        return None
+    session_num = all_session_binned.shape[0]
+    correlations = np.zeros((session_num, session_num))
+    for i in range(session_num):
+        for j in range(i+1, session_num):
+            valid_mask = ~np.isnan(all_session_binned[i]) & ~np.isnan(all_session_binned[j])
+            corr = np.corrcoef(all_session_binned[i][valid_mask], all_session_binned[j][valid_mask])[0, 1]
+            correlations[i, j] = corr
+            correlations[j, i] = corr
+    upper_triangle = correlations[np.triu_indices(session_num, k=1)]
+    av_correlation = np.nanmean(upper_triangle)
+    print(f"Average correlation of GP vector for cell {cell} across sessions: {av_correlation:.2f}")
+    
+    return av_correlation
+
+def extract_state_angle(data_dict,roicat_data, cell,interest_stage, phase_bins,n_goals):
+
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    if cells.size == 0:
+        print(f"Cell {cell} not found in any session for stage {interest_stage}.")
+        return None, None, None # Return None for all outputs if cell is not found
+    session_num = len(data_dict.keys())
+    all_session_binned = np.zeros((session_num, phase_bins*n_goals))  # Assuming 4 goals for now, can be modified for different number of goals
+    phase_preference = np.zeros(session_num)
+    state_preference = np.zeros(session_num)
+    for i,stage in enumerate(data_dict.keys()):
+        dF = data_dict[stage]['dF']
+        session = data_dict[stage]['session']
+        cell_id = cells[i]  # Get the cell ID for this session
+        if cell_id == 0:  # Skip if cell ID is 0 (not identified)
+            print(f"Cell {cell} not found in session {stage}, skipping.")
+            continue
+        av_binned,sem_bin,real_score,shuffled_scores,phase_pref,state_pref,state_score =  calc_goal_tuningix(dF, cell_id, session, condition='goal',event_frames=None,n_goals=n_goals, frame_rate=45, bins=phase_bins, shuffle=False,plot=False)
+        
+        all_session_binned[i] = av_binned
+        phase_preference[i] = phase_pref
+        state_preference[i] = state_pref
+
+    return all_session_binned, phase_preference, state_preference
+
+def correlate_gp_vector(data_dict,roicat_data, cell,interest_stage, phase_bins):
+
+    all_session_binned = extract_gp_vector(data_dict,roicat_data, cell,interest_stage, phase_bins)
+    if all_session_binned is None:
+        return None
+    data_row = roicat_data[interest_stage]
+    cool_cell_idx = np.where(np.isin(data_row, cell))[0]
+    cells = roicat_data[:,cool_cell_idx]
+    cells = cells.astype(int).flatten()
+    valid_sessions = np.sum(cells != 0)
+    if valid_sessions < 2:
+        print(f"Cell {cell} found in only {valid_sessions} sessions, skipping correlation calculation.")
+        return None
+    session_num = all_session_binned.shape[0]
+    correlations = np.zeros((session_num, session_num))
+    for i in range(session_num):
+        for j in range(i+1, session_num):
+            valid_mask = ~np.isnan(all_session_binned[i]) & ~np.isnan(all_session_binned[j])
+            corr = np.corrcoef(all_session_binned[i][valid_mask], all_session_binned[j][valid_mask])[0, 1]
+            correlations[i, j] = corr
+            correlations[j, i] = corr
+    upper_triangle = correlations[np.triu_indices(session_num, k=1)]
+    av_correlation = np.nanmean(upper_triangle)
+    print(f"Average correlation of GP vector for cell {cell} across sessions: {av_correlation:.2f}")
+    
+    return av_correlation
