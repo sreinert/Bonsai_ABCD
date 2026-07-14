@@ -1344,8 +1344,38 @@ def divide_laps(sess_dataframe, ses_settings):
     corridor_length = calculate_corr_length(ses_settings)
     num_laps = int(np.ceil(sess_dataframe['Position'].max() / corridor_length))
 
-    #for each position, determine which lap it belongs to
-    sess_dataframe['Lap'] = (sess_dataframe['Position'] // corridor_length).astype(int)
+    #for each position, determine which lap it belongs to - does not work because position is shorter than corridor length should be.. 
+    # sess_dataframe['Lap'] = (sess_dataframe['Position'] // corridor_length).astype(int)
+
+    #find indices where the first odour of the next lap is reached
+    release_indices = sess_dataframe.index[sess_dataframe['Events'] == 'release: odour14'].tolist()
+    sess_dataframe['Lap'] = np.zeros(len(sess_dataframe), dtype=int)
+    if len(release_indices) < num_laps:
+        print(f"Warning: Number of release events ({len(release_indices)}) is less than expected number of laps ({num_laps}). Some release is missing - CHECK.")
+
+
+    corridor_flips = []
+    for i in range(1, int((sess_dataframe['Position'].max() / corridor_length)) + 1):
+        flip_index = sess_dataframe.index[sess_dataframe['Position'] >= i * corridor_length][0]
+        corridor_flips.append(flip_index)
+    corridor_flips = sess_dataframe.index[0:1].tolist() + corridor_flips  # Add the starting index for the first corridor flip
+    select_indices = []
+    count = 0
+    for i in range(1, num_laps):
+        if i - count >= len(release_indices):
+            min_index = corridor_flips[i]
+        else:
+            #select the smaller index either release_indices or corridor_flips for each corridor flip
+            min_index = min(release_indices[i-count], corridor_flips[i]) 
+            if min_index == corridor_flips[i]:
+                count += 1
+        select_indices.append(min_index)
+
+    for i in range(1,num_laps):
+        if i < num_laps - 1:
+            sess_dataframe.loc[select_indices[i-1]:select_indices[i], 'Lap'] = i
+        else:
+            sess_dataframe.loc[select_indices[i-1]:, 'Lap'] = i
 
     return num_laps, sess_dataframe
 
@@ -1576,6 +1606,26 @@ def calc_speed_per_lap(sess_dataframe, ses_settings):
     sem_speed_per_bin = std_speed_per_bin/np.sqrt(num_laps)
 
     return speed_per_bin
+
+def calc_lick_rate_per_lap(sess_dataframe, ses_settings):
+    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    #max position is the max of all positions where lap id is 0
+    max_position = sess_dataframe['Position'][sess_dataframe['Lap'] == 0].max()
+    max_position = np.round(max_position).astype(int)
+
+    bins = 160
+    licks_per_bin = np.zeros((num_laps, bins))
+    bin_edges = np.linspace(0, max_position, bins+1)
+    #save lap_number as a variable with the same length as the position log
+    for i in range(num_laps):
+        lap_idx = np.where(sess_dataframe['Lap']==i)[0]
+        #find overlapping values in lick_idx and lap_idx -> changed to thresholded_lick_idx
+        overlap = np.intersect1d(np.where(sess_dataframe['Licks']), lap_idx)
+        licks_per_lap = np.array(sess_dataframe['Position'].iloc[overlap] - sess_dataframe['Position'].iloc[lap_idx].min())
+        licks_per_bin[i], _ = np.histogram(licks_per_lap, bins=bin_edges)
+
+    return licks_per_bin
 
 def plot_speed_per_state(sess_dataframe, ses_settings):
 
