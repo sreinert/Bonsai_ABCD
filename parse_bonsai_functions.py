@@ -163,7 +163,8 @@ def load_data(base_path):
 
     if os.path.exists(Path(base_path) / "behav/current-landmark/"):
         
-        lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited"])
+        lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited","RewDel","IsGap","Boundary"])
+        # lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited"])
         # lm_reader = Csv("behav/current-landmark/*", ["Seconds","Size","Texture","Odour","SequencePosition","Position","Visited","Unknown"])
         lm_data = aeon.load(Path(base_path), lm_reader)
         #if datatype of 'Odour' is not string, reload the file
@@ -2029,7 +2030,7 @@ def estimate_lm_events(sess_dataframe, ses_settings):
         'Odour': lm_odour
     }).set_index('time')
 
-    if lm_df['Position'].iloc[0] != 0:
+    if lm_df['Position'].iloc[0] != 0 and not 'initialCorridorOffset' in ses_settings:
         # Add initial landmark at position 0 if not present
         initial_lm = pd.DataFrame({
             'time': [sess_dataframe.index[0]], #set the index to the first time point to make alignment work
