@@ -1422,7 +1422,7 @@ def give_state_id(sess_dataframe,ses_settings):
             else:
                 defining_goal_2 = goals[2]
 
-        for i in range(0,num_laps-1):
+        for i in range(0,len(rewarded_all_reshaped)-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
             if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
@@ -1444,7 +1444,7 @@ def give_state_id(sess_dataframe,ses_settings):
             else:
                 defining_goal_3 = goals[2]
 
-        for i in range(0,num_laps-1):
+        for i in range(0,len(rewarded_all_reshaped)-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
             if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
