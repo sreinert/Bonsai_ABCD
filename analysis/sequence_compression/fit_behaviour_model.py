@@ -7,6 +7,7 @@ import importlib
 from pathlib import Path
 import argparse
 from collections import Counter
+from joblib import Parallel, delayed
 
 # sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -33,7 +34,6 @@ else:
 save_root = f"{ROOT}/AtAp_20260119_SequenceCompression/behaviour_modelling"
 if not os.path.exists(save_root):
     os.makedirs(save_root, exist_ok=True)
-
 
 def find_X_Y_distance_and_positions(x_entry_idx, y_entry_idx, num_Ys, reward_positions=None, rewarded_Xs=True):
     
@@ -372,7 +372,7 @@ def calc_distance_from_rew_p_lick(x_entry_idx, y_entry_idx, lick_position, rewar
 
 def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZE, num_Ys, 
                        d, beta_switch, beta_lick, sigma_d=0.05, sigma_period=0.5, beta_period=0.01, 
-                       n_runs=20, seed=None):
+                       p0=0.05, n_runs=20):
     """
     Run one complete simulation. The data returned are exactly the same as the mouse data. 
 
@@ -382,8 +382,6 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
     lick_prob
     """
 
-    # rng = np.random.default_rng(seed)
-    
     probs = [] 
 
     for _ in range(n_runs):
@@ -434,6 +432,10 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
         dist_since_reward = 0
         skip = 0
         dist_thres = False
+        periodic_regime = False
+
+        # distance threshold estimate - reset once reward is found
+        # d_hat = d * np.exp(np.random.normal(0, sigma_d))
 
         while len(next_lm) > 0:
             # distance threshold estimate
@@ -444,13 +446,17 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
             p_periodic = 1 - p_distance
 
             ### --- Periodic regime --- ###
-            if np.random.random() < p_periodic:
+            if np.random.rand() < p_periodic:
+                # periodic_regime = True
+
+                # while periodic_regime:
                 skip += 1 
 
                 if skip >= sampled_period:
                     # on the way to the current estimated period 
                     while len(next_lm) > 0:
                         if len(next_lm) <= sampled_period - 1:
+                            # periodic_regime = False
                             end_reached = True
                             break
 
@@ -472,23 +478,30 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
                                 break
 
                         if dist_since_reward >= d_hat:
-                        # if dist_since_reward >= d:
                             dist_thres = True
+                            # periodic_regime = False
                             break 
 
-                        # lick until reward is eventually found
+                        # stochastically lick until reward is eventually found
                         while next_lick not in x_idx:
                             next_lm = next_lm[next_lm > current_lm]
 
                             if len(next_lm) <= sampled_period - 1:
+                                # periodic_regime = False
                                 end_reached = True
                                 break
 
-                            next_lick = next_lm[0]
-                            licks[next_lick] = 1
-                            current_lm = next_lick
-                            
+                            step = next_lm[0] - current_lm
+                            dist_since_reward += step
+                            current_lm = next_lm[0]
+
+                            p_visit = p0 + (1 - p0) * (1 - np.exp(-beta_lick * dist_since_reward / d_hat))
+                            if np.random.rand() < p_visit:
+                                next_lick = current_lm
+                                licks[next_lick] = 1
+                                
                         if end_reached:
+                            # periodic_regime = False
                             break 
 
                         # reward found
@@ -499,17 +512,21 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
                             effective_sigma = sigma_period
                         else:
                             effective_sigma = beta_period * dist_since_reward
+                            
                         sampled_period = max(1, int(np.round(np.random.normal(period, effective_sigma))))
                         periods.append(sampled_period)
                         d_hat = d * np.exp(np.random.normal(0, sigma_d))
 
+                        # reset values
                         dist_since_reward = 0
-                        skip = 0                        
+                        skip = 0     
+                        # periodic_regime = False                   
 
                         # update future landmarks
                         next_lm = next_lm[next_lm > current_lm]
                     
                     if end_reached:
+                        # periodic_regime = False
                         break
 
                 # advance
@@ -520,15 +537,15 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
                         dist_since_reward += step
                         current_lm = next_lm[0]
 
-            ### --- Distance-triggered regime: lick everything until reward --- ###
+            ### --- Distance-triggered regime: stochastically lick everything until reward --- ###
             else:
                 while len(next_lm) > 0:
             
                     # stochastically choose whether to lick or not until reward is found
-                    p_visit = 1 - np.exp(-beta_lick * dist_since_reward / d_hat)                    
+                    p_visit = p0 + (1 - p0) * (1 - np.exp(-beta_lick * dist_since_reward / d_hat))
                     # p_visit = np.clip(p_visit, 0.05, 0.99)
 
-                    if np.random.random() < p_visit:
+                    if np.random.rand() < p_visit:
                         next_lick = current_lm
                         licks[next_lick] = 1
 
@@ -568,7 +585,7 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
         XX_diff, XY_diff, lick_prob, _, _, _ = calc_distance_from_rew_p_lick(x_entry_idx, y_entry_idx, licks_idx, rewards_idx, lm_size=LM_SIZE, num_Ys=num_Ys, plot=False)
         probs.append(lick_prob) 
 
-    # Calculate bin centers 
+    # Calculate bin centers - using values from last run
     all_distances = np.concatenate([XX_diff, XY_diff.flatten()])
     bins = np.linspace(np.min(all_distances), np.max(all_distances), 20)
     bin_centers = (bins[:-1] + bins[1:]) / 2
@@ -576,7 +593,7 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
     return bin_centers, np.mean(probs, axis=0)
 
 def loss(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZE, num_Ys, 
-         d, beta_switch, beta_lick, beta_period, p_mouse, n_runs=20, seed=None):
+         d, beta_switch, beta_lick, beta_period, p_mouse, p0=0.05, n_runs=20):
 
     _, p_model = simulate_strategy4(
         x_entry_idx=x_entry_idx,
@@ -590,8 +607,8 @@ def loss(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZE, num_Ys,
         beta_switch=beta_switch,
         beta_lick=beta_lick,
         beta_period=beta_period,
+        p0=p0,
         n_runs=n_runs,
-        seed=seed,
     )
 
     assert p_model.shape == p_mouse.shape
@@ -603,6 +620,42 @@ def loss(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZE, num_Ys,
 
     return mse
 
+def evaluate_params(
+    params,
+    x_entry_idx,
+    y_entry_idx,
+    x_idx,
+    lm_idx,
+    corridor,
+    LM_SIZE,
+    num_Ys,
+    p_mouse,
+):
+    d, beta_switch, beta_lick, beta_period = params
+
+    L = loss(
+        x_entry_idx,
+        y_entry_idx,
+        x_idx,
+        lm_idx,
+        corridor,
+        LM_SIZE,
+        num_Ys,
+        d,
+        beta_switch,
+        beta_lick,
+        beta_period,
+        p_mouse,
+        n_runs=10,
+    )
+
+    return {
+        "d": d,
+        "beta_switch": beta_switch,
+        "beta_lick": beta_lick,
+        "beta_period": beta_period,
+        "loss": L,
+    }
 
 def main():
     #%% Create corridor 
@@ -643,55 +696,42 @@ def main():
     beta_lick_grid = np.linspace(0.05, 10, grid_size)
     beta_period_grid = np.linspace(0.01, 10, grid_size)
 
-    losses = []
-    best_loss = np.inf
-    best_params = None
+    param_grid = [
+        (d, beta_switch, beta_lick, beta_period)
+        for d in d_grid
+        for beta_switch in beta_switch_grid
+        for beta_lick in beta_lick_grid
+        for beta_period in beta_period_grid
+    ]
 
-    for d in d_grid:
+    results = Parallel(
+        n_jobs=4,
+        verbose=10,
+    )(
+        delayed(evaluate_params)(
+            params,
+            x_entry_idx,
+            y_entry_idx,
+            x_idx,
+            lm_idx,
+            corridor,
+            LM_SIZE,
+            num_Ys,
+            p_mouse,
+        )
+        for params in param_grid
+    )
 
-        for beta_switch in beta_switch_grid:
+    best_result = min(
+        results,
+        key=lambda x: x["loss"]
+    )
 
-            for beta_lick in beta_lick_grid:
-
-                for beta_period in beta_period_grid:
-
-                    L = loss(
-                        x_entry_idx,
-                        y_entry_idx,
-                        x_idx,
-                        lm_idx,
-                        corridor,
-                        LM_SIZE,
-                        num_Ys,
-                        d,
-                        beta_switch,
-                        beta_lick,
-                        beta_period,
-                        p_mouse,
-                        n_runs=10,
-                        seed=None
-                    )
-
-                    losses.append(L)
-                    
-                    if L < best_loss:
-                        best_loss = L
-                        best_params = (
-                            d,
-                            beta_switch,
-                            beta_lick,
-                            beta_period
-                        )
-
-    print(best_loss)
-    print(best_params)
-
-    plt.figure()
-    plt.plot(losses)
-    plt.show()
+    print("Best parameters:")
+    print(best_result)
 
     #%% Run simulation using best fit parameters
-    best_d, best_beta_switch, best_beta_lick, best_beta_period = best_params
+    # best_d, best_beta_switch, best_beta_lick, best_beta_period = best_params
 
     x_model, p_model = simulate_strategy4(
         x_entry_idx,
@@ -701,12 +741,11 @@ def main():
         corridor,
         LM_SIZE,
         num_Ys,
-        d=best_d,
-        beta_switch=best_beta_switch,
-        beta_lick=best_beta_lick,
-        beta_period=best_beta_period,
-        n_runs=100,
-        seed=None,
+        d=best_result["d"],
+        beta_switch=best_result["beta_switch"],
+        beta_lick=best_result["beta_lick"],
+        beta_period=best_result["beta_period"],
+        n_runs=10,
     )
 
     # Plot mouse vs model 
@@ -764,7 +803,7 @@ def main():
             axs[0].set_ylabel('Prob first lick')
             axs[0].set_title('Mouse')
             axs[0].set_xlabel('Distance A → ')
-            all_distances = np.concatenate([behav_data["A_A_diff"], behav_data["A_B_diff"].flatten()])
+            all_distances = np.concatenate([behav_data["A_A_diff"], np.concatenate(behav_data['A_B_diff'].flatten())])
             xmin = np.round(np.min(all_distances))
             xmax = np.round(np.max(all_distances))
             axs[0].set_xticks([xmin, xmax])
@@ -804,7 +843,7 @@ def main():
                 text.set_color(color)
 
         plt.suptitle(f"{parse_session_functions.format_condition_label(cond=cond)} sub-{mouse}\n\
-                d={best_params[0]}, beta_switch={np.round(best_params[1],2)}, beta_lick={np.round(best_params[2],2)}, beta_period={np.round(best_params[3],2)}")
+                d={best_result["d"]}, beta_switch={np.round(best_result["beta_switch"],2)}, beta_lick={np.round(best_result["beta_lick"],2)}, beta_period={np.round(best_result["beta_period"],2)}")
         plt.tight_layout()
 
         mouse_save_path = os.path.join(save_root, f'strategy4', 'mouse_fits', f'sub-{mouse}')
@@ -813,8 +852,6 @@ def main():
 
         plt.savefig(mouse_save_path + f'/{parse_session_functions.format_condition_label(pattern=pattern)}.png')
         plt.savefig(mouse_save_path + f'/{parse_session_functions.format_condition_label(pattern=pattern)}.svg', format="svg")
-
-            
 
 
 if __name__ == "__main__":
