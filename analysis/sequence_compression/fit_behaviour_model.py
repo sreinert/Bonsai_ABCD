@@ -460,22 +460,22 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
                             end_reached = True
                             break
 
-                        target_lm = next_lm[sampled_period - 1]
+                            target_lm = next_lm[sampled_period - 1]
 
-                        # check distance from last reward
-                        while dist_since_reward < d_hat:
-                            step = next_lm[0] - current_lm
-                            dist_since_reward += step
+                            # check distance from last reward
+                            while dist_since_reward < d_hat:
+                                step = next_lm[0] - current_lm
+                                dist_since_reward += step
 
-                            # advance
-                            current_lm = next_lm[0]
-                            next_lm = next_lm[next_lm > current_lm]
+                                # advance
+                                current_lm = next_lm[0]
+                                next_lm = next_lm[next_lm > current_lm]
 
-                            # lick at target lm  
-                            if current_lm == target_lm:
-                                next_lick = current_lm
-                                licks[next_lick] = 1
-                                break
+                                # lick at target lm  
+                                if current_lm == target_lm:
+                                    next_lick = current_lm
+                                    licks[next_lick] = 1
+                                    break
 
                         if dist_since_reward >= d_hat:
                             dist_thres = True
@@ -504,8 +504,8 @@ def simulate_strategy4(x_entry_idx, y_entry_idx, x_idx, lm_idx, corridor, LM_SIZ
                             # periodic_regime = False
                             break 
 
-                        # reward found
-                        rewards[next_lick] = 1
+                            # reward found
+                            rewards[next_lick] = 1
 
                         # sample new period and distance threshold
                         if dist_since_reward == 0:

@@ -19,5 +19,5 @@ source activate suite2p
 animal=TAA0000065
 session=ses-015_date-20250427_protocol-t9
 
-# python run_suite2p.py --animal ${animal} --session ${session} 
-python Convert_seg_to_stat.py 
+python run_suite2p.py --animal ${animal} --session ${session} 
+# python Convert_seg_to_stat.py 

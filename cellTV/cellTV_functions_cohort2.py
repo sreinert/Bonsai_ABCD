@@ -1281,7 +1281,8 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
             label.set_color('grey')
             label.set_fontsize(10)
             
-        ax.set_rticks([np.round(np.max(avg_bin),1)])
+        # ax.set_rticks([np.round(np.max(avg_bin),1)])
+        ax.set_rticks([])
 
     if heatmap:
         if polar:

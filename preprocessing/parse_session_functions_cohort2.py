@@ -65,16 +65,16 @@ def load_config(base_path):
     return options
 
 def find_session_base_path(mouse, date, root):
-    data_dir = root + mouse
+    data_dir = os.path.join(root, mouse)
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
     base_path = os.path.join(data_dir, sessions[0])
 
     return base_path
 
-def find_base_path(mouse, date):
-    root = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'
-    data_dir = root + mouse
+def find_base_path(mouse, date, root):
+    # root = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'
+    data_dir = os.path.join(root, mouse)
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
     if not sessions:
@@ -103,8 +103,8 @@ def find_base_path(mouse, date):
         # print(base_path)
     return base_path
 
-def find_base_path_npz(mouse, date):
-    data_dir = '/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
+def find_base_path_npz(mouse, date, root):
+    data_dir = os.path.join(root, mouse)
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
     base_path = os.path.join(data_dir, sessions[0])
@@ -1645,8 +1645,8 @@ def create_session_struct(data, options):
                'speed': speed}
     return session
 
-def analyse_session(mouse, date, plot=True):
-    base_path = find_base_path(mouse, date)
+def analyse_session(mouse, date, root, plot=True):
+    base_path = find_base_path(mouse, date, root)
     data = load_session(base_path)
     options = load_config(base_path)
     session = create_session_struct(data, options)
@@ -1679,8 +1679,8 @@ def analyse_session(mouse, date, plot=True):
 
     return session
 
-def analyse_session_pre7(mouse, date):
-    base_path = find_base_path(mouse, date)
+def analyse_session_pre7(mouse, date, root):
+    base_path = find_base_path(mouse, date, root)
     data = load_session(base_path)
     options = load_config(base_path)
     session = create_session_struct(data, options)
@@ -1749,10 +1749,10 @@ def analyse_session_pre7_behav(base_path, mouse, date, stage):
 
     return session
 
-def analyse_npz(mouse, date, stage, plot=True): 
-    base_path = find_base_path_npz(mouse, date)
+def analyse_npz(mouse, date, stage, root, plot=True): 
+    base_path = find_base_path_npz(mouse, date, root)
     data = load_session_npz(base_path)
-    base_path2 = find_base_path(mouse, date)
+    base_path2 = find_base_path(mouse, date, root)
     options = load_config(base_path2)
     
     session = create_session_struct_npz(data, options)
@@ -1797,14 +1797,14 @@ def analyse_npz(mouse, date, stage, plot=True):
 
     return session
 
-def analyse_npz_pre7(mouse, date, stage, plot=True):
+def analyse_npz_pre7(mouse, date, stage, root, plot=True):
 
     if '3' not in stage and '4' not in stage and '5' not in stage and '6' not in stage:
         raise ValueError('This function only works for T3-T6.')
     
-    base_path = find_base_path_npz(mouse, date)
+    base_path = find_base_path_npz(mouse, date, root)
     data = load_session_npz(base_path)
-    base_path2 = find_base_path(mouse, date)
+    base_path2 = find_base_path(mouse, date, root)
     options = load_config(base_path2)
 
     session = create_session_struct_npz(data, options)
@@ -2424,7 +2424,7 @@ def get_lick_types(session, VR_data, nidaq_data):
             
     return licks
 
-def get_first_licks(session, VR_data=None, nidaq_data=None):
+def get_first_licks(session, root, VR_data=None, nidaq_data=None):
     """
     Get the first lick from each type in a block of licks
 
@@ -2440,11 +2440,11 @@ def get_first_licks(session, VR_data=None, nidaq_data=None):
 
     # Load data if needed
     if VR_data is None:
-        base_path2 = find_base_path(session['mouse'], session['date'])
+        base_path2 = find_base_path(session['mouse'], session['date'], root)
         VR_data = load_session(base_path2)
 
     if nidaq_data is None:
-        base_path = find_base_path_npz(session['mouse'], session['date'])
+        base_path = find_base_path_npz(session['mouse'], session['date'], root)
         nidaq_data = load_session_npz(base_path)
         
     # Get landmark entry and exit indices 

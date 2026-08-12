@@ -1951,7 +1951,6 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
 
 def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_repeats=None, condition='AB', data_type='YY_diff', bins=30, sort_heatmap=True, zscored=True, save_plot=False, plot_dir='', axes=None):
 
-    print(YY_data['temporal_XYY_firing'].keys())
     # Unwrap CPA results
     cpa_results = {
         k: v.item() if isinstance(v, np.ndarray) and v.shape == () else v
