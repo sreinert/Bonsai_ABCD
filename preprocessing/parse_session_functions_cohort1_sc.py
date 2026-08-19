@@ -165,7 +165,10 @@ def load_data(base_path):
     buffer_data['Value'] = corrected
 
     if os.path.exists(Path(base_path) / "behav/current-landmark/"):
-        lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited","RewardDelivered"])
+        if 'cohort1' in str(base_path):
+            lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited","RewardDelivered"])
+        elif 'cohort2' in str(base_path):
+            lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited","RewardDelivered","Gap","IgnoreInBoundaryCalculation"])
         lm_data = aeon.load(Path(base_path), lm_reader)
         # If RewardDelivered doesn't exist, it won't be in the dataframe
         if "RewardDelivered" not in lm_data.columns:
@@ -2214,7 +2217,6 @@ def get_disengagement_periods(A_A_dt, A_B_dt, plot=True):
         ax[i+1].set_title('A -> A')
         ax[i+1].axvline(thresholds[0], linestyle='--', color='grey')
         
-
     return ix_AA, ix_AB
       
 def compute_binned_lick_rate(distances, licks, bins):
@@ -2246,6 +2248,14 @@ def extract_int(s: str) -> int:
         return int(m.group())
     else:
         raise ValueError(f"No digits found in string: {s!r}")
+
+def get_landmarks(sess_dataframe, ses_settings):
+    # Get landmark visits (full corridor)
+    _, _, _, _, release_df = get_event_parsed(sess_dataframe, ses_settings)
+    lm_idx = np.asarray(release_df['Index'].to_numpy(), dtype=int) # TODO rename because it conflicts with another definition
+    landmarks = np.arange(len(lm_idx))
+    
+    return landmarks, lm_idx
 
 def get_A_B_landmarks(sess_dataframe, ses_settings):
     '''Find which landmarks are rewarded (A) or non-rewarded (B)'''
@@ -2793,96 +2803,96 @@ def get_speed_psth(ses_settings, sess_dataframe, events=None, bins=300):
 
     return mean_binned_speed, sem_binned_speed
 
-def plot_speed_lick_rate_psth(ses_settings, sess_dataframe, session_id, bins=None):
+# def plot_speed_lick_rate_psth(ses_settings, sess_dataframe, session_id, bins=None):
 
-    if 'LM_Count' in sess_dataframe.columns:
-        release_df = estimate_lm_events(sess_dataframe)
-    else:
-        release_df = estimate_release_events(sess_dataframe, ses_settings)
+#     if 'LM_Count' in sess_dataframe.columns:
+#         release_df = estimate_lm_events(sess_dataframe)
+#     else:
+#         release_df = estimate_release_events(sess_dataframe, ses_settings)
 
-    dt_idx = np.diff(release_df['Index'])
-    dt_seconds = release_df.index.to_series().diff().dt.total_seconds().to_numpy()
+#     dt_idx = np.diff(release_df['Index'])
+#     dt_seconds = release_df.index.to_series().diff().dt.total_seconds().to_numpy()
     
-    if bins is None:
-        min_dt_idx = np.min(dt_idx)
-        min_dt_seconds = np.nanmin(dt_seconds)
-        window_seconds = np.round(min_dt_seconds * 2, 1)
-        bins = int(min_dt_idx * 2)
-    else:
-        window_seconds = np.round(dt_seconds[1:] / dt_idx * bins, 1)
-        window_seconds = window_seconds[~np.isnan(window_seconds)][0]
+#     if bins is None:
+#         min_dt_idx = np.min(dt_idx)
+#         min_dt_seconds = np.nanmin(dt_seconds)
+#         window_seconds = np.round(min_dt_seconds * 2, 1)
+#         bins = int(min_dt_idx * 2)
+#     else:
+#         window_seconds = np.round(dt_seconds[1:] / dt_idx * bins, 1)
+#         window_seconds = window_seconds[~np.isnan(window_seconds)][0]
 
-    fig, axes = plt.subplots(1, 2, figsize=(10,4))
-    ax_speed, ax_lick = axes
+#     fig, axes = plt.subplots(1, 2, figsize=(10,4))
+#     ax_speed, ax_lick = axes
 
-    # --- Get event indices ---
-    A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
+#     # --- Get event indices ---
+#     A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
 
-    # --- Define groups dynamically ---
-    groups = {}
+#     # --- Define groups dynamically ---
+#     groups = {}
 
-    if 'abab' in session_id:
-        groups = {
-            'A': (A_idx, 'darkblue'),
-            'B': (B_idx, 'orange')
-        }
+#     if 'abab' in session_id:
+#         groups = {
+#             'A': (A_idx, 'darkblue'),
+#             'B': (B_idx, 'orange')
+#         }
 
-    elif 'aabb' in session_id or 'a2b2' in session_id:
-        groups = {
-            'A1': (A_idx[::2], 'darkblue'),
-            'A2': (A_idx[1::2], 'blue'),
-            'B1': (B_idx[::2], 'orange'),
-            'B2': (B_idx[1::2], 'gold')
-        }
+#     elif 'aabb' in session_id or 'a2b2' in session_id:
+#         groups = {
+#             'A1': (A_idx[::2], 'darkblue'),
+#             'A2': (A_idx[1::2], 'blue'),
+#             'B1': (B_idx[::2], 'orange'),
+#             'B2': (B_idx[1::2], 'gold')
+#         }
 
-    elif 'abb' in session_id and 'abbb' not in session_id:
-        groups = {
-            'A': (A_idx, 'darkblue'),
-            'B1': (B_idx[::2], 'orange'),
-            'B2': (B_idx[1::2], 'gold')
-        }
+#     elif 'abb' in session_id and 'abbb' not in session_id:
+#         groups = {
+#             'A': (A_idx, 'darkblue'),
+#             'B1': (B_idx[::2], 'orange'),
+#             'B2': (B_idx[1::2], 'gold')
+#         }
 
-    elif 'abbb' in session_id:
-        groups = {
-            'A': (A_idx, 'darkblue'),
-            'B1': (B_idx[::3], 'orange'),
-            'B2': (B_idx[1::3], 'gold'),
-            'B3': (B_idx[2::3], 'brown')
-        }
+#     elif 'abbb' in session_id:
+#         groups = {
+#             'A': (A_idx, 'darkblue'),
+#             'B1': (B_idx[::3], 'orange'),
+#             'B2': (B_idx[1::3], 'gold'),
+#             'B3': (B_idx[2::3], 'brown')
+#         }
 
-    elif 'aab' in session_id and 'aabb' not in session_id:
-        groups = {
-            'A1': (A_idx[::2], 'darkblue'),
-            'A2': (A_idx[1::2], 'blue'),
-            'B1': (B_idx, 'orange'),
-        }
+#     elif 'aab' in session_id and 'aabb' not in session_id:
+#         groups = {
+#             'A1': (A_idx[::2], 'darkblue'),
+#             'A2': (A_idx[1::2], 'blue'),
+#             'B1': (B_idx, 'orange'),
+#         }
 
-    # --- Compute + plot ---
-    for label, (events, color) in groups.items():
+#     # --- Compute + plot ---
+#     for label, (events, color) in groups.items():
 
-        (mean_s, sem_s), (mean_l, sem_l) = compute_psth_pair(
-            ses_settings, sess_dataframe, events, bins
-        )
+#         (mean_s, sem_s), (mean_l, sem_l) = compute_psth_pair(
+#             ses_settings, sess_dataframe, events, bins
+#         )
 
-        plot_psth(ax_speed, mean_s, sem_s, color, label)
-        plot_psth(ax_lick, mean_l, sem_l, color, label)
+#         plot_psth(ax_speed, mean_s, sem_s, color, label)
+#         plot_psth(ax_lick, mean_l, sem_l, color, label)
 
-    ax_speed.axhline(ses_settings['velocityThreshold'], linestyle='--', color='grey')
+#     ax_speed.axhline(ses_settings['velocityThreshold'], linestyle='--', color='grey')
 
-    # --- Styling ---
-    for ax in axes:
-        ax.legend()
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
+#     # --- Styling ---
+#     for ax in axes:
+#         ax.legend()
+#         ax.spines['top'].set_visible(False)
+#         ax.spines['right'].set_visible(False)
 
-        ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
-        ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
+#         ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
+#         ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
 
-    ax_speed.set_title('Speed')
-    ax_lick.set_title('Lick rate')
+#     ax_speed.set_title('Speed')
+#     ax_lick.set_title('Lick rate')
 
-    plt.tight_layout()
-    return fig
+#     plt.tight_layout()
+#     return fig
 
 def get_lick_rate_psth(ses_settings, sess_dataframe, events=None, bins=300):
     '''Get lick rate around landmark entry'''
@@ -3737,7 +3747,12 @@ def plot_speed_lick_rate_psth(ses_settings, sess_dataframe, session_id, bins=Non
     ax_speed, ax_lick = axes
 
     # --- Get event indices ---
-    A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
+    if 'full' in session_id:
+        landmarks, lm_idx = get_landmarks(sess_dataframe, ses_settings)
+
+    else:
+        # Binary sequence
+        A_landmarks, B_landmarks, A_idx, B_idx = get_A_B_landmarks(sess_dataframe, ses_settings)
 
     # --- Define groups dynamically ---
     groups = {}
@@ -3776,6 +3791,11 @@ def plot_speed_lick_rate_psth(ses_settings, sess_dataframe, session_id, bins=Non
             'A1': (A_idx[::2], 'darkblue'),
             'A2': (A_idx[1::2], 'blue'),
             'B1': (B_idx, 'orange'),
+        }
+
+    elif 'full' in session_id:
+        groups = {
+            'lm': (lm_idx, 'black')
         }
 
     # --- Compute + plot ---
