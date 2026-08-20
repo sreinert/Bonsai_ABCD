@@ -5,9 +5,9 @@
 #
 #SBATCH -p gpu
 #SBATCH -n 1
-#SBATCH -t 1:00:00
+#SBATCH -t 2:00:00
 #SBATCH --mem=16G
-#SBATCH --gres gpu:1
+#SBATCH --gres=gpu:a4500:1
 #SBATCH --mail-type ALL
 #SBATCH --mail-user athina.apostolelli.24@ucl.ac.uk
 
@@ -16,8 +16,9 @@
 module load mamba
 source activate suite2p 
 
-animal=TAA0000065
-session=ses-015_date-20250427_protocol-t9
+animal=TAA0000232
+session=ses-000
+basepath=AtAp_20260119_SequenceCompression/funcimg_screening
 
-python run_suite2p.py --animal ${animal} --session ${session} 
+python run_suite2p.py --animal ${animal} --session ${session} --basepath ${basepath}
 # python Convert_seg_to_stat.py 
