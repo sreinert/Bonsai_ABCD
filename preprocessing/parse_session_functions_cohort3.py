@@ -195,7 +195,10 @@ def load_dF(base_path):
     io = NWBHDF5IO(nwb_path, mode='r')
     nwb = io.read()
     nwb.processing['ophys']
-    dF_all = nwb.processing['ophys'].data_interfaces['DfOverF'].roi_response_series['DfOverFChan1Plane0'].data[:]
+    try:
+        dF_all = nwb.processing['ophys'].data_interfaces['DfOverF'].roi_response_series['DfOverFChan1Plane0'].data[:]
+    except KeyError:
+        dF_all = nwb.processing['ophys'].data_interfaces['DfOverF'].roi_response_series['DfOverF'].data[:]
 
     # Load valid frames
     valid_frames = np.load(os.path.join(base_path, 'valid_frames.npz'))['valid_frames']
@@ -203,7 +206,10 @@ def load_dF(base_path):
     dF = dF_all[valid_frames,:].T
 
     # Find valid neurons 
-    segmentation = nwb.processing['ophys'].data_interfaces['ImageSegmentation'].plane_segmentations['PlaneSegmentationChan1Plane0'][:]
+    try:
+        segmentation = nwb.processing['ophys'].data_interfaces['ImageSegmentation'].plane_segmentations['PlaneSegmentationChan1Plane0'][:]
+    except KeyError:
+        segmentation = nwb.processing['ophys'].data_interfaces['ImageSegmentation'].plane_segmentations['PlaneSegmentation'][:]
     neurons = np.where(segmentation['Accepted'] == 1)[0] 
 
     io.close()
@@ -219,7 +225,7 @@ def get_event_parsed(sess_dataframe, ses_settings):
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
 
     if 'LM_Count' in sess_dataframe.columns:
-        release_df = estimate_lm_events(sess_dataframe)
+        release_df = estimate_lm_events(sess_dataframe,ses_settings)
     else:
         release_df = estimate_release_events(sess_dataframe, ses_settings)
 
@@ -231,8 +237,9 @@ def parse_rew_lms(ses_settings):
     non_rew_odour = []
     non_rew_texture = []
     index = []
+    trial = get_trial_settings(ses_settings)
 
-    for i in ses_settings['trial']['landmarks']:
+    for i in trial['landmarks']:
         for j in i:
             if j['rewardSequencePosition'] > -1:
                 if not np.isin(j['rewardSequencePosition'], index): # avoid double counting of odours
@@ -251,17 +258,26 @@ def parse_rew_lms(ses_settings):
     non_rew_texture = non_rew_texture[non_rew_texture != 'grey']
     return rew_odour, rew_texture, non_rew_odour, non_rew_texture
 
+def get_trial_settings(ses_settings):
+    """Handle both old (dict) and new (list of dicts) trial settings format."""
+    trial = ses_settings['trial']
+    if isinstance(trial, list):
+        return trial[0]['trial']
+    return trial
+
 def parse_stable_goal_ids(ses_settings):
     '''Identify the number of landmarks and goals for stable world sequences'''
 
-    num_lms = len(ses_settings['trial']['landmarks'])
+    trial = get_trial_settings(ses_settings)
+
+    num_lms = len(trial['landmarks'])
     num_goals = ses_settings['availableRewardPositions']
     lm_ids = np.arange(num_lms)
     goal_counter = 0
     goals = []
     while goal_counter < num_goals:
         for i in range(num_lms):
-            for j in ses_settings['trial']['landmarks'][i]:
+            for j in trial['landmarks'][i]:
                 if j['rewardSequencePosition'] == goal_counter:
                     goals.append(i)
                     goal_counter += 1
@@ -274,6 +290,7 @@ def parse_random_goal_ids(ses_settings):
     '''Identify the number of landmarks and goals for random world sequences'''
     rew_odour, _, non_rew_odour, _ = parse_rew_lms(ses_settings)
 
+    trial = get_trial_settings(ses_settings)
     num_lms = len(rew_odour) + len(non_rew_odour)
     num_goals = ses_settings['availableRewardPositions']
     lm_ids = np.arange(num_lms)
@@ -282,7 +299,7 @@ def parse_random_goal_ids(ses_settings):
     goals = []
     while goal_counter < num_goals:
         for i in range(num_lms):
-            for j in ses_settings['trial']['landmarks'][i]:
+            for j in trial['landmarks'][i]:
                 if j['rewardSequencePosition'] == goal_counter:
                     goals.append(i)
                     goal_counter += 1
@@ -292,7 +309,8 @@ def parse_random_goal_ids(ses_settings):
     return goals, lm_ids
 
 def calc_hit_fa(sess_dataframe,ses_settings):
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    trial = get_trial_settings(ses_settings)
+    lm_size = trial['landmarks'][0][0]['size']
 
     lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
 
@@ -652,9 +670,10 @@ def calc_stable_seq_fraction_new(sess_dataframe,ses_settings,test='transition'):
     return performance, perf_a, perf_b, perf_c, perf_d
 
 def calculate_corr_length(ses_settings):
-    landmarks = ses_settings['trial']['landmarks']
-    if len(ses_settings['trial']['offsets']) == 1:
-        offset = ses_settings['trial']['offsets'][0]
+    trial = get_trial_settings(ses_settings)
+    landmarks = trial['landmarks']
+    if len(trial['offsets']) == 1:
+        offset = trial['offsets'][0]
     else:
         print("Cannot compute corridor lengths when offsets are randomised")
 
@@ -999,8 +1018,9 @@ def calc_sw_state_ratio(sess_dataframe, ses_settings):
     return sw_state_ratio, sw_state_ratio_a, sw_state_ratio_b, sw_state_ratio_c, sw_state_ratio_d
 
 def estimate_release_events(sess_dataframe, ses_settings):
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
-    lm_gap = lm_size + ses_settings['trial']['offsets'][0]
+    trial = get_trial_settings(ses_settings)
+    lm_size = trial['landmarks'][0][0]['size']
+    lm_gap = lm_size + trial['offsets'][0]
 
     tmp = sess_dataframe.reset_index(drop=False, inplace=False)
     release_subset = tmp[tmp['Events'].str.contains('release', na=False) & ~tmp['Events'].str.contains('odour0', na=False)][['Events', 'Position']]
@@ -1045,7 +1065,7 @@ def estimate_release_events(sess_dataframe, ses_settings):
             continue # we have already identified odour
         else:
             closed_idx = int(df.at[i, "idx"])
-            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, pos_window = lm_size /2, event_priority=["release"], choose = "earlist")
+            chosen_idx, _, odour, chosen_pos = find_closest_events(tmp, closed_idx, pos_window = lm_size / 2, event_priority=["release"], choose = "earliest")
             if odour is not None:
                 df.at[i, "idx"] = chosen_idx
                 df.at[i, "released_odour"] = odour
@@ -1095,7 +1115,7 @@ def find_closest_events(
     idx: int,
     pos_window: float = 3.0,
     event_priority=["release", "prepare", "flush"],
-    choose = 'earlist',
+    choose = 'earliest',
     verbose = False,
 ):
     """
@@ -1162,7 +1182,7 @@ def find_closest_events(
             offset += 1  # expand zigzag radius
 
     if len(candidate_idx) > 0:
-        if choose == 'earlist':
+        if choose == 'earliest':
             chosen_idx = min(candidate_idx)
             chosen_event = events_col.iat[chosen_idx]
             chosen_pos = df.at[chosen_idx, "Position"]
@@ -1221,9 +1241,11 @@ def threshold_lick_speed(sess_dataframe, speed_threshold=0.3):
 
     return sess_dataframe
 
-def estimate_lm_events(sess_dataframe):
+def estimate_lm_events(sess_dataframe,ses_settings):
 
     lm_position = sess_dataframe['LM_Position'].values[sess_dataframe['LM_Count'].values >= 0]
+    lm_position_idx = np.array([np.where(sess_dataframe['LM_Position'].values == lm)[0][0] for lm in lm_position])
+    true_pos = sess_dataframe['Position'].values[lm_position_idx]
 
     lm_time = sess_dataframe.index[sess_dataframe['LM_Count'].values >= 0]
 
@@ -1234,12 +1256,12 @@ def estimate_lm_events(sess_dataframe):
 
     lm_df = pd.DataFrame({
         'time': lm_time,
-        'Position': lm_position,
+        'Position': true_pos,
         'Index': lm_index,
         'Odour': lm_odour
     }).set_index('time')
 
-    if lm_df['Position'][0] != 0:
+    if lm_df['Position'][0] != 0 and not 'initialCorridorOffset' in ses_settings:
         # Add initial landmark at position 0 if not present
         initial_lm = pd.DataFrame({
             'time': [pd.NaT],
@@ -1285,11 +1307,17 @@ def get_licks_idx(session, lick_threshold=True):
 def get_lap_idx(session):
     # Divide the session dataframe into laps based on the position and corridor length
     if session['world'] == 'stable':
-        session['num_laps'] = int(np.ceil(session['position'].max() / session['tunnel_length']))
+        if 'initialCorridorOffset' in session: #if the session starts with an offset, we need to account for that in the lap calculation by subtracting the start of the first LM
+            session['num_laps'] = int(np.ceil((session['position'].max() - session['landmarks'][0][0]) / session['tunnel_length']))
+        else:
+            session['num_laps'] = int(np.ceil(session['position'].max() / session['tunnel_length']))
     elif session['world'] == 'random':
         session['num_laps'] = 1
     # For each position, determine which lap it belongs to
-    session['lap_idx'] = (session['position'] // session['tunnel_length']).astype(int)
+    if 'initialCorridorOffset' in session:
+        session['lap_idx'] = ((session['position'] - session['landmarks'][0][0]) // session['tunnel_length']).astype(int)
+    else:
+        session['lap_idx'] = (session['position'] // session['tunnel_length']).astype(int)
 
     return session
 
@@ -1680,8 +1708,12 @@ def calculate_frame_lick_rate(session):
 #%% ##### Functions that work with NIDAQ data only (after funcimg alignment) #####
 def get_landmark_positions(session, sess_dataframe, ses_settings):
     '''Get the start and end of each landmark'''
-    result_df = estimate_release_events(sess_dataframe, ses_settings)
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    if 'LM_Count' in sess_dataframe.columns:
+        result_df = estimate_lm_events(sess_dataframe,ses_settings)
+    else:
+        result_df = estimate_release_events(sess_dataframe, ses_settings)
+    trial = get_trial_settings(ses_settings)
+    lm_size = trial['landmarks'][0][0]['size']
 
     release_positions = result_df['Position'].values
     landmarks = np.zeros((len(release_positions), 2))
@@ -1696,7 +1728,8 @@ def get_landmark_positions(session, sess_dataframe, ses_settings):
 def get_goal_positions(session, sess_dataframe, ses_settings):
     '''Get the start and end of each goal landmark'''
     target_positions, _, _, _, _, _ = find_targets_distractors(sess_dataframe, ses_settings)
-    lm_size = ses_settings['trial']['landmarks'][0][0]['size']
+    trial = get_trial_settings(ses_settings)
+    lm_size = trial['landmarks'][0][0]['size']
 
     goals = np.zeros((len(target_positions), 2))
     for i, pos in enumerate(np.sort(target_positions)):
@@ -1716,14 +1749,14 @@ def get_lm_entry_exit(session):
     lm_exit_idx = []
 
     if np.abs(positions[0] - session['landmarks'][-1,1]) < np.abs(positions[0] - session['landmarks'][0,0]):
-        search_start = np.where(positions <= session['all_landmarks'][0,0])[0][-1]  # the mouse accidentally moved backwards first
+        search_start = np.where(positions <= session['landmarks'][0,0])[0][-1]  # the mouse accidentally moved backwards first
     else: 
         search_start = 0
 
-    for lm_start in session['all_landmarks'][:,0]:
+    for lm_start in session['landmarks'][:,0]:
         lm_entry_idx.append(np.where(positions[search_start:] >= lm_start)[0][0] + search_start)
 
-    for lm_end in session['all_landmarks'][:,1]:
+    for lm_end in session['landmarks'][:,1]:
         lm_exit_idx.append(np.where(positions[search_start:] <= lm_end)[0][-1] + search_start)
 
     return np.array(lm_entry_idx), np.array(lm_exit_idx)
@@ -2002,6 +2035,8 @@ def analyse_npz_sequences(mouse,session_id, behav_root, stage, world='stable'):
     # session['date'] = date
     session['stage'] = stage
     session['world'] = world
+    if 'initialCorridorOffset' in ses_settings:
+        session['initialCorridorOffset'] = ses_settings['initialCorridorOffset']
 
     save_path = Path(session_path) / 'analysis'
     save_path.mkdir(parents=True, exist_ok=True)
@@ -2009,19 +2044,17 @@ def analyse_npz_sequences(mouse,session_id, behav_root, stage, world='stable'):
     
     session = get_lap_idx(session)
     session = get_lm_idx(session)
-    session = get_licks_idx(session, lick_threshold=False) # thresholding is also performed here
+    session = get_licks_idx(session, lick_threshold=True) # thresholding is also performed here
     session = get_licks_per_lap(session)
     session = get_lms_visited(session, sess_dataframe, ses_settings)
     session = get_licks_rewards_npz(session)
+    # session = get_active_goal(session)
     session = get_reward_idx(session)
     session = calc_acceleration(session)
     session = calculate_frame_lick_rate(session)
     session['lm_entry'],session['lm_exit'] = get_lm_entry_exit(session)
     session = calc_conditional_probs_npz(session)
     session = give_state_id_npz(session,ses_settings)
-
-    # # Get behaviour
-    # session = get_behaviour(session, sess_dataframe, ses_settings)
 
     print('Number of laps = ', session['num_laps'])
     
@@ -2073,6 +2106,44 @@ def analyse_npz_pre7(mouse, session_id, root, stage, world='stable'):
 
     # Get behaviour
     session = get_behaviour(session, sess_dataframe, ses_settings)
+
+    print('Number of laps = ', session['num_laps'])
+    
+    return session
+
+def analyse_npz_shaping(mouse, session_id, root, stage, world='stable'):
+    '''Wrapper for session analysis'''
+    
+    session_path = parse_nwb_functions.find_base_path(mouse, session_id, root)
+    ses_settings, _ = parse_nwb_functions.load_settings(session_path)
+    behav_data = load_session_npz(str(session_path))
+    with open(list((session_path / 'behav').glob('*.pkl'))[0], 'rb') as f:
+        sess_dataframe = pickle.load(f)
+
+    session = create_session_struct_npz(behav_data, ses_settings, world=world)
+    session = get_landmark_positions(session, sess_dataframe, ses_settings)
+    session = get_goal_positions(session, sess_dataframe, ses_settings)
+
+    session['mouse'] = mouse
+    session['session_id'] = session_id
+    # session['date'] = date
+    session['stage'] = stage
+    session['world'] = world
+
+    save_path = Path(session_path) / 'analysis'
+    save_path.mkdir(parents=True, exist_ok=True)
+    session['save_path'] = save_path
+    
+    session = get_lap_idx(session)
+    session = get_lm_idx(session)
+    session = get_licks_idx(session) # thresholding is also performed here
+    session = get_licks_per_lap(session)
+    session = get_licked_lms(session)
+    session = get_rewarded_lms(session)
+    session = get_lms_visited(session, sess_dataframe, ses_settings)
+    session = get_reward_idx(session)
+    session = calc_acceleration(session)
+    session = calculate_frame_lick_rate(session)
 
     print('Number of laps = ', session['num_laps'])
     
@@ -2130,7 +2201,7 @@ def plot_ethogram(sess_dataframe,ses_settings):
     reward_times = sess_dataframe.index[sess_dataframe['Rewards'].notna()]
     reward_positions = sess_dataframe['Position'].values[sess_dataframe['Rewards'].notna()]
     if 'LM_Count' in sess_dataframe.columns:
-        release_df = estimate_lm_events(sess_dataframe,)
+        release_df = estimate_lm_events(sess_dataframe,ses_settings)
     else:
         release_df = estimate_release_events(sess_dataframe, ses_settings)
     release_times = release_df.index.tolist() # time
