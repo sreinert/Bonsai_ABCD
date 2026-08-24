@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os, sys
 import scipy.stats as stats
+from collections import Counter
 
 parse_session_functions = None
 def set_parse_session_functions(psf):
@@ -68,6 +69,30 @@ def get_YY_events(session, XYY_patches):
 
     return events_YY
 
+def get_XY_repeats(patches, cluster=False):
+    '''Define number of XY repeats inside each XY patch'''
+
+    XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
+
+    num_repeats = Counter(XY_repeats)
+
+    if cluster and 5 in num_repeats:
+        print('Clustering XY repeats of 3-4 and > 5 together to avoid sampling issues.')
+
+        clustered_XY_repeats = []
+        for r, rep in enumerate(XY_repeats):
+            if rep == 1 or rep == 2:
+                clustered_XY_repeats.append(rep)
+            elif 3 <= rep <= 4:
+                clustered_XY_repeats.append(3)
+            else:
+                clustered_XY_repeats.append(4)
+
+        return np.array(clustered_XY_repeats), cluster
+
+    else:
+        return XY_repeats, False
+    
 def get_min_frames_between_lms(session):
     '''Find the minimum number of frames between two landmarks'''
 
@@ -291,7 +316,7 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
 
 def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', data_type='YY_diff', 
                                     bins=30, shuffle=True, nreps=1000, cluster_thres=0.05, zscored=False, plot=True, 
-                                    sort_heatmap=False, save_plot=False, save_dir='', plot_dir='', 
+                                    sort_heatmap=False, cluster_repeats=False, save_plot=False, save_dir='', plot_dir='', 
                                     reload=False):
     '''
     Fit linear regression per time bin to determine if the number of preceding XYs predicts:
@@ -310,7 +335,7 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
     elif condition == 'BA':
         patches = BA_patches
 
-    XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
+    XY_repeats = get_XY_repeats(patches, cluster=cluster_repeats)
     XY_repeats = XY_repeats[YY_data['valid_patch_indices']]
     
     # Get the difference between two YYs 
@@ -491,7 +516,9 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                 
         return results
     
-def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_repeats=None, condition='AB', data_type='YY_diff', bins=30, sort_heatmap=True, zscored=True, save_plot=False, plot_dir='', axes=None):
+def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_repeats=None, 
+                     condition='AB', data_type='YY_diff', bins=30, sort_heatmap=True, 
+                     cluster_repeats=False, zscored=True, save_plot=False, plot_dir='', axes=None):
 
     # Unwrap CPA results
     cpa_results = {
@@ -509,7 +536,7 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
         elif condition == 'BA':
             patches = BA_patches
 
-        XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
+        XY_repeats = get_XY_repeats(patches, cluster=cluster_repeats)
         XY_repeats = XY_repeats[YY_data['valid_patch_indices']]
     
     # Define Y data for CPA if not provided
@@ -713,7 +740,7 @@ def get_Y2_activity(neurons, dF, session, XYY_patches):
 
 def fit_linear_regression_XYlen(neurons, y_data, dF, session, condition='AB', data_type='Y2_ramp', 
                                     bins=30, shuffle=True, nreps=1000, plot=True, zscoring=False,
-                                    sort_heatmap=False, save_plot=False, save_dir='', plot_dir='', 
+                                    sort_heatmap=False, cluster_repeats=False, save_plot=False, save_dir='', plot_dir='', 
                                     reload=False):
     '''
     Fit linear regression per cell to determine if the number of preceding XYs predicts
@@ -730,7 +757,7 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, condition='AB', da
     elif condition == 'BA':
         patches = BA_patches
 
-    XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
+    XY_repeats = get_XY_repeats(patches, cluster=cluster_repeats)
     
     # Perform linear regression 
     if os.path.exists(results_file) and not reload:
@@ -835,7 +862,9 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, condition='AB', da
         return results
 
 
-def plot_linear_regression_results(results, neurons, dF, session, y_data, XY_repeats=None, condition='AB', data_type='Y2_ramp', bins=30, sort_heatmap=True, zscoring=False, save_plot=False, plot_dir='', axes=None):
+def plot_linear_regression_results(results, neurons, dF, session, y_data, XY_repeats=None, 
+                                   condition='AB', data_type='Y2_ramp', bins=30, sort_heatmap=True, 
+                                   cluster_repeats=False, zscoring=False, save_plot=False, plot_dir='', axes=None):
 
     # Unwrap linear regression results
     results = {
@@ -850,12 +879,10 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data, XY_rep
         # Find preceding XY length for each patch
         if condition == 'AB':
             patches = AB_patches
-            XYY_patches = ABB_patches
         elif condition == 'BA':
             patches = BA_patches
-            XYY_patches = BAA_patches
 
-        XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
+        XY_repeats = get_XY_repeats(patches, cluster=cluster_repeats)
     
     # Get binned Y2 activity 
     if session['stim_order'] == 'random':
