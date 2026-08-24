@@ -6,6 +6,7 @@ import os
 import suite2p
 from pathlib import Path
 import sys
+import itertools
 
 print("First sys.path entry:", sys.path[0])
 print("Using suite2p from:", suite2p.__file__)
@@ -33,48 +34,126 @@ elif 'AtAp_20260119_SequenceCompression/rawdata' in basepath:
 elif 'AtAp_20260119_SequenceCompression/funcimg_screening' in basepath:
     tiff_path = ''
 
-
 data_path = os.path.join(basepath, animal, session, tiff_path)
 save_path = data_path 
 print(f'Running suite2p in {data_path}')
 
-# Settings 
-ops = suite2p.default_settings() # default_settings instead of default_ops for new suite2p version
-db = suite2p.default_db()
+# ---------------------------------------------------------
+# Parameter sweep
+# ---------------------------------------------------------
 
-## General
-ops['tau'] = 0.4
-ops['fs'] = 45
+parameter_grid = {
+    'th_badframes': [0.5, 1.0, 1.5],
+    'spatial_taper': [2.0, 3.45, 5.0],
+    'maxregshift': [0.05, 0.1, 0.15],
+}
 
-## Run control
-ops['run']['do_detection'] = False
+combinations = list(itertools.product(
+    parameter_grid['th_badframes'],
+    parameter_grid['spatial_taper'],
+    parameter_grid['maxregshift'],
+))
 
-## Registration
-ops['registration']['nonrigid'] = True
-ops['registration']['smooth_sigma'] = 1.15
-ops['registration']['smooth_sigma_time'] = 0
-ops['registration']['nimg_init'] = 500
-ops['registration']['two_step_registration'] = True
-ops['registration']['do_bidiphase'] = False
-ops['registration']['batch_size'] = 200  # this is reg batch_size, separate from extraction
+print(f"Number of parameter combinations: {len(combinations)}")
 
-## Detection (native sparsery, no Cellpose)
-ops['detection']['algorithm'] = 'sparsery'  # default
-ops['detection']['sparsery_settings']['spatial_scale'] = 0
+# ---------------------------------------------------------
+# Sweep output directory
+# ---------------------------------------------------------
 
-## Anatomical ROI Detection (suite2p with Cellpose) 
-# ops['detection']['algorithm'] = 'cellpose'
-# ops['detection']['cellpose_settings']['cellpose_model'] = 'cyto2'  # or 'cyto3', 'cpsam'
-# ops['diameter'] = [0., 0.]  # 0 = auto-estimate cell size
+sweep_path = os.path.join(
+    data_path,
+    'suite2p_registration_sweep'
+)
 
-## db
-db['data_path'] = [data_path]
-db['save_path0'] = save_path  
-db['nchannels'] = 2
-db['keep_movie_raw'] = False
+os.makedirs(sweep_path, exist_ok=True)
 
-# Run suite2p 
-output_ops = suite2p.run_s2p(settings=ops, db=db)
+
+# ---------------------------------------------------------
+# Run sweep
+# ---------------------------------------------------------
+
+for run_idx, (th_badframes, spatial_taper, maxregshift) in enumerate(combinations):
+
+    print("\n" + "=" * 70)
+    print(f"RUN {run_idx + 1}/{len(combinations)}")
+    print(
+        f"th_badframes={th_badframes}, "
+        f"spatial_taper={spatial_taper}, "
+        f"maxregshift={maxregshift}"
+    )
+    print("=" * 70)
+
+
+    # -----------------------------------------------------
+    # Unique output directory
+    # -----------------------------------------------------
+
+    run_name = (
+        f"badframes_{th_badframes}"
+        f"_taper_{spatial_taper}"
+        f"_maxshift_{maxregshift}"
+    )
+
+    save_path = os.path.join(
+        sweep_path,
+        run_name
+    )
+
+    os.makedirs(save_path, exist_ok=True)
+
+
+    # -----------------------------------------------------
+    # Suite2p settings
+    # -----------------------------------------------------
+
+    ops = suite2p.default_settings()
+    db = suite2p.default_db()
+
+
+    # General
+    ops['tau'] = 0.4
+    ops['fs'] = 45
+
+
+    # Run control
+    ops['run']['do_detection'] = False
+
+
+    # Registration
+    ops['registration']['nonrigid'] = True
+    ops['registration']['smooth_sigma'] = 1.15
+    ops['registration']['smooth_sigma_time'] = 0
+    ops['registration']['nimg_init'] = 500
+    ops['registration']['two_step_registration'] = True
+    ops['registration']['do_bidiphase'] = False
+    ops['registration']['batch_size'] = 200
+
+
+    # Parameters being swept
+    ops['registration']['th_badframes'] = th_badframes
+    ops['registration']['spatial_taper'] = spatial_taper
+    ops['registration']['maxregshift'] = maxregshift
+
+
+    # Detection
+    ops['detection']['algorithm'] = 'sparsery'
+    ops['detection']['sparsery_settings']['spatial_scale'] = 0
+
+
+    # Database
+    db['data_path'] = [data_path]
+    db['save_path0'] = save_path
+    db['nchannels'] = 2
+    db['keep_movie_raw'] = False
+
+
+    # -----------------------------------------------------
+    # Run Suite2p
+    # -----------------------------------------------------
+
+    output_ops = suite2p.run_s2p(settings=ops, db=db)
+# snr_thres, norm_frames, smooth_sigma
+
 
 # # db = {
 # #     "data_path": ['.'], # Directory where your input files are located
