@@ -53,6 +53,38 @@ def get_XYY_patches(session, precede_XY=False):
 
     return ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx
 
+def get_valid_patches(session, dF, example_cell, condition, bins):
+    '''Exclude patches if session ended before enough frames were collected for a landmark (the last one)'''
+
+    if session['stim_order'] == 'random':
+        ABB_patches, BAA_patches, _, _ = get_XYY_patches(session, precede_XY=True)
+    elif session['stim_order'] == 'pseudorandom':
+        ABB_patches, BAA_patches, _, _ = get_XYY_patches(session, precede_XY=False)
+
+    if condition == 'AB':
+        XYY_patches = ABB_patches
+    elif condition == 'BA':
+        XYY_patches = BAA_patches
+
+    events_YY = get_YY_events(session, XYY_patches)
+
+    valid_patch_indices = []
+        
+    for p_idx, patch in enumerate(XYY_patches):
+        valid_patch = True
+
+        for lm in patch[1:]:
+            binned = temporal_bin_lm_firing_reward_aligned(example_cell, dF, events_YY[lm], frames_around=bins/2, bins=bins) # using the first neuron as reference
+
+            if binned is None or np.isnan(binned).any():
+                valid_patch = False
+                break
+
+        if valid_patch:
+            valid_patch_indices.append(p_idx)
+
+    return valid_patch_indices
+
 def get_YY_events(session, XYY_patches):
     '''Find the start, reward (or imaginary reward) and end for each YY event in a patch'''
 
@@ -206,7 +238,7 @@ def temporal_bin_lm_firing_reward_aligned(cell, dF, event, frames_around, bins=9
 
     return binned_phase_firing
 
-def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, bins=30, condition='AA', zscoring=False, plot=True):
+def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, event_idx, session, bins=30, condition='AA', zscoring=False, plot=True):
     '''Binning of neural activity inside a XYY patch from the beginning to the end of each landmark in the the patch.'''
     
     n_lms = len(XYY_patches[0]) - 1
@@ -214,20 +246,7 @@ def get_reward_aligned_temporal_phase_binning_per_lm(neurons, dF, XYY_patches, e
         assert n_lms == 2, "Each patch should have 3 landmarks - XYY"
 
     # Compute valid patches i.e. making sure that there are enough frames within all landmarks considered
-    valid_patch_indices = []
-    
-    for p_idx, patch in enumerate(XYY_patches):
-        valid_patch = True
-
-        for lm in patch[1:]:
-            binned = temporal_bin_lm_firing_reward_aligned(neurons[0], dF, event_idx[lm], frames_around=bins/2, bins=bins) # using the first neuron as reference
-
-            if binned is None or np.isnan(binned).any():
-                valid_patch = False
-                break
-
-        if valid_patch:
-            valid_patch_indices.append(p_idx)
+    valid_patch_indices = get_valid_patches(session, dF, neurons[0], condition, bins)
 
     # Collect all landmark pair (YY) binnings for all valid patches
     binned_XYY_phase_firing = {cell: [] for cell in neurons}
@@ -335,7 +354,7 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
     elif condition == 'BA':
         patches = BA_patches
 
-    XY_repeats = get_XY_repeats(patches, cluster=cluster_repeats)
+    XY_repeats, _ = get_XY_repeats(patches, cluster=cluster_repeats)
     XY_repeats = XY_repeats[YY_data['valid_patch_indices']]
     
     # Get the difference between two YYs 
@@ -536,7 +555,7 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
         elif condition == 'BA':
             patches = BA_patches
 
-        XY_repeats = get_XY_repeats(patches, cluster=cluster_repeats)
+        XY_repeats, _ = get_XY_repeats(patches, cluster=cluster_repeats)
         XY_repeats = XY_repeats[YY_data['valid_patch_indices']]
     
     # Define Y data for CPA if not provided
@@ -757,11 +776,13 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, condition='AB', da
     elif condition == 'BA':
         patches = BA_patches
 
-    XY_repeats = get_XY_repeats(patches, cluster=cluster_repeats)
+    XY_repeats, _ = get_XY_repeats(patches, cluster=cluster_repeats)
+    valid_patch_indices = get_valid_patches(session, dF, neurons[0], condition, bins)
+    XY_repeats = XY_repeats[valid_patch_indices]
     
     # Perform linear regression 
     if os.path.exists(results_file) and not reload:
-        print('Linear regression with CPA file found. Loading...')
+        print('Linear regression file found. Loading...')
         results = np.load(results_file, allow_pickle=True)
         slopes = results['slopes'].item() 
         rvalues = results['rvalues'].item() 
@@ -857,12 +878,12 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, condition='AB', da
                 
         # Plotting
         if plot: 
-            plot_linear_regression_results(results, neurons, dF, session, y_data, XY_repeats, condition, data_type, bins, sort_heatmap, zscoring, save_plot, plot_dir)
+            plot_linear_regression_results(results, neurons, dF, session, y_data, condition, data_type, bins, sort_heatmap, cluster_repeats, zscoring, save_plot, plot_dir)
                 
         return results
 
 
-def plot_linear_regression_results(results, neurons, dF, session, y_data, XY_repeats=None, 
+def plot_linear_regression_results(results, neurons, dF, session, y_data, 
                                    condition='AB', data_type='Y2_ramp', bins=30, sort_heatmap=True, 
                                    cluster_repeats=False, zscoring=False, save_plot=False, plot_dir='', axes=None):
 
@@ -872,17 +893,16 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data, XY_rep
         for k, v in results.items()
     }
     
-    # Get patches of XY repeats if not provided
-    if XY_repeats is None:
-        _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
+    # Get patches of XY repeats 
+    _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
 
-        # Find preceding XY length for each patch
-        if condition == 'AB':
-            patches = AB_patches
-        elif condition == 'BA':
-            patches = BA_patches
+    # Find preceding XY length for each patch
+    if condition == 'AB':
+        patches = AB_patches
+    elif condition == 'BA':
+        patches = BA_patches
 
-        XY_repeats = get_XY_repeats(patches, cluster=cluster_repeats)
+    XY_repeats, clustering_done = get_XY_repeats(patches, cluster=cluster_repeats)
     
     # Get binned Y2 activity 
     if session['stim_order'] == 'random':
@@ -921,7 +941,7 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data, XY_rep
         ax1.plot(x_fit, y_fit, linewidth=2, color='darkblue')
 
         ax1.set_xlabel('Number of preceding XY repeats')
-        ax1.set_ylabel(f'{condition[-1]}2 activity')
+        ax1.set_ylabel(f'mean {condition[-1]}2 activity')
         ax1.set_xticks(x)
 
         ax1.set_title(
@@ -981,7 +1001,10 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data, XY_rep
             # Indicate number of XY repeats  per block
             right_ax = ax3.secondary_yaxis('right')
             right_ax.set_yticks(block_centers)
-            right_ax.set_yticklabels(block_values, fontsize=6)
+            if cluster_repeats and clustering_done:
+                right_ax.set_yticklabels(['1', '2', '3-4', '5+'], fontsize=6)
+            else:
+                right_ax.set_yticklabels(block_values, fontsize=6)
             right_ax.set_ylabel('XY repeats', fontsize=8)
 
         else:
