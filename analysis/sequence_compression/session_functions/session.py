@@ -268,7 +268,7 @@ class Session():
                 B_landmarks = [i for i in range(len(self.reward_seq)) if (i not in A_landmarks)]
 
         elif self.cohort == 2:
-            # there is an offset, so the first lm can be considered
+            # there should be an offset, so the first lm can be considered
             if self.sequence == 'AABB':
                 A_landmarks = [i - 2 for i, r in enumerate(self.reward_seq) if r == 0]
                 B_landmarks = [i + 2 for i, r in enumerate(self.reward_seq) if r == -1]
@@ -279,9 +279,13 @@ class Session():
                 B_landmarks = [i for i in range(len(self.reward_seq)) if (i not in A_landmarks)]
 
             elif self.sequence == 'ABAB': 
-                A_landmarks = [i for i, r in enumerate(self.reward_seq) if r == 0]
-                B_landmarks = [i for i, r in enumerate(self.reward_seq) if r == -1]
-            
+                if 'initialCorridorOffset' in self.settings and self.settings['initialCorridorOffset'] > 0:
+                    A_landmarks = [i for i, r in enumerate(self.reward_seq) if r == 0]
+                    B_landmarks = [i for i, r in enumerate(self.reward_seq) if r == -1]
+                else:
+                    A_landmarks = [i - 1 for i, r in enumerate(self.reward_seq) if r == 0]
+                    B_landmarks = [i + 1 for i, r in enumerate(self.reward_seq) if r == -1]
+                                
             elif self.sequence == 'ABB':
                 A_landmarks[0] = 2
                 B_landmarks = [i for i in range(len(self.reward_seq)) if (i not in A_landmarks)]
