@@ -139,9 +139,26 @@ def get_XY_repeat_ordering(session, min_length=2, return_list=False):
         new_patch = np.repeat(np.arange(1, len(patch) // 2 + 1), 2)
         BA_ordered_patches.append(new_patch)
 
-    if return_list: 
-        AB_ordered_patches = np.concatenate(AB_ordered_patches)
-        BA_ordered_patches = np.concatenate(BA_ordered_patches)
+    if return_list:
+        if AB_ordered_patches:
+            AB_ordered_patches = np.concatenate(AB_ordered_patches)
+        else:
+            AB_ordered_patches = np.array([], dtype=int)
+
+        if BA_ordered_patches:
+            BA_ordered_patches = np.concatenate(BA_ordered_patches)
+        else:
+            BA_ordered_patches = np.array([], dtype=int)
+
+    if len(AB_patches) == 0:
+        print(f"Warning: no AB patches found (min_length={min_length})")
+
+    if len(BA_patches) == 0:
+        print(f"Warning: no BA patches found (min_length={min_length})")
+
+    if len(AB_ordered_patches) == 0 and len(BA_ordered_patches) == 0:
+        print(f"No AB or BA patches of length >= {min_length} found. Skipping session {session}.")
+        sys.exit(0)
 
     return AB_ordered_patches, BA_ordered_patches
    
@@ -223,9 +240,26 @@ def get_repeating_XY_patches(session, min_length=2, return_list=False):
     BA_patches_idx = None
 
     if return_list:
-        AB_patches = np.concatenate(AB_patches)
-        BA_patches = np.concatenate(BA_patches)
+        if AB_patches:
+            AB_patches = np.concatenate(AB_patches)
+        else:
+            AB_patches = np.array([], dtype=int)
 
+        if BA_patches:
+            BA_patches = np.concatenate(BA_patches)
+        else:
+            BA_patches = np.array([], dtype=int)
+
+    if len(AB_patches) == 0:
+        print(f"Warning: no AB patches found (min_length={min_length})")
+
+    if len(BA_patches) == 0:
+        print(f"Warning: no BA patches found (min_length={min_length})")
+
+    if len(AB_patches) == 0 and len(BA_patches) == 0:
+        print(f"No AB or BA patches of length >= {min_length} found. Skipping session {session}.")
+        sys.exit(0)
+        
     return patches, AB_patches, BA_patches, patches_idx, AB_patches_idx, BA_patches_idx
 
 def temporal_bin_lm_firing_reward_aligned(cell, dF, event, frames_around, bins=90):

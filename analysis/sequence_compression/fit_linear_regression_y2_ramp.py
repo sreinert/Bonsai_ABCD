@@ -33,7 +33,7 @@ else:
 if cohort == '2':
     import preprocessing.parse_session_functions_cohort2 as parse_session_functions
     import cellTV.cellTV_functions_cohort2 as cellTV
-    base_path = Path(f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2"  )
+    base_path = Path(f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2")
 elif cohort == '3':
     import preprocessing.parse_session_functions_cohort3 as parse_session_functions
     import cellTV.cellTV_functions_cohort3 as cellTV
@@ -53,11 +53,11 @@ if cohort == '2':
     
     # Create session struct
     _, _, _, _, date = parse_session_functions.get_session_folders(base_path, mouse, stage)
-    session = parse_session_functions.analyse_npz_pre7(mouse, date, stage, plot=False)
+    session = parse_session_functions.analyse_npz_pre7(mouse, date, stage, base_path, plot=False)
     session['stim_order'] = 'pseudorandom'
 
     # Define save path
-    data_path = parse_session_functions.find_base_path_npz(mouse, date)
+    data_path = parse_session_functions.find_base_path_npz(mouse, date, base_path)
     t = parse_session_functions.extract_int(session['stage'])
     save_dir = os.path.join(data_path, 'analysis', f't{t}_linear_regression_Y2_ramp_XYrepeats')
 
@@ -118,7 +118,7 @@ if BAA_patches:
 
     A2_ramp_regression_results_cpa = alternation.fit_linear_regression_XYlen(neurons, A2_activity, dF, session, condition='BA', data_type='Y2_ramp', 
                                                                                     bins=bins, shuffle=True, nreps=1000, zscoring=False, plot=True, sort_heatmap=True, 
-                                                                                    save_plot=True, save_dir=save_dir, plot_dir=save_dir, reload=True)
+                                                                                    cluster_repeats=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, reload=True)
     
 if ABB_patches:
     print('\tABB patches found')
@@ -126,6 +126,6 @@ if ABB_patches:
 
     B2_ramp_regression_results_cpa = alternation.fit_linear_regression_XYlen(neurons, B2_activity, dF, session, condition='AB', data_type='Y2_ramp', 
                                                                                     bins=bins, shuffle=True, nreps=1000, zscoring=False, plot=True, sort_heatmap=True, 
-                                                                                    save_plot=True, save_dir=save_dir, plot_dir=save_dir, reload=True)
+                                                                                    cluster_repeats=True, save_plot=True, save_dir=save_dir, plot_dir=save_dir, reload=True)
 
    

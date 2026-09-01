@@ -109,8 +109,8 @@ analyses = {
 }
 
 # 1. Identify XY repeats and assign an ordinal number to each landmark 
-AB_ordered_patches, BA_ordered_patches = alternation.get_XY_repeat_ordering(session, min_length=4, return_list=True)
 _, AB_patches, BA_patches, _, _, _ = alternation.get_repeating_XY_patches(session, min_length=4, return_list=True)
+AB_ordered_patches, BA_ordered_patches = alternation.get_XY_repeat_ordering(session, min_length=4, return_list=True)
 
 patches = {
     'AB': AB_patches,
@@ -160,5 +160,5 @@ for name, params in analyses.items():
         save_plot=True,
         save_dir=save_dir,
         plot_dir=save_dir,
-        reload=True
+        reload=False
     )
