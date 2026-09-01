@@ -124,7 +124,27 @@ def get_XY_repeats(patches, cluster=False):
 
     else:
         return XY_repeats, False
+
+def get_XY_repeat_ordering(session, min_length=2, return_list=False):
+    '''Assign an ordinal number to each element in the patch e.g. A1B1A2B2'''
+    _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length)
     
+    AB_ordered_patches = []
+    for patch in AB_patches:
+        new_patch = np.repeat(np.arange(1, len(patch) // 2 + 1), 2)
+        AB_ordered_patches.append(new_patch)
+
+    BA_ordered_patches = []
+    for patch in BA_patches:
+        new_patch = np.repeat(np.arange(1, len(patch) // 2 + 1), 2)
+        BA_ordered_patches.append(new_patch)
+
+    if return_list: 
+        AB_ordered_patches = np.concatenate(AB_ordered_patches)
+        BA_ordered_patches = np.concatenate(BA_ordered_patches)
+
+    return AB_ordered_patches, BA_ordered_patches
+   
 def get_min_frames_between_lms(session):
     '''Find the minimum number of frames between two landmarks'''
 
@@ -144,7 +164,7 @@ def get_min_frames_between_lms(session):
 
     return frames_around
 
-def get_repeating_XY_patches(session, min_length=2):
+def get_repeating_XY_patches(session, min_length=2, return_list=False):
     ''' Find patches of alternating AB/BA '''
     non_goals = session['non_goals_idx'][session['non_goals_idx'] < len(session['event_idx'])]
     goals = session['goals_idx'][session['goals_idx'] < len(session['event_idx'])]
@@ -201,6 +221,10 @@ def get_repeating_XY_patches(session, min_length=2):
     patches_idx = None
     AB_patches_idx = None
     BA_patches_idx = None
+
+    if return_list:
+        AB_patches = np.concatenate(AB_patches)
+        BA_patches = np.concatenate(BA_patches)
 
     return patches, AB_patches, BA_patches, patches_idx, AB_patches_idx, BA_patches_idx
 
@@ -757,29 +781,86 @@ def get_Y2_activity(neurons, dF, session, XYY_patches):
 
     return Y2_activity
 
-def fit_linear_regression_XYlen(neurons, y_data, dF, session, condition='AB', data_type='Y2_ramp', 
+def get_mean_lm_activity(session, neurons, dF, landmarks):
+    '''Get the mean activity inside all landmarks provided'''
+
+    lm_entry_idx, lm_exit_idx = parse_session_functions.get_lm_entry_exit(session)
+    lm_entry_idx = lm_entry_idx[:len(session['event_idx'])]
+    lm_exit_idx = lm_exit_idx[:len(session['event_idx'])]
+
+    mean_lm_activity = {cell: [] for cell in neurons}
+    for lm in landmarks:
+        frames = np.arange(lm_entry_idx[lm], lm_exit_idx[lm])
+        for n, cell in enumerate(neurons):
+            mean_lm_activity[cell].append(np.mean(dF[cell, frames]))
+
+    return mean_lm_activity
+
+def get_binned_lm_activity(session, neurons, dF, landmarks, bins, zscoring=False):
+    '''Get the binned activity inside all landmarks provided'''
+
+    # Find start, reward and end timepoints for each landmark
+    lm_entry_idx, lm_exit_idx = parse_session_functions.get_lm_entry_exit(session)
+    lm_entry_idx = lm_entry_idx[:len(session['event_idx'])]
+    lm_exit_idx = lm_exit_idx[:len(session['event_idx'])]
+
+    binned_lm_activity = {cell: [] for cell in neurons}
+
+    for lm in landmarks:
+        events = { "start": lm_entry_idx[lm], "reward": session['event_idx'][lm], "end": lm_exit_idx[lm]}
+
+        for cell in neurons:
+            binned_activity = temporal_bin_lm_firing_reward_aligned(cell, dF, events, frames_around=bins/2, bins=bins)
+
+            # z-score across bins for this trial
+            if zscoring:
+                if np.std(binned_activity) > 0:
+                    binned_activity = stats.zscore(binned_activity)
+                else:
+                    binned_activity = np.zeros_like(binned_activity)  # avoid NaNs
+
+            binned_lm_activity[cell].append(binned_activity)
+    
+    # Convert each neuron's list of trials into a 2D array
+    for cell in neurons:
+        binned_lm_activity[cell] = np.asarray(binned_lm_activity[cell])
+
+    return binned_lm_activity
+
+def fit_linear_regression_XYlen(neurons, y_data, dF, session, x_data=None, heatmap_lms=None, condition='AB', chosen_lm='', data_type='Y2_ramp', 
                                     bins=30, shuffle=True, nreps=1000, plot=True, zscoring=False,
                                     sort_heatmap=False, cluster_repeats=False, save_plot=False, save_dir='', plot_dir='', 
                                     reload=False):
     '''
-    Fit linear regression per cell to determine if the number of preceding XYs predicts
-    the activity in the last Y in the patch ['Y2_ramp'] 
+    Fit linear regression per cell to determine if:
+     - the number of preceding XYs predicts the activity in the last Y in the patch ['Y2_ramp'] 
+     - the activity scales based on the amount of evidence for each type of lm in an XY repeat ['XY_order].
     '''
-    results_file = os.path.join(save_dir, f"{condition}_{data_type}_linear_regression_results.npz")
-
-    # Define patches
-    _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
-
-    # Find preceding XY length for each patch
-    if condition == 'AB':
-        patches = AB_patches
-    elif condition == 'BA':
-        patches = BA_patches
-
-    XY_repeats, _ = get_XY_repeats(patches, cluster=cluster_repeats)
-    valid_patch_indices = get_valid_patches(session, dF, neurons[0], condition, bins)
-    XY_repeats = XY_repeats[valid_patch_indices]
     
+    if data_type == 'Y2_ramp':
+        results_file = os.path.join(save_dir, f"{condition}_{data_type}_linear_regression_results.npz")
+    elif data_type == 'XY_order':
+        results_file = os.path.join(save_dir, f"{condition}_{chosen_lm}_{data_type}_linear_regression_results.npz")
+
+    # Get x data if not provided
+    if x_data is None:
+        if condition == 'Y2_ramp':
+            # Define patches
+            _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
+
+            # Find preceding XY length for each patch
+            if condition == 'AB':
+                patches = AB_patches
+            elif condition == 'BA':
+                patches = BA_patches
+
+            XY_repeats, clustering_done = get_XY_repeats(patches, cluster=cluster_repeats)
+            valid_patch_indices = get_valid_patches(session, dF, neurons[0], condition, bins)
+            XY_repeats = XY_repeats[valid_patch_indices]
+            x_data = XY_repeats
+        else:
+            raise ValueError('Please provide the x data for the regression')
+
     # Perform linear regression 
     if os.path.exists(results_file) and not reload:
         print('Linear regression file found. Loading...')
@@ -799,7 +880,7 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, condition='AB', da
 
     else:
         print('\tFitting linear regression')
-        x = XY_repeats.copy()
+        x = x_data.copy()
 
         # Ensure there are more than 1 x values (repeats)
         if len(x) < 2 or len(np.unique(x)) < 2:
@@ -878,48 +959,54 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, condition='AB', da
                 
         # Plotting
         if plot: 
-            plot_linear_regression_results(results, neurons, dF, session, y_data, condition, data_type, bins, sort_heatmap, cluster_repeats, zscoring, save_plot, plot_dir)
+            plot_linear_regression_results(results, neurons, dF, session, y_data, x_data, heatmap_lms, condition, 
+                                           chosen_lm, data_type, bins, sort_heatmap, cluster_repeats, 
+                                           zscoring, save_plot, plot_dir)
                 
         return results
 
-
-def plot_linear_regression_results(results, neurons, dF, session, y_data, 
-                                   condition='AB', data_type='Y2_ramp', bins=30, sort_heatmap=True, 
+def plot_linear_regression_results(results, neurons, dF, session, y_data, x_data=None, heatmap_lms=None, 
+                                   condition='AB', chosen_lm='', data_type='Y2_ramp', bins=30, sort_heatmap=True,
                                    cluster_repeats=False, zscoring=False, save_plot=False, plot_dir='', axes=None):
 
     # Unwrap linear regression results
     results = {
         k: v.item() if isinstance(v, np.ndarray) and v.shape == () else v
         for k, v in results.items()
-    }
+    }   
+
+    if data_type == 'Y2_ramp':  
+        if x_data is None:  
+            _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
+            if session['stim_order'] == 'random':
+                ABB_patches, BAA_patches, _, _ = get_XYY_patches(session, precede_XY=True)
+            elif session['stim_order'] == 'pseudorandom':
+                ABB_patches, BAA_patches, _, _ = get_XYY_patches(session, precede_XY=False)
     
-    # Get patches of XY repeats 
-    _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
+            # Find preceding XY length for each patch
+            if condition == 'AB':
+                patches = AB_patches
+                XYY_patches = ABB_patches
+            elif condition == 'BA':
+                patches = BA_patches
+                XYY_patches = BAA_patches
+        
+            XY_repeats, clustering_done = get_XY_repeats(patches, cluster=cluster_repeats)
+            valid_patch_indices = get_valid_patches(session, dF, neurons[0], condition, bins)
+            XY_repeats = XY_repeats[valid_patch_indices]
+            x_data = XY_repeats
 
-    # Find preceding XY length for each patch
-    if condition == 'AB':
-        patches = AB_patches
-    elif condition == 'BA':
-        patches = BA_patches
-
-    XY_repeats, clustering_done = get_XY_repeats(patches, cluster=cluster_repeats)
+        if heatmap_lms is None:
+            heatmap_lms = [patch[-1] for patch in XYY_patches]
     
-    # Get binned Y2 activity 
-    if session['stim_order'] == 'random':
-        ABB_patches, BAA_patches, _, _ = get_XYY_patches(session, precede_XY=True)
-    elif session['stim_order'] == 'pseudorandom':
-        ABB_patches, BAA_patches, _, _ = get_XYY_patches(session, precede_XY=False)
+    elif data_type == 'XY_order':
+        if heatmap_lms is None:
+            raise ValueError('Please provide the landmarks used to get the binned activity')
 
-    if condition == 'AB':
-        XYY_patches = ABB_patches
-    elif condition == 'BA':
-        XYY_patches = BAA_patches
+    # Get binned activity for lms of interest
+    binned_activity = get_binned_lm_activity(session, neurons, dF, heatmap_lms, bins, zscoring)
 
-    binned_Y2_activity = get_binned_Y2_activity(neurons, dF, session, XYY_patches, bins=bins, zscoring=zscoring)
-    
     # Plotting
-    x = XY_repeats
-
     for cell in neurons:
         if axes is None:
             fig = plt.figure(figsize=(10,4))
@@ -932,17 +1019,25 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data,
             fig = ax1.figure 
 
         # 1. Plot activity vs XY repeats
-        ax1.scatter(x, y_data[cell], alpha=0.7, s=40, color='darkblue')
+        ax1.scatter(x_data, y_data[cell], alpha=0.7, s=40, color='darkblue')
 
         # Regression line
-        x_fit = np.linspace(x.min(), x.max(), 100)
+        x_fit = np.linspace(min(x_data), max(x_data), 100)
         y_fit = results['intercepts'][cell] + results['slopes'][cell] * x_fit
 
         ax1.plot(x_fit, y_fit, linewidth=2, color='darkblue')
 
-        ax1.set_xlabel('Number of preceding XY repeats')
-        ax1.set_ylabel(f'mean {condition[-1]}2 activity')
-        ax1.set_xticks(x)
+        if data_type == 'Y2_ramp':
+            ax1.set_xlabel('Number of preceding XY repeats')
+        elif data_type == 'XY_order':
+            ax1.set_xlabel(f'Order of {chosen_lm} in sequence')
+        if chosen_lm:
+            ax1.set_ylabel(f'mean {chosen_lm} activity')
+        else:
+            ax1.set_ylabel(f'mean {condition[-1]}2 activity')
+        ax1.set_xticks(np.unique(x_data))
+        if data_type == 'Y2_ramp' and clustering_done:
+            ax1.set_xticklabels(['1', '2', '3-4', '5+'])
 
         ax1.set_title(
             f'slope = {results['slopes'][cell]:.3g}, '
@@ -951,24 +1046,10 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data,
         )
 
         # 2. Plot permutation slopes distribution
-        ax2.hist(
-            results['slopes_shuffled'][cell],
-            bins=30,
-            density=True,
-            alpha=0.7,
-            color='darkblue'
-        )
+        ax2.hist(results['slopes_shuffled'][cell], bins=30, density=True, alpha=0.7, color='darkblue')
 
-        # Observed slope
-        ax2.axvline(
-            results['slopes'][cell],
-            linestyle='--',
-            linewidth=2,
-            color='black'
-        )
-
-        # Zero line
-        ax2.axvline(0, linestyle=':', linewidth=1, color='darkblue')
+        ax2.axvline(results['slopes'][cell], linestyle='--', linewidth=2, color='black') # Observed slope
+        ax2.axvline(0, linestyle=':', linewidth=1, color='darkblue') # Zero line
 
         ax2.set_xlabel('Regression slope')
         ax2.set_ylabel('Density')
@@ -983,12 +1064,12 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data,
             ax.spines['right'].set_visible(False)
 
         # 3. Heatmap of binned activity
-        n_trials = len(binned_Y2_activity[cell])
+        n_trials = len(binned_activity[cell])
 
-        XY_repeat_sorting_idx = np.argsort(x, kind='stable')
-        sorted_repeats = x[XY_repeat_sorting_idx]
         if sort_heatmap:
-            heatmap_data = binned_Y2_activity[cell][XY_repeat_sorting_idx]
+            x_data_sorting_idx = np.argsort(x_data, kind='stable')
+            sorted_repeats = x_data[x_data_sorting_idx]
+            heatmap_data = binned_activity[cell][x_data_sorting_idx]
             change_rows = np.where(np.diff(sorted_repeats) != 0)[0] + 1
 
             block_starts = np.concatenate(([0], change_rows))
@@ -1001,14 +1082,17 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data,
             # Indicate number of XY repeats  per block
             right_ax = ax3.secondary_yaxis('right')
             right_ax.set_yticks(block_centers)
-            if cluster_repeats and clustering_done:
+            if data_type == 'Y2_ramp' and clustering_done:
                 right_ax.set_yticklabels(['1', '2', '3-4', '5+'], fontsize=6)
             else:
                 right_ax.set_yticklabels(block_values, fontsize=6)
-            right_ax.set_ylabel('XY repeats', fontsize=8)
+            if data_type == 'Y2_ramp':
+                right_ax.set_ylabel('XY repeats', fontsize=8)
+            elif data_type == 'XY_order':
+                right_ax.set_ylabel(f'Order of {chosen_lm} in sequence', fontsize=8)
 
         else:
-            heatmap_data = binned_Y2_activity[cell]
+            heatmap_data = binned_activity[cell]
 
         vmax = np.max(heatmap_data)
         vmin = np.min(heatmap_data)
@@ -1017,10 +1101,13 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data,
         cb.ax.set_yticklabels([f"{vmin:.1f}", f"{vmax:.1f}"])
         cb.ax.yaxis.labelpad = -10
 
-        if condition == 'AB':
-            ax3.set_title(f'B2')
-        elif condition == 'BA':
-            ax3.set_title(f'A2')
+        if chosen_lm:
+            ax3.set_title(chosen_lm)
+        else:
+            if condition == 'AB':
+                ax3.set_title(f'B2')
+            elif condition == 'BA':
+                ax3.set_title(f'A2')
         ax3.set_yticks([0, n_trials-1])
         ax3.set_yticklabels([1, n_trials])
         ax3.set_xticks([0, bins-1])
