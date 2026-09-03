@@ -1,0 +1,75 @@
+#!/bin/bash
+#SBATCH --job-name=goal_progress
+#SBATCH --output=goal_progress_%j.out
+#SBATCH --error=goal_progress_%j.err
+#
+#SBATCH -p gpu
+#SBATCH -n 1
+#SBATCH -t 16:00:00
+#SBATCH --mem=32G
+#SBATCH --gres gpu:1
+#SBATCH --mail-type ALL
+#SBATCH --mail-user athina.apostolelli.24@ucl.ac.uk
+
+source ~/.bashrc
+
+module load mamba
+conda activate bonsai_abcd 
+
+# condition="goal_progress"
+condition="monotonic_trend"
+
+PAIRS=(
+  "mouse=TAA0000059 cohort=2 t5:t5 t6:t6"
+#   "mouse=TAA0000066 cohort=2 t5:t5 t6:t6"
+#   "mouse=004 cohort=3 full020:t5 full030:t6"
+#   "mouse=006 cohort=3 full011:t5 full014:t6"
+#   "mouse=007 cohort=3 full010:t5 full012:t6"
+#   "mouse=008 cohort=3 full011:t5 full014:t6"
+#   "mouse=010 cohort=3 full010:t5 full012:t6"
+#   "mouse=011 cohort=3 full009:t5 full013:t6"
+#   "mouse=012 cohort=3 full011:t5 full017:t6"
+#   "mouse=013 cohort=3 full010:t5 full014:t6"
+)
+
+for ENTRY in "${PAIRS[@]}"; do
+    read -a FIELDS <<< "$ENTRY"
+
+    mouse="${FIELDS[0]#mouse=}"
+    cohort="${FIELDS[1]#cohort=}"
+
+    for ((i=2; i<${#FIELDS[@]}; i++)); do
+        session_t="${FIELDS[$i]}"
+        session="${session_t%%:*}"
+        stage="${session_t##*:}"
+
+        if [[ "$condition" == "goal_progress" ]]; then
+            echo "Extracting goal progress for mouse=$mouse session=$session stage=$stage cohort=$cohort"
+
+            python get_goal_progress_neurons.py \
+                --mouse "$mouse" \
+                --session "$session" \
+                --stage "$stage" \
+                --cohort "$cohort"
+
+            echo "Finished extracting goal progress for mouse=$mouse session=$session stage=$stage cohort=$cohort"
+
+        elif [[ "$condition" == "monotonic_trend" ]]; then
+            echo "Calculating monotonic trend across goals in max activity for mouse=$mouse session=$session stage=$stage cohort=$cohort"
+
+            python calculate_monotonic_goal_progress_trend.py \
+                --mouse "$mouse" \
+                --session "$session" \
+                --stage "$stage" \
+                --cohort "$cohort"
+
+            echo "Finished calculating monotonic trend across goals in max activity for mouse=$mouse session=$session stage=$stage cohort=$cohort"
+
+        else
+            echo "ERROR: Unknown condition '$condition'"
+            exit 1
+        fi
+
+    done
+done
+

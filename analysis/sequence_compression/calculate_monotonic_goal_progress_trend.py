@@ -33,6 +33,7 @@ importlib.reload(parse_session_functions)
 importlib.reload(neural_analysis_helpers)
 importlib.reload(cellTV)
 
+# 1. Load data 
 if int(cohort) == 3:
     funcimg_root = Path(f"/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_funcimg_Nov2025/derivatives") 
     behav_root = Path(f"/ceph/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives") 
@@ -69,8 +70,42 @@ elif int(cohort) == 2:
 
     event_idx = np.sort(np.concatenate([session['reward_idx'], session['miss_rew_idx'], session['test_rew_idx']])).astype(int)
 
-# Get goal progress neurons
-goal_progress_tuned = neural_analysis_helpers.get_goal_progress_cells(dF, neurons, session, \
-                                              event_frames=event_idx, save_path=session['save_path'], \
-                                                ngoals=5, bins=90, plot=False, \
-                                                shuffle=True, reload=True)
+# 2. Define saving directory 
+save_dir = os.path.join(session['save_path'], 'progress_monotonic_trend')
+if not os.path.exists(save_dir):
+    os.makedirs(save_dir, exist_ok=True)
+
+# 3. Get goal progress neurons
+goal_progress_tuned, _, _ = neural_analysis_helpers.get_goal_progress_cells(dF, neurons, session,
+                                            event_frames=event_idx, save_path=session['save_path'],
+                                            ngoals=5, bins=90, plot=False,
+                                            shuffle=True, reload=False)
+
+# 4. Get max activity in a window around neuron's preferred phase for each trial 
+max_window_activity = {}
+for cell in goal_progress_tuned:
+    max_window_activity[cell] = neural_analysis_helpers.get_max_phase_pref_goal_activity(dF, cell, session, 
+                                                           event_frames=event_idx, 
+                                                           ngoals=5, bins=90, period='goal', stage=None, 
+                                                           plot=False, shuffle=False)
+
+# 5. Calculate monotonic trend score
+monotonic_trend_results = neural_analysis_helpers.calc_monotonic_trend_score(neurons, max_window_activity, 
+                                                            ngoals=5, shuffle=True, nreps=1000, 
+                                                            print_results=True, reload=False)
+
+# 6. Plot the analysis results for each cell 
+for cell in goal_progress_tuned:
+    _ = neural_analysis_helpers.plot_progress_with_monotonic_trend(
+                dF, cell,
+                event_frames=event_idx,
+                ngoals=5,
+                bins=90,
+                stage=stage,
+                session=session,
+                activity_by_cell=max_window_activity,
+                trend_results=monotonic_trend_results,
+                show_permutation=True,
+                save_plot=True,
+                save_dir=save_dir,
+            )

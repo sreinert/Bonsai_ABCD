@@ -6,9 +6,6 @@ import os, re, sys
 import scipy.stats as stats
 from scipy.ndimage import gaussian_filter1d
 from scipy.signal import find_peaks, resample
-import pandas as pd
-import yaml
-import math
 from math import log10, floor
 import itertools
 import seaborn as sns
@@ -1917,12 +1914,14 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
         for j in range(bins):
             binned_phase_firing[i, j] = np.mean(phase_firing[bin_ix == j+1])
 
-    binned_segment = np.zeros((ngoals, max_trials, binned_phase_firing.shape[1]))
+    # binned_segment = np.zeros((ngoals, max_trials, binned_phase_firing.shape[1]))
+    binned_segment = np.full((ngoals, max_trials, binned_phase_firing.shape[1]), np.nan    )
     for i in range(ngoals):
         idx = np.where(goal_vec == i)[0]
         binned_segment[i, :len(idx), :] = binned_phase_firing[idx, :]
 
-    min_state = min(seg.shape[0] for seg in binned_segment)
+    # min_state = min(seg.shape[0] for seg in binned_segment)
+    min_state = np.min(num_trials)
     binned_all = np.concatenate([binned_segment[i][:min_state, :] for i in range(ngoals)], axis=1)
 
     avg_bin = np.nanmean(binned_all, axis=0)
@@ -1961,6 +1960,8 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
     ax.plot(angles[bins*(ngoals-1):], avg_bin[bins*(ngoals-1):], color=color, linewidth=2)
     ax.fill_between(angles, avg_bin - sem_bin, avg_bin + sem_bin, color=color, alpha=0.2)
     ax.set_xticks(np.linspace(0, 2 * np.pi, ngoals, endpoint=False))
+    if ngoals == 5:
+        ax.set_xticklabels(np.arange(2, ngoals * 2 + 2, 2))
     # if ngoals == 10:
     #     ax.set_xticklabels([])    
     ax.set_rticks([np.round(np.min(avg_bin),1), np.round(np.max(avg_bin),1)])
@@ -2568,3 +2569,407 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
                 )
 
     return state_tuned, state_number_preference
+
+
+def get_max_phase_pref_goal_activity(dF, cell, session, event_frames, ngoals, bins, period='goal', stage=None, plot=False, shuffle=False):
+    '''Extract the maximum activity around a window of the neuron's preferred phase for each goal.'''
+
+    window = bins // 3
+
+    # Extract binned activity for each trial
+    binned_all = cellTV.extract_arb_progress(dF, cell, session,
+                            event_frames, ngoals=ngoals, bins=bins, 
+                            period=period, stage=stage, plot=False, shuffle=shuffle)
+
+    # Get the phase preference of the cell 
+    _, _, phase_preference, _ = cellTV.calc_goal_tuningix(dF, cell, session, 
+                                    condition='arb', event_frames=event_frames, n_goals=ngoals, 
+                                    bins=bins, shuffle=False, print_results=False)
+
+    phase_preference = int(phase_preference)
+
+    max_window_activity = np.empty((binned_all.shape[0], ngoals))
+    phase_differences = []
+
+    for i in range(ngoals):
+        # Get all windows around preferred phase to look in
+        center = phase_preference + i * bins
+
+        phase_pref_window = (
+            np.arange(
+                center - window // 2,
+                center + window // 2
+            ) % binned_all.shape[1]
+        )
+
+        # Get the max activity inside each window
+        window_activity = binned_all[:, phase_pref_window]
+
+        max_window_activity[:, i] = np.max(window_activity, axis=1)
+
+        # Sanity check: at what phase does the max for each trial occur
+        max_idx_bin = np.argmax(window_activity, axis=1) + (center - window // 2) % binned_all.shape[1]
+        max_idx_phase = np.mean(max_idx_bin) % bins
+
+        # Circular phase difference
+        raw_diff = abs(phase_preference - max_idx_phase)
+        d_phase = min(raw_diff, bins - raw_diff)
+
+        phase_differences.append(d_phase)
+
+    if np.any(phase_differences) > 10:
+        print('This cell was probably quite noisy. The phase preference varies across trials.')
+
+    return max_window_activity
+
+def calc_monotonic_trend_score(neurons, activity, ngoals=5, shuffle=False, nreps=1000, print_results=False, save_dir='', reload=False, seed=42):
+    '''
+    Test whether each cell's response amplitude is monotonically ordered across five circular goal-progress 
+    intervals. Calculate a monotonic-trend score (Spearman's correlation) of amplitude against goal id.
+
+    activity_by_cell[cell] must have shape (n_trials, ngoals).
+    The test considers all possible circular reset points.
+    '''
+    
+    results_file = os.path.join(save_dir, "monotonic_trend_scores.npz")
+
+    if os.path.exists(results_file) and not reload:
+        print('Monotonic trend scores found. Loading...')
+        results = np.load(results_file, allow_pickle=True)
+        mean_scores = results['mean_scores'].item()
+        best_start = results['best_start'].item()
+        cell_score = results['cell_score'].item()
+        per_trial_scores = results['per_trial_scores'].item()
+        if 'best_start_shuffled' in results:
+            best_start_shuffled = results['best_start_shuffled'].item()
+            cell_score_shuffled = results['cell_score_shuffled'].item()
+            pvalue = results['pvalue'].item()
+        
+        return results
+
+    else:
+        print('\tCalculating a monotonic trend score per cell')
+
+        rng = np.random.default_rng(seed)
+        progress = np.arange(ngoals)
+
+        mean_scores = {}
+        best_start = {}
+        cell_score = {}
+        per_trial_scores = {}
+        best_start_shuffled = {}
+        cell_score_shuffled = {}
+        pvalue = {}
+
+        def get_trial_scores(cell_activity):
+            """Return one Spearman rho per trial and circular start point."""
+            scores = np.full((cell_activity.shape[0], ngoals), np.nan)
+
+            for trial_i, trial_activity in enumerate(cell_activity):
+                for start in range(ngoals):
+                    # Try all possible circular starting points
+                    rotated = np.roll(trial_activity, -start)
+                    valid = np.isfinite(rotated)
+
+                    if valid.sum() >= 3:
+                        rho, _ = stats.spearmanr(progress[valid], rotated[valid])
+                        scores[trial_i, start] = rho
+
+            return scores
+
+        for cell in neurons:
+            cell_activity = np.asarray(activity[cell], dtype=float)
+
+            if cell_activity.ndim != 2 or cell_activity.shape[1] != ngoals:
+                raise ValueError(
+                    f"Cell {cell}: expected activity with shape "
+                    f"(n_trials, {ngoals}), got {cell_activity.shape}."
+                )
+
+            # Observed statistic
+            trial_scores = get_trial_scores(cell_activity)
+            mean_scores[cell] = np.nanmean(trial_scores, axis=0)
+
+            if not np.any(np.isfinite(mean_scores[cell])):
+                best_start[cell] = np.nan
+                cell_score[cell] = np.nan
+                per_trial_scores[cell] = np.full(cell_activity.shape[0], np.nan)
+                continue
+
+            # Absolute value permits either an increasing or decreasing trend.
+            best_start[cell] = np.nanargmax(np.abs(mean_scores[cell]))
+            cell_score[cell] = mean_scores[cell][best_start[cell]]
+            per_trial_scores[cell] = trial_scores[:, best_start[cell]]
+
+            if print_results:
+                print(f"\nCell {cell}")
+                print("Mean score for each rotation:", mean_scores[cell])
+                print("Best start index:", best_start[cell], f"(landmark {(best_start[cell] + 1 )* 2 })")
+                print("Cell trend score:", cell_score[cell])
+
+            # Permutation test
+            if shuffle:
+                best_start_shuffled[cell] = np.empty(nreps, dtype=int)
+                cell_score_shuffled[cell] = np.empty(nreps)
+
+                for rep in range(nreps):
+
+                    # Shuffle the goal/interval assignment independently per trial.
+                    shuffled_activity = np.array([
+                        trial_activity[rng.permutation(ngoals)]
+                        for trial_activity in cell_activity
+                    ])
+
+                    shuffled_trial_scores = get_trial_scores(shuffled_activity)
+                    shuffled_mean_scores = np.nanmean(
+                        shuffled_trial_scores, axis=0
+                    )
+
+                    shuffled_best_start = np.nanargmax(
+                        np.abs(shuffled_mean_scores)
+                    )
+
+                    best_start_shuffled[cell][rep] = shuffled_best_start
+                    cell_score_shuffled[cell][rep] = (
+                        shuffled_mean_scores[shuffled_best_start]
+                    )
+
+                # Two-sided: evidence can be strongly increasing or decreasing.
+                pvalue[cell] = (
+                    1
+                    + np.sum(
+                        np.abs(cell_score_shuffled[cell])
+                        >= np.abs(cell_score[cell])
+                    )
+                ) / (nreps + 1)
+
+        results = {
+            "mean_scores": mean_scores,
+            "best_start": best_start,
+            "cell_score": cell_score,
+            "per_trial_scores": per_trial_scores,
+        }
+
+        if shuffle:
+            results["best_start_shuffled"] = best_start_shuffled
+            results["cell_score_shuffled"] = cell_score_shuffled
+            results["pvalue"] = pvalue
+            
+        if save_dir:
+            np_results = {key: np.array(value, dtype=object) for key, value in results.items()}
+            np.savez(results_file, **np_results)
+            print(f"\tSaved results in: {results_file}")
+
+        return results
+    
+def plot_progress_with_monotonic_trend(
+    dF,
+    cell,
+    event_frames,
+    ngoals,
+    bins,
+    stage,
+    session,
+    activity_by_cell,
+    trend_results,
+    period="goal",
+    labels=None,
+    interval_labels=None,
+    qvalues=None,
+    show_permutation=True,
+    save_plot=False,
+    save_dir=None,
+):
+    """
+    Plot the original polar progress-tuning plot plus a trend-aligned
+    peak/window-amplitude summary.
+
+    Parameters
+    ----------
+    activity_by_cell[cell] : array, shape (n_trials, ngoals)
+        Trial-level peak/window response amplitudes, in original corridor order.
+    trend_results : dict
+        Output from calc_monotonic_trend_score().
+    qvalues : dict or None
+        Optional FDR-corrected p-values, indexed by cell.
+    """
+
+    if interval_labels is None:
+        interval_labels = np.array(["2–4", "4–6", "6–8", "8–10", "10–2"])
+
+    cell_activity = np.asarray(activity_by_cell[cell], dtype=float)
+    best_start = trend_results["best_start"][cell]
+    rho = trend_results["cell_score"][cell]
+
+    if not np.isfinite(best_start):
+        raise ValueError(f"Cell {cell} has no valid best_start.")
+
+    # Rotate trial-level amplitudes according to this cell's inferred reset.
+    rotated_activity = np.roll(cell_activity, -best_start, axis=1)
+    rotated_labels = np.roll(interval_labels, -best_start)
+
+    # Trial mean and SEM in the aligned order.
+    n_valid = np.sum(np.isfinite(rotated_activity), axis=0)
+    mean_amplitude = np.nanmean(rotated_activity, axis=0)
+    sem_amplitude = (
+        np.nanstd(rotated_activity, axis=0, ddof=1)
+        / np.sqrt(n_valid)
+    )
+
+    # Prefer FDR q-values if supplied; otherwise use permutation p-values.
+    if qvalues is not None:
+        significance_value = qvalues[cell]
+        significance_label = "q"
+    elif "pvalue" in trend_results:
+        significance_value = trend_results["pvalue"][cell]
+        significance_label = "p"
+    else:
+        significance_value = np.nan
+        significance_label = None
+
+    direction = "increasing" if rho > 0 else "decreasing"
+
+    if show_permutation:
+        fig = plt.figure(figsize=(16, 5))
+        gs = fig.add_gridspec(1, 3, width_ratios=[1.1, 1.0, 0.85])
+
+        polar_ax = fig.add_subplot(gs[0], projection="polar")
+        trend_ax = fig.add_subplot(gs[1])
+        null_ax = fig.add_subplot(gs[2])
+
+    else:
+        fig = plt.figure(figsize=(12, 5))
+        polar_ax = fig.add_subplot(1, 2, 1, projection="polar")
+        trend_ax = fig.add_subplot(1, 2, 2)
+        null_ax = None
+
+    # Your existing physical-corridor plot: do not rotate this.
+    neural_analysis_helpers.plot_arb_progress(
+        dF=dF,
+        cell=cell,
+        event_frames=event_frames,
+        ngoals=ngoals,
+        bins=bins,
+        stage=int(stage[-1]),
+        session=session,
+        period=period,
+        labels=labels,
+        ax=polar_ax,
+    )
+
+    color = polar_ax.lines[0].get_color()
+    x = np.arange(ngoals)
+
+    # Individual trials: faint lines reveal consistency across trials.
+    for trial_activity in rotated_activity:
+        valid = np.isfinite(trial_activity)
+        trend_ax.plot(
+            x[valid],
+            trial_activity[valid],
+            color="0.7",
+            alpha=0.35,
+            linewidth=0.8,
+            zorder=1,
+        )
+        trend_ax.scatter(
+            x[valid],
+            trial_activity[valid],
+            color="0.7",
+            alpha=0.35,
+            s=12,
+            zorder=1,
+        )
+
+    # Cell-level mean ± SEM.
+    trend_ax.errorbar(
+        x,
+        mean_amplitude,
+        yerr=sem_amplitude,
+        color=color,
+        marker="o",
+        markersize=6,
+        linewidth=2,
+        capsize=3,
+        zorder=3,
+    )
+
+    trend_ax.set_xticks(x)
+    trend_ax.set_xticklabels(rotated_labels)
+    trend_ax.set_xlabel("Goal interval after inferred reset")
+    trend_ax.set_ylabel("Peak activity in window around preferred phase")
+    trend_ax.set_title(
+        f"{direction.capitalize()} trend "
+        f"(Spearman $\\rho$ = {rho:.2f})"
+    )
+
+    # State the reset explicitly.
+    trend_ax.text(
+        0.02,
+        0.98,
+        f"Reset begins at {rotated_labels[0]}",
+        transform=trend_ax.transAxes,
+        va="top",
+    )
+
+    if np.isfinite(significance_value):
+        trend_ax.text(
+            0.02,
+            0.89,
+            f"{significance_label} = {significance_value:.3g}",
+            transform=trend_ax.transAxes,
+            va="top",
+        )
+
+    trend_ax.spines[["top", "right"]].set_visible(False)
+
+    if show_permutation:
+        if "cell_score_shuffled" not in trend_results:
+            raise ValueError(
+                "No permutation results found. Run the trend analysis "
+                "with shuffle=True first."
+            )
+
+        # The test is two-sided, hence absolute scores.
+        null_dist = np.abs(trend_results["cell_score_shuffled"][cell])
+        observed_statistic = np.abs(rho)
+
+        null_ax.hist(
+            null_dist,
+            bins=30,
+            color="0.7",
+            edgecolor="white",
+            linewidth=0.7,
+        )
+
+        null_ax.axvline(
+            observed_statistic,
+            color=color,
+            linewidth=2.5,
+            label=f"Observed |ρ| = {observed_statistic:.2f}",
+        )
+
+        raw_p = trend_results["pvalue"][cell]
+
+        null_ax.set_xlabel("Best circular |Spearman ρ|")
+        null_ax.set_ylabel("Number of permutations")
+        null_ax.set_title("Permutation null distribution")
+        # null_ax.legend(frameon=False, fontsize=9)
+        null_ax.spines[["top", "right"]].set_visible(False)
+        
+    fig.tight_layout()
+
+    if save_plot:
+        if save_dir is None:
+            raise ValueError("Provide save_dir when save=True.")
+
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        # Add .png automatically if no file extension was supplied.
+        save_path = save_dir / f'cell_{cell}'
+        if save_path.suffix == "":
+            save_path = save_path.with_suffix(".png")
+
+        fig.savefig(save_path, dpi=300, bbox_inches="tight", facecolor="white")
+
+    return fig, polar_ax, trend_ax
