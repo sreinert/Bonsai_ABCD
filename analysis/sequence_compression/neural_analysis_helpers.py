@@ -2571,10 +2571,10 @@ def get_state_tuned_cells(dF, session, event_idx, neurons, bins=90, ngoals=5, pl
     return state_tuned, state_number_preference
 
 
-def get_max_phase_pref_goal_activity(dF, cell, session, event_frames, ngoals, bins, period='goal', stage=None, plot=False, shuffle=False):
-    '''Extract the maximum activity around a window of the neuron's preferred phase for each goal.'''
+def get_max_phase_pref_goal_activity(dF, cell, session, event_frames, ngoals, bins, selection='mean', period='goal', stage=None, plot=False, shuffle=False):
+    '''Extract the maximum / mean activity around a window of the neuron's preferred phase for each goal.'''
 
-    window = bins // 3
+    window = bins // 4
 
     # Extract binned activity for each trial
     binned_all = cellTV.extract_arb_progress(dF, cell, session,
@@ -2582,11 +2582,13 @@ def get_max_phase_pref_goal_activity(dF, cell, session, event_frames, ngoals, bi
                             period=period, stage=stage, plot=False, shuffle=shuffle)
 
     # Get the phase preference of the cell 
-    _, _, phase_preference, _ = cellTV.calc_goal_tuningix(dF, cell, session, 
-                                    condition='arb', event_frames=event_frames, n_goals=ngoals, 
-                                    bins=bins, shuffle=False, print_results=False)
+    # _, _, phase_preference, _ = cellTV.calc_goal_tuningix(dF, cell, session, 
+    #                                 condition='arb', event_frames=event_frames, n_goals=ngoals, 
+    #                                 bins=bins, shuffle=False, print_results=False)
 
-    phase_preference = int(phase_preference)
+    # phase_preference = int(phase_preference)
+    phase_preference = cellTV.calc_goal_tuningix(dF, cell, session, 
+                                    condition='arb', event_frames=event_frames, n_goals=ngoals, bins=bins)
 
     max_window_activity = np.empty((binned_all.shape[0], ngoals))
     phase_differences = []
@@ -2605,7 +2607,10 @@ def get_max_phase_pref_goal_activity(dF, cell, session, event_frames, ngoals, bi
         # Get the max activity inside each window
         window_activity = binned_all[:, phase_pref_window]
 
-        max_window_activity[:, i] = np.max(window_activity, axis=1)
+        if selection == 'maximum':
+            max_window_activity[:, i] = np.max(window_activity, axis=1)
+        elif selection == 'mean':
+            max_window_activity[:, i] = np.mean(window_activity, axis=1)
 
         # Sanity check: at what phase does the max for each trial occur
         max_idx_bin = np.argmax(window_activity, axis=1) + (center - window // 2) % binned_all.shape[1]
@@ -2634,17 +2639,15 @@ def calc_monotonic_trend_score(neurons, activity, ngoals=5, shuffle=False, nreps
     results_file = os.path.join(save_dir, "monotonic_trend_scores.npz")
 
     if os.path.exists(results_file) and not reload:
-        print('Monotonic trend scores found. Loading...')
-        results = np.load(results_file, allow_pickle=True)
-        mean_scores = results['mean_scores'].item()
-        best_start = results['best_start'].item()
-        cell_score = results['cell_score'].item()
-        per_trial_scores = results['per_trial_scores'].item()
-        if 'best_start_shuffled' in results:
-            best_start_shuffled = results['best_start_shuffled'].item()
-            cell_score_shuffled = results['cell_score_shuffled'].item()
-            pvalue = results['pvalue'].item()
-        
+        print("Monotonic trend scores found. Loading...")
+
+        loaded = np.load(results_file, allow_pickle=True)
+
+        results = {
+            key: loaded[key].item()
+            for key in loaded.files
+        }
+
         return results
 
     else:
@@ -2779,6 +2782,7 @@ def plot_progress_with_monotonic_trend(
     show_permutation=True,
     save_plot=False,
     save_dir=None,
+    axes=None,
 ):
     """
     Plot the original polar progress-tuning plot plus a trend-aligned
@@ -2829,22 +2833,32 @@ def plot_progress_with_monotonic_trend(
 
     direction = "increasing" if rho > 0 else "decreasing"
 
-    if show_permutation:
-        fig = plt.figure(figsize=(16, 5))
-        gs = fig.add_gridspec(1, 3, width_ratios=[1.1, 1.0, 0.85])
+    if axes is None:
+        if show_permutation:
+            fig = plt.figure(figsize=(16, 5))
+            gs = fig.add_gridspec(1, 3, width_ratios=[1.1, 1.0, 0.85])
 
-        polar_ax = fig.add_subplot(gs[0], projection="polar")
-        trend_ax = fig.add_subplot(gs[1])
-        null_ax = fig.add_subplot(gs[2])
+            polar_ax = fig.add_subplot(gs[0], projection="polar")
+            trend_ax = fig.add_subplot(gs[1])
+            null_ax = fig.add_subplot(gs[2])
+        else:
+            fig = plt.figure(figsize=(12, 5))
+            polar_ax = fig.add_subplot(1, 2, 1, projection="polar")
+            trend_ax = fig.add_subplot(1, 2, 2)
+            null_ax = None
 
     else:
-        fig = plt.figure(figsize=(12, 5))
-        polar_ax = fig.add_subplot(1, 2, 1, projection="polar")
-        trend_ax = fig.add_subplot(1, 2, 2)
-        null_ax = None
+        polar_ax, trend_ax, null_ax = axes
+        fig = polar_ax.figure
 
+        if show_permutation and null_ax is None:
+            raise ValueError(
+                "Pass polar, trend, and permutation axes when "
+                "show_permutation=True."
+            )
+    
     # Your existing physical-corridor plot: do not rotate this.
-    neural_analysis_helpers.plot_arb_progress(
+    plot_arb_progress(
         dF=dF,
         cell=cell,
         event_frames=event_frames,

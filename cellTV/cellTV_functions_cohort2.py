@@ -1074,6 +1074,28 @@ def calc_goal_tuningix(dF, cell, session, condition='goal', period='goal', event
 
     return real_score, shuffled_scores, phase_preference, state_preference
 
+def calc_phase_preference(dF, cell, session, condition='goal', period='goal', event_frames=None, n_goals=4, frame_rate=45, bins=90):
+    """
+    Calculate the phase preference for a specific cell. 
+    NOTE that this is different to the phase preference calculation in the calc_goal_tuningix function above.
+    """
+    if condition == 'goal':
+        binned_all, _ = extract_goal_progress(dF, cell, session, frame_rate=frame_rate, bins=bins, plot=False, shuffle=False)
+    elif condition == 'arb':
+        binned_all = extract_arb_progress(dF, cell, session, event_frames, n_goals, bins, period=period, plot=False, shuffle=False)
+
+    av_binned = np.nanmean(binned_all, axis=0)
+    ngoals = int(av_binned.shape[0]/bins)
+    state_max = np.zeros(ngoals)
+    pref_phase = np.zeros(ngoals)
+
+    for i in range(ngoals):
+        state_max[i] = np.max(av_binned[bins*i:bins*(i+1)])
+        pref_phase[i] = np.where(av_binned[bins*i:bins*(i+1)] == state_max[i])[0][0] 
+    phase_preference = int(np.mean(pref_phase))
+
+    return phase_preference
+
 ## Correlations with other cells
 
 def extract_cell_correlation(dF, cell, ops, seg, session, plot=False):

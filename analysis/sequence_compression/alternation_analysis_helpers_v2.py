@@ -1147,10 +1147,11 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data, x_data
         ax3.set_xticks([0, bins-1])
         ax3.set_xticklabels([0, bins])
         ax3.set_xlabel('Time bins')
-        
-        plt.suptitle(f'{condition}: neuron {cell}') 
-        plt.tight_layout()
 
+        if axes is None:
+            fig.suptitle(f"{condition}: neuron {cell}")
+            fig.tight_layout()
+        
         if save_plot:
             if plot_dir == '':
                 plot_dir = session['save_dir']
