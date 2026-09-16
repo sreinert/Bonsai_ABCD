@@ -278,3 +278,45 @@ def safe_divide(a, b):
     np.divide(a, b, out=out, where=(b != 0))
 
     return out
+
+def merge_positions_keep_single(pos1, pos2, tol, offset):
+    """
+    Merge two sorted position arrays.
+    - If positions are within tol → average
+    - If only one exists → keep it
+    """
+    i = j = 0
+    merged = []
+
+    while i < len(pos1) and j < len(pos2):
+        if pos1[i] < offset:
+            merged.append(pos1[i])
+            i += 1
+            continue
+
+        if pos2[j] < offset:
+            merged.append(pos2[j])
+            j += 1
+            continue
+
+        if abs(pos1[i] - pos2[j]) <= tol:
+            merged.append(np.mean([pos1[i], pos2[j]]))
+            i += 1
+            j += 1
+        elif pos1[i] < pos2[j]:
+            merged.append(pos1[i])
+            i += 1
+        else:
+            merged.append(pos2[j])
+            j += 1
+
+    # append leftovers
+    while i < len(pos1):
+        merged.append(pos1[i])
+        i += 1
+
+    while j < len(pos2):
+        merged.append(pos2[j])
+        j += 1
+
+    return np.array(merged)

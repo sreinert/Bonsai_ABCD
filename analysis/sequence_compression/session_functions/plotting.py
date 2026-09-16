@@ -49,103 +49,243 @@ def compute_psth_pair(behaviour, events, bins):
     licks = behaviour.get_lick_rate_psth(events=events, bins=bins)
     return speed, licks
 
-def plot_speed_lick_rate_psth(session, behaviour, bins=None):
+# def plot_speed_lick_rate_psth(session, behaviour, bins=None):
 
-    if 'LM_Count' in session.dataframe.columns:
+#     if 'LM_Count' in session.dataframe.columns:
+#         release_df = session.estimate_lm_events()
+#     else:
+#         release_df = session.estimate_release_events()
+
+#     dt_idx = np.diff(release_df['Index'])
+#     dt_seconds = release_df.index.to_series().diff().dt.total_seconds().to_numpy()
+    
+#     if bins is None:
+#         min_dt_idx = np.min(dt_idx)
+#         min_dt_seconds = np.nanmin(dt_seconds)
+#         window_seconds = np.round(min_dt_seconds * 2, 1)
+#         bins = int(min_dt_idx * 2)
+#     else:
+#         window_seconds = np.round(dt_seconds[1:] / dt_idx * bins, 1)
+#         window_seconds = window_seconds[~np.isnan(window_seconds)][0]
+
+#     fig, axes = plt.subplots(1, 2, figsize=(10,4))
+#     ax_speed, ax_lick = axes
+
+#     # --- Get event indices ---
+#     if session.sequence == 'full':
+#         landmarks, lm_idx = session.get_landmarks()
+
+#     else:
+#         # Binary sequence
+#         A_landmarks, B_landmarks, A_idx, B_idx = session.get_A_B_landmarks()
+
+#     # --- Define groups dynamically ---
+#     groups = {}
+
+#     if session.sequence == 'ABAB':
+#         groups = {
+#             'A': (A_idx, 'darkblue'),
+#             'B': (B_idx, 'orange')
+#         }
+
+#     elif session.sequence == 'AABB':
+#         groups = {
+#             'A1': (A_idx[::2], 'darkblue'),
+#             'A2': (A_idx[1::2], 'blue'),
+#             'B1': (B_idx[::2], 'orange'),
+#             'B2': (B_idx[1::2], 'gold')
+#         }
+
+#     elif session.sequence == 'ABB':
+#         groups = {
+#             'A': (A_idx, 'darkblue'),
+#             'B1': (B_idx[::2], 'orange'),
+#             'B2': (B_idx[1::2], 'gold')
+#         }
+
+#     elif session.sequence == 'ABBB':
+#         groups = {
+#             'A': (A_idx, 'darkblue'),
+#             'B1': (B_idx[::3], 'orange'),
+#             'B2': (B_idx[1::3], 'gold'),
+#             'B3': (B_idx[2::3], 'brown')
+#         }
+
+#     elif session.sequence == 'AAB':
+#         groups = {
+#             'A1': (A_idx[::2], 'darkblue'),
+#             'A2': (A_idx[1::2], 'blue'),
+#             'B1': (B_idx, 'orange'),
+#         }
+
+#     else:
+#         groups = {
+#             'lm': (lm_idx, 'black')
+#         }
+
+#     # --- Compute + plot ---
+#     for label, (events, color) in groups.items():
+
+#         (mean_s, sem_s), (mean_l, sem_l) = compute_psth_pair(behaviour, events, bins)
+
+#         plot_psth(ax_speed, mean_s, sem_s, color, label)
+#         plot_psth(ax_lick, mean_l, sem_l, color, label)
+
+#     ax_speed.axhline(session.settings['velocityThreshold'], linestyle='--', color='grey')
+
+#     # --- Styling ---
+#     for ax in axes:
+#         ax.legend()
+#         ax.spines['top'].set_visible(False)
+#         ax.spines['right'].set_visible(False)
+
+#         ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
+#         ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
+
+#     ax_speed.set_title('Speed')
+#     ax_lick.set_title('Lick rate')
+
+#     plt.tight_layout()
+#     return fig
+
+def plot_speed_lick_rate_psth(session, behaviour, bins=None, sess=None, session_type=None):
+
+    # --- Determine PSTH window size ---
+    if "LM_Count" in session.dataframe.columns:
         release_df = session.estimate_lm_events()
     else:
         release_df = session.estimate_release_events()
 
-    dt_idx = np.diff(release_df['Index'])
-    dt_seconds = release_df.index.to_series().diff().dt.total_seconds().to_numpy()
-    
+    dt_idx = np.diff(release_df["Index"])
+    dt_seconds = (
+        release_df.index.to_series()
+        .diff()
+        .dt.total_seconds()
+        .to_numpy()
+    )
+
     if bins is None:
         min_dt_idx = np.min(dt_idx)
         min_dt_seconds = np.nanmin(dt_seconds)
+
         window_seconds = np.round(min_dt_seconds * 2, 1)
         bins = int(min_dt_idx * 2)
-    else:
-        window_seconds = np.round(dt_seconds[1:] / dt_idx * bins, 1)
-        window_seconds = window_seconds[~np.isnan(window_seconds)][0]
 
-    fig, axes = plt.subplots(1, 2, figsize=(10,4))
+    else:
+        seconds_per_bin = dt_seconds[1:] / dt_idx
+        seconds_per_bin = seconds_per_bin[~np.isnan(seconds_per_bin)]
+
+        window_seconds = np.round(seconds_per_bin[0] * bins, 1)
+
+    # --- Create plot ---
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     ax_speed, ax_lick = axes
 
-    # --- Get event indices ---
-    if session.sequence == 'full':
-        landmarks, lm_idx = session.get_landmarks()
+    # --- Define PSTH event groups ---
+    if session_type == "ABCD":
 
-    else:
-        # Binary sequence
-        A_landmarks, B_landmarks, A_idx, B_idx = session.get_A_B_landmarks()
+        sess = session.analyse_session_pre7_behav()
 
-    # --- Define groups dynamically ---
-    groups = {}
-
-    if session.sequence == 'ABAB':
         groups = {
-            'A': (A_idx, 'darkblue'),
-            'B': (B_idx, 'orange')
-        }
-
-    elif session.sequence == 'AABB':
-        groups = {
-            'A1': (A_idx[::2], 'darkblue'),
-            'A2': (A_idx[1::2], 'blue'),
-            'B1': (B_idx[::2], 'orange'),
-            'B2': (B_idx[1::2], 'gold')
-        }
-
-    elif session.sequence == 'ABB':
-        groups = {
-            'A': (A_idx, 'darkblue'),
-            'B1': (B_idx[::2], 'orange'),
-            'B2': (B_idx[1::2], 'gold')
-        }
-
-    elif session.sequence == 'ABBB':
-        groups = {
-            'A': (A_idx, 'darkblue'),
-            'B1': (B_idx[::3], 'orange'),
-            'B2': (B_idx[1::3], 'gold'),
-            'B3': (B_idx[2::3], 'brown')
-        }
-
-    elif session.sequence == 'AAB':
-        groups = {
-            'A1': (A_idx[::2], 'darkblue'),
-            'A2': (A_idx[1::2], 'blue'),
-            'B1': (B_idx, 'orange'),
+            "Goal": (sess['goal_lm_entry_idx'], "darkblue"),
+            "Non-Goal": (sess['nongoal_lm_entry_idx'], "orange"),
         }
 
     else:
-        groups = {
-            'lm': (lm_idx, 'black')
-        }
+        # Original sequence-based grouping
+        if session.sequence == "full":
+            landmarks, lm_idx = session.get_landmarks()
 
-    # --- Compute + plot ---
-    for label, (events, color) in groups.items():
+            groups = {
+                "Landmark": (lm_idx, "black"),
+            }
 
-        (mean_s, sem_s), (mean_l, sem_l) = compute_psth_pair(behaviour, events, bins)
+        else:
+            _, _, A_idx, B_idx = session.get_A_B_landmarks()
 
-        plot_psth(ax_speed, mean_s, sem_s, color, label)
-        plot_psth(ax_lick, mean_l, sem_l, color, label)
+            if session.sequence == "ABAB":
+                groups = {
+                    "A": (A_idx, "darkblue"),
+                    "B": (B_idx, "orange"),
+                }
 
-    ax_speed.axhline(session.settings['velocityThreshold'], linestyle='--', color='grey')
+            elif session.sequence == "AABB":
+                groups = {
+                    "A1": (A_idx[::2], "darkblue"),
+                    "A2": (A_idx[1::2], "blue"),
+                    "B1": (B_idx[::2], "orange"),
+                    "B2": (B_idx[1::2], "gold"),
+                }
+
+            elif session.sequence == "ABB":
+                groups = {
+                    "A": (A_idx, "darkblue"),
+                    "B1": (B_idx[::2], "orange"),
+                    "B2": (B_idx[1::2], "gold"),
+                }
+
+            elif session.sequence == "ABBB":
+                groups = {
+                    "A": (A_idx, "darkblue"),
+                    "B1": (B_idx[::3], "orange"),
+                    "B2": (B_idx[1::3], "gold"),
+                    "B3": (B_idx[2::3], "brown"),
+                }
+
+            elif session.sequence == "AAB":
+                groups = {
+                    "A1": (A_idx[::2], "darkblue"),
+                    "A2": (A_idx[1::2], "blue"),
+                    "B1": (B_idx, "orange"),
+                }
+
+            else:
+                groups = {
+                    "Landmark": (np.concatenate([A_idx, B_idx]), "black"),
+                }
+
+    # --- Compute and plot PSTHs ---
+    for label, (event_idx, color) in groups.items():
+
+        if len(event_idx) == 0:
+            continue
+
+        (mean_speed, sem_speed), (mean_lick, sem_lick) = compute_psth_pair(
+            behaviour,
+            event_idx,
+            bins,
+        )
+
+        plot_psth(ax_speed, mean_speed, sem_speed, color, label)
+        plot_psth(ax_lick, mean_lick, sem_lick, color, label)
 
     # --- Styling ---
+    ax_speed.axhline(
+        session.settings["velocityThreshold"],
+        linestyle="--",
+        color="grey",
+    )
+
     for ax in axes:
         ax.legend()
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
 
-        ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
-        ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
+        ax.axvspan(bins / 2, bins, color="grey", alpha=0.3)
+        ax.set_xticks(
+            [0, bins / 2, bins],
+            labels=[
+                f"{-window_seconds / 2:.1f}",
+                "0",
+                f"{window_seconds / 2:.1f}",
+            ],
+        )
 
-    ax_speed.set_title('Speed')
-    ax_lick.set_title('Lick rate')
+    ax_speed.set_title("Speed")
+    ax_lick.set_title("Lick rate")
 
     plt.tight_layout()
+
     return fig
 
 def plot_speed_psth_distance_groups(session, psth_A, psth_B, distance_groups, bins=300):
@@ -234,14 +374,15 @@ def plot_transition_matrix(session, performance):
     from matplotlib.colors import Normalize
 
     target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = session.find_targets_distractors()
-    
+
     # Decide if matrix permuation is needed for plotting (currently only for AAB)
     perm = None
 
-    if len(session.reward_seq) == 3:
-        A_landmarks = list(np.where(session.reward_seq == 0)[0])
-        if len(A_landmarks) == 2:   # AAB
-            perm = np.array([target_id[0], target_id[1], distractor_id[0]])
+    if session.sequence == 'AAB':
+        perm = np.array([target_id[0], target_id[1], distractor_id[0]])
+    elif session.sequence == 'ABAB':
+        if session.cohort == 2 and 'initialCorridorOffset' in session.settings and session.settings['initialCorridorOffset'] > 0:
+            perm = np.array([target_id[0], distractor_id[0], target_id[1], distractor_id[1]])
 
     transition_matrix, lick_tm, ideal_tm = performance.calc_transition_matrix()
     
@@ -413,38 +554,68 @@ def plot_conditional_matrix(session, performance, n_steps=1):
 
     return fig
 
-def plot_lick_lm(session, performance):
-    target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = session.find_targets_distractors()
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = performance.calc_hit_fa()
+def plot_lick_lm(session, performance=None, session_type=None):
+    if session_type == "ABCD":
+        # ABCD version
+        sess = session.analyse_session_pre7_behav()
 
-    A_landmarks, _, _, _ = session.get_A_B_landmarks()
+        licked_all = sess["licked_lms"][0]
+        lm_id_sequence = sess["all_lms"]
 
-    was_target = np.zeros(len(lm_id_sequence))
-    was_target[A_landmarks] = 1
-    was_target = was_target[:,np.newaxis]
+        was_target = np.zeros(len(sess["all_landmarks"]))
+        was_target[sess["goals_idx"]] = 1
 
-    licked_all = licked_all[:,np.newaxis]
-    lm_id_sequence = lm_id_sequence[:,np.newaxis]
-    fig = plt.figure(figsize=(10,4))
+        lm_cmap = "viridis"
+
+    else:
+        # Sequence compression version
+        _, _, _, _, _, lm_id_sequence = session.find_targets_distractors()
+
+        (
+            hit_rate,
+            fa_rate,
+            d_prime,
+            licked_target,
+            licked_distractor,
+            licked_all,
+            rewarded_all,
+        ) = performance.calc_hit_fa()
+
+        A_landmarks, _, _, _ = session.get_A_B_landmarks()
+
+        was_target = np.zeros(len(lm_id_sequence))
+        was_target[A_landmarks] = 1
+
+        lm_cmap = "viridis_r"
+
+    # Convert 1D arrays to one-row images for imshow
+    was_target = was_target[:, np.newaxis]
+    licked_all = licked_all[:, np.newaxis]
+    lm_id_sequence = lm_id_sequence[:, np.newaxis]
+
+    fig = plt.figure(figsize=(10, 4))
+
     plt.subplot(3, 1, 1)
-    plt.imshow(was_target.T, aspect='auto', cmap='viridis')
-    plt.clim(0, 1)
-    plt.title('Was Target')
+    plt.imshow(was_target.T, aspect="auto", cmap="viridis", vmin=0, vmax=1)
+    plt.title("Was Target")
 
-    #invert color map for better visibility
     plt.subplot(3, 1, 2)
-    plt.imshow(lm_id_sequence.T, aspect='auto', cmap='viridis_r')
-    plt.clim(0, np.max(lm_id_sequence))
-    plt.title('Landmark ID')
+    plt.imshow(
+        lm_id_sequence.T,
+        aspect="auto",
+        cmap=lm_cmap,
+        vmin=0,
+        vmax=np.max(lm_id_sequence),
+    )
+    plt.title("Landmark ID")
 
     plt.subplot(3, 1, 3)
-    plt.imshow(licked_all.T, aspect='auto', cmap='viridis')
-    plt.clim(0, 1)
-    plt.title('Licked All')
+    plt.imshow(licked_all.T, aspect="auto", cmap="viridis", vmin=0, vmax=1)
+    plt.title("Licked All")
+
     plt.tight_layout()
 
     return fig
-
 
 def plot_sw_hit_fa(session, performance, window=10):
 

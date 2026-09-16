@@ -251,6 +251,7 @@ class Performance():
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
             plt.legend(frameon=False)
+            plt.tight_layout()
 
             return hit_rate_sw, fa_rate_sw, fig
         
