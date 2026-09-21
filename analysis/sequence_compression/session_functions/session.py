@@ -380,11 +380,16 @@ class Session():
             A_positions = np.zeros((len(reward_positions) - 1))
             B_positions = np.zeros((len(reward_positions) - 1, num_Bs))
 
+            prev_A = None
             for i, pos in enumerate(reward_positions[:-1]):
-                mask = (np.round(target_positions, 1) > np.round(pos, 1)) & (np.round(target_positions, 1) <= np.round(reward_positions[i + 1], 1))
+                rounded_targets = np.round(target_positions)
+                rounded_pos = np.round(pos)
+                mask =  (rounded_targets > rounded_pos) & (rounded_targets != prev_A)
+                # mask = (np.round(target_positions, 1) > np.round(pos, 1)) & (np.round(target_positions, 1) <= np.round(reward_positions[i + 1], 1))
                 following_A = target_positions[mask][0]
                 A_positions[i] = following_A
                 A_A_diff[i] = np.round(following_A - pos)
+                prev_A = np.round(following_A)
 
                 # Keep Bs from current A (or reward) up to the next A
                 following_Bs = distractor_positions[(distractor_positions > pos) & (distractor_positions < following_A)]
