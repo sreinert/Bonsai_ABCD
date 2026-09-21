@@ -619,3 +619,134 @@ class Behaviour():
             psth_B.append(psth_B_j)
 
         return psth_A, psth_B, distance_groups
+
+    def get_binary_lick_map(self, return_sess=False):
+        """Create a binary map of licked landmarks - similar to get_licked_lms"""
+
+        sess = self.session.sess
+
+        # Get all datapoints within landmarks
+        sess = self.session.get_data_lm_idx(sess)
+
+        licked_lms = np.empty((len(sess['all_lms'])))
+        for lm in range(len(sess['all_lms'])):
+            # datapoints within landmarks for each lap 
+            lm_idx = np.where(sess['data_lm_idx'] == lm+1)[0]
+            
+            # Find all licks within the landmark
+            if 'thresholded_licks' in sess:
+                thresholded_lick_idx = np.where(sess["thresholded_licks"] == 1)[0]
+                target_licks = np.intersect1d(lm_idx, thresholded_lick_idx)
+            else:
+                target_licks = np.intersect1d(lm_idx, sess['lick_idx'])
+            if len(target_licks) > 0:
+                licked_lms[lm] = 1
+            else:
+                licked_lms[lm] = 0
+
+        # Check number of actual laps
+        num_lms_considered = int(np.round((len(sess['all_landmarks']) // sess['num_landmarks']) * sess['num_landmarks']))
+        num_laps = int(num_lms_considered / sess['num_landmarks'])
+
+        # Reshape the data 
+        if '3' in sess['stage'] or '4' in sess['stage']:
+            # The landmarks might not be in order so we need to be careful about binning 
+            # Determine how many rows to keep
+            min_len = min(len(sess['goals_idx']), len(sess['non_goals_idx']))
+            goal_licked_lms = licked_lms[sess['goals_idx'][:min_len]]
+            non_goal_licked_lms = licked_lms[sess['non_goals_idx'][:min_len]]
+
+            goal_licked_lms = goal_licked_lms.reshape((num_laps, -1))        # -1 lets numpy figure out columns
+            non_goal_licked_lms = non_goal_licked_lms.reshape((num_laps, -1))
+
+            binary_licked_lms = np.column_stack((goal_licked_lms, non_goal_licked_lms))
+        else: 
+            # the landmarks are in order so we can simply reshape
+            binary_licked_lms = np.array(licked_lms[:num_lms_considered]).reshape((num_laps, sess['num_landmarks']))
+
+        sess['binary_licked_lms'] = binary_licked_lms
+
+        if return_sess:
+            return sess
+        else:
+            return binary_licked_lms
+
+    def get_lm_lick_rate(self, bins=16, return_sess=False):  # TODO I really need to fix this and make it consistent across sessions
+        '''Get lick rate per frame bin as the mean per bin for each landmark'''
+        
+        sess = self.session.sess
+        
+        # Get all datapoints within landmarks
+        sess = self.session.get_data_lm_idx(sess)
+
+
+        # Create a binary lick map for the entire session 
+        binary_licks = np.zeros(len(sess['position']))
+        thresholded_lick_idx = np.where(sess["thresholded_licks"] == 1)[0]
+        binary_licks[thresholded_lick_idx] = 1 # (actually not binary)
+
+        if ('stage' in sess) and ('3' in sess['stage'] or '4' in sess['stage']):
+            
+            lm_lick_rate = np.zeros((len(sess['all_lms']), bins))
+            for lm in range(len(sess['all_lms'])):
+                # datapoints within landmarks for each lap 
+                lm_idx = np.where(sess['data_lm_idx'] == lm+1)[0]
+
+                # binary licks within landmark
+                lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+                
+                # calculate lick rate within each landmark (mean in each bin)
+                lm_lick_rate[lm], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+
+            # Reshape the data in goal - non-goal pairs
+            goal_lm_lick_rate = lm_lick_rate[sess['goals_idx']]
+            non_goal_lm_lick_rate = lm_lick_rate[sess['non_goals_idx']]
+
+            min_len = min(len(goal_lm_lick_rate), len(non_goal_lm_lick_rate))
+            goal_lm_lick_rate = goal_lm_lick_rate[:min_len, :]
+            non_goal_lm_lick_rate = non_goal_lm_lick_rate[:min_len, :]
+
+            lm_lick_rate = np.column_stack((goal_lm_lick_rate, non_goal_lm_lick_rate))
+            
+        else:
+            lm_lick_rate_dict = {}
+            for lap in range(sess['num_laps']):
+                for lm in range(len(sess['all_lms'])):
+                    key = (lap, lm)
+
+                    # datapoints within landmarks for each lap 
+                    lm_idx = np.where(sess['data_lm_idx'] == lm+1)[0]
+
+                    # binary licks within landmark
+                    lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+                    
+                    # calculate lick rate within each landmark (mean in each bin)
+                    lm_lick_rate_dict[key], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
+        
+            # Check number of actual laps
+            num_lms_considered = int(np.round((len(sess['all_landmarks']) // sess['num_landmarks']) * sess['num_landmarks']))
+            num_laps = int(num_lms_considered / sess['num_landmarks'])
+
+            # Reshape the data in landmarks and laps
+            lm_lick_rate = [[] for _ in range(num_laps)]
+
+            for lap in range(num_laps):
+                for lm in range(sess['num_landmarks']):
+
+                    # Global landmark occurrence
+                    lm_idx = lap * sess['num_landmarks'] + lm
+
+                    key = (lap, lm_idx)
+
+                    if key in lm_lick_rate_dict:
+                        rate = lm_lick_rate_dict[key]
+                        lm_lick_rate[lap].extend(rate)
+
+            lm_lick_rate = np.array(lm_lick_rate)   # (num_laps, num_bins * num_landmarks)
+
+        sess['lm_lick_rate'] = lm_lick_rate
+
+        if return_sess:
+            return sess
+        else:
+            return lm_lick_rate

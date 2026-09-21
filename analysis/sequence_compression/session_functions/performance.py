@@ -424,7 +424,8 @@ class Performance():
         hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = self.calc_hit_fa()
 
         # Find number of landmarks between two consecutive As
-        num_Bs = len(distractor_positions[(distractor_positions > target_positions[0]) & (distractor_positions < target_positions[1])])
+        _, num_Bs = self.session.get_num_A_B()
+        # num_Bs = len(distractor_positions[(distractor_positions > target_positions[0]) & (distractor_positions < target_positions[1])])
 
         # Find distances between A and the following Bs
         A_A_diff, A_B_diff, A_positions, B_positions = self.session.find_A_B_distance_and_positions(rewarded_As=False)

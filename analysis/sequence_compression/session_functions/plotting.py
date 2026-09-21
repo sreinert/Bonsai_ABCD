@@ -8,6 +8,9 @@ from session_functions.utils import *
 np.set_printoptions(suppress=True, precision=2)
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..', '..')))
 
+import palettes
+import seaborn as sns
+
 def plot_ethogram(session):
     sess_dataframe = session.dataframe 
 
@@ -48,105 +51,6 @@ def compute_psth_pair(behaviour, events, bins):
     speed = behaviour.get_speed_psth(events=events, bins=bins)
     licks = behaviour.get_lick_rate_psth(events=events, bins=bins)
     return speed, licks
-
-# def plot_speed_lick_rate_psth(session, behaviour, bins=None):
-
-#     if 'LM_Count' in session.dataframe.columns:
-#         release_df = session.estimate_lm_events()
-#     else:
-#         release_df = session.estimate_release_events()
-
-#     dt_idx = np.diff(release_df['Index'])
-#     dt_seconds = release_df.index.to_series().diff().dt.total_seconds().to_numpy()
-    
-#     if bins is None:
-#         min_dt_idx = np.min(dt_idx)
-#         min_dt_seconds = np.nanmin(dt_seconds)
-#         window_seconds = np.round(min_dt_seconds * 2, 1)
-#         bins = int(min_dt_idx * 2)
-#     else:
-#         window_seconds = np.round(dt_seconds[1:] / dt_idx * bins, 1)
-#         window_seconds = window_seconds[~np.isnan(window_seconds)][0]
-
-#     fig, axes = plt.subplots(1, 2, figsize=(10,4))
-#     ax_speed, ax_lick = axes
-
-#     # --- Get event indices ---
-#     if session.sequence == 'full':
-#         landmarks, lm_idx = session.get_landmarks()
-
-#     else:
-#         # Binary sequence
-#         A_landmarks, B_landmarks, A_idx, B_idx = session.get_A_B_landmarks()
-
-#     # --- Define groups dynamically ---
-#     groups = {}
-
-#     if session.sequence == 'ABAB':
-#         groups = {
-#             'A': (A_idx, 'darkblue'),
-#             'B': (B_idx, 'orange')
-#         }
-
-#     elif session.sequence == 'AABB':
-#         groups = {
-#             'A1': (A_idx[::2], 'darkblue'),
-#             'A2': (A_idx[1::2], 'blue'),
-#             'B1': (B_idx[::2], 'orange'),
-#             'B2': (B_idx[1::2], 'gold')
-#         }
-
-#     elif session.sequence == 'ABB':
-#         groups = {
-#             'A': (A_idx, 'darkblue'),
-#             'B1': (B_idx[::2], 'orange'),
-#             'B2': (B_idx[1::2], 'gold')
-#         }
-
-#     elif session.sequence == 'ABBB':
-#         groups = {
-#             'A': (A_idx, 'darkblue'),
-#             'B1': (B_idx[::3], 'orange'),
-#             'B2': (B_idx[1::3], 'gold'),
-#             'B3': (B_idx[2::3], 'brown')
-#         }
-
-#     elif session.sequence == 'AAB':
-#         groups = {
-#             'A1': (A_idx[::2], 'darkblue'),
-#             'A2': (A_idx[1::2], 'blue'),
-#             'B1': (B_idx, 'orange'),
-#         }
-
-#     else:
-#         groups = {
-#             'lm': (lm_idx, 'black')
-#         }
-
-#     # --- Compute + plot ---
-#     for label, (events, color) in groups.items():
-
-#         (mean_s, sem_s), (mean_l, sem_l) = compute_psth_pair(behaviour, events, bins)
-
-#         plot_psth(ax_speed, mean_s, sem_s, color, label)
-#         plot_psth(ax_lick, mean_l, sem_l, color, label)
-
-#     ax_speed.axhline(session.settings['velocityThreshold'], linestyle='--', color='grey')
-
-#     # --- Styling ---
-#     for ax in axes:
-#         ax.legend()
-#         ax.spines['top'].set_visible(False)
-#         ax.spines['right'].set_visible(False)
-
-#         ax.axvspan(bins/2, bins, color='grey', alpha=0.3)
-#         ax.set_xticks([0, bins/2, bins], labels=[f'{-window_seconds/2:.1f}', 0, f'{window_seconds/2:.1f}'])
-
-#     ax_speed.set_title('Speed')
-#     ax_lick.set_title('Lick rate')
-
-#     plt.tight_layout()
-#     return fig
 
 def plot_speed_lick_rate_psth(session, behaviour, bins=None, sess=None, session_type=None):
 
@@ -702,3 +606,59 @@ def plot_data(x, y, all_distances, ylabel):
             text.set_fontsize(24)
 
     return fig
+
+def plot_lick_maps(session, behaviour):
+    '''Plots binary and lick rate maps in the 10LM corridor'''
+    # Load data
+    if not hasattr(session, 'sess'):
+        sess = session.analyse_session_pre7_behav(plot=False)
+    else:
+        sess = session.sess
+
+    # ------- Get binary lick map (laps x landmarks) ------- #
+    binary_licked_lms = behaviour.get_binary_lick_map()
+
+    # ------- Get lick rate map (laps x landmarks) ------- #
+    lm_lick_rate = behaviour.get_lm_lick_rate()
+
+    # Plotting
+    tm_palette = palettes.met_brew('Tam', n=123, brew_type="continuous")
+    tm_palette = tm_palette[::-1]
+
+    tick_positions = [i * 16 + 16 // 2 for i in range(sess['num_landmarks'])]
+    tick_labels = np.arange(1, sess['num_landmarks']+1)  
+    
+    # Plot the binary and lick rate maps for each landmark 
+    if sess['num_landmarks'] == 2:
+        fig, ax = plt.subplots(1,2, figsize=(8,3), sharex=False, sharey=False)
+    else:
+        fig, ax = plt.subplots(2, 1, figsize=(10,6), sharex=False, sharey=False)
+    
+    ax = ax.ravel()
+
+    # Plot binary licks  
+    sns.heatmap(binary_licked_lms, ax=ax[0], cmap=[tm_palette[0], tm_palette[-1]], 
+                vmin=0, vmax=1, cbar_kws={"ticks": [0, 1]}, xticklabels=(tick_labels), 
+                yticklabels=[0, binary_licked_lms.shape[0]])
+
+    # Plot lick rate
+    max_lick_rate = np.round(np.nanmax(lm_lick_rate), 1)
+    sns.heatmap(lm_lick_rate, ax=ax[1], cmap=tm_palette, vmin=0, vmax=max_lick_rate, 
+                cbar_kws={"ticks": [0, max_lick_rate]})
+    for i in range(1, sess['num_landmarks']):
+        ax[1].axvline(i * 16, color='white', linestyle='--', linewidth=1)
+
+    for axis in ax:
+        axis.set_yticks([0, binary_licked_lms.shape[0]])
+        axis.set_yticklabels([0, binary_licked_lms.shape[0]], rotation=0)
+        axis.set_xlabel('Landmark')
+        axis.set_ylabel('Lap')
+
+    ax[0].set_title('Licked Landmarks')
+    ax[1].set_title('Lick Rate')
+    ax[1].set_xticks(tick_positions)
+    ax[1].set_xticklabels(tick_labels, rotation=0)
+    
+    plt.tight_layout()
+
+    return sess, fig

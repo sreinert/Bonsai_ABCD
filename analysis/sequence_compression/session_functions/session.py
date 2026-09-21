@@ -507,15 +507,25 @@ class Session():
             'Odour': lm_odour
         }).set_index('time')
 
-        if 'initialCorridorOffset' in self.settings and lm_df['Position'].iloc[0] != self.settings['initialCorridorOffset']:
+        if self.cohort == 1:
             # Add initial landmark at position 0 if not present
-            initial_lm = pd.DataFrame({
-                'time': [pd.NaT],
-                'Position': [0],
-                'Index': [0], #'Index': [-1],
-                'Odour': [0]  # Assume first odour is the initial one
-            }).set_index('time')
-            lm_df = pd.concat([initial_lm, lm_df]).reset_index().set_index('time')
+            if lm_df['Position'].iloc[0] != 0:
+                initial_lm = pd.DataFrame({
+                    'time': [pd.NaT],
+                    'Position': [0],
+                    'Index': [0], #'Index': [-1],
+                    'Odour': [0]  # Assume first odour is the initial one
+                }).set_index('time')
+                lm_df = pd.concat([initial_lm, lm_df]).reset_index().set_index('time')
+        elif self.cohort == 2:
+            if 'initialCorridorOffset' in self.settings and lm_df['Position'].iloc[0] != self.settings['initialCorridorOffset']:
+                initial_lm = pd.DataFrame({
+                    'time': [pd.NaT],
+                    'Position': [0],
+                    'Index': [0], #'Index': [-1],
+                    'Odour': [0]  # Assume first odour is the initial one
+                }).set_index('time')
+                lm_df = pd.concat([initial_lm, lm_df]).reset_index().set_index('time')
 
         return lm_df
 
@@ -1269,9 +1279,14 @@ class ABCD_Session():
     def get_lap_idx(self, session):
         # Divide the session dataframe into laps based on the position and corridor length
         if self.world == 'stable':
-            session['num_laps'] = int(np.ceil(session['position'].max() / self.tunnel_length))
+            if self.tunnel_length is not None:
+                session['num_laps'] = int(np.ceil(session['position'].max() / self.tunnel_length))
+            else:
+                session['num_laps'] = len(session['landmarks']) // session['num_landmarks']
+
         elif self.world == 'random':
             session['num_laps'] = 1
+
         # For each position, determine which lap it belongs to
         if self.tunnel_length is not None:
             session['lap_idx'] = (session['position'] // self.tunnel_length).astype(int)
@@ -1290,6 +1305,18 @@ class ABCD_Session():
             lm_idx[lm_occupancy] = i + 1
 
         session['lm_idx'] = lm_idx
+
+        return session
+
+    def get_AB_sequence(self, session):
+        if self.world == 'stable':
+            sequence = 'ABAB'
+        elif self.world == 'random':
+            sequence = 'AB_shuffled'
+        else:
+            raise ValueError("Oops I don't know what to do about this type of world")
+        
+        session['sequence'] = sequence
 
         return session
 
@@ -1423,9 +1450,10 @@ class ABCD_Session():
 
         if self.world == 'stable':
             all_lms = np.array([])  # landmark ids
-            for i in range(session['num_laps']):
+            for i in range(session['num_laps'] + 1):
                 all_lms = np.append(all_lms, session['lm_ids'])
             all_lms = all_lms.astype(int)[:num_lms]
+            
         elif self.world == 'random':
             all_lms = self.get_random_lm_sequence()
             all_lms = all_lms[:num_lms]
@@ -1434,6 +1462,9 @@ class ABCD_Session():
         for i in range(1, session['num_laps']):  
             all_landmarks = np.concatenate((all_landmarks, session['landmarks']), axis=0)
         all_landmarks = all_landmarks[:num_lms]  # landmark positions
+
+        # remove lms from last lap if not complete
+        all_landmarks = all_landmarks[:len(all_lms)]
 
         session['all_landmarks'] = all_landmarks
         session['all_lms'] = all_lms
@@ -1462,7 +1493,7 @@ class ABCD_Session():
         goals_idx = np.where(np.isin(session['all_lms'], session['goal_landmark_id']))[0]
         non_goals_idx = np.where(np.isin(session['all_lms'], session['non_goal_landmark_id']))[0]
         test_idx = np.where(np.isin(session['all_lms'], session['test_landmark_id']))[0] if session['test_landmark_id'] is not None else None
-        
+
         session['goals_idx'] = goals_idx
         session['non_goals_idx'] = non_goals_idx
         session['test_idx'] = test_idx
@@ -1510,7 +1541,7 @@ class ABCD_Session():
             miss_rew_idx = session['miss_lm_entry_idx'] + rew_time_lag
             nongoal_rew_idx = session['nongoal_lm_entry_idx'] + rew_time_lag  
             test_rew_idx = session['test_lm_entry_idx'] + rew_time_lag
-    
+
             session['rew_time_lag'] = rew_time_lag
             session['miss_rew_idx'] = miss_rew_idx
             session['nongoal_rew_idx'] = nongoal_rew_idx
@@ -1522,6 +1553,8 @@ class ABCD_Session():
         '''Define which landmarks belong to goals, non-goals and test.'''
     
         t = extract_int(session['stage'])
+
+        session = self.get_AB_sequence(session)
 
         if t == 5 or t == 6:
             assert session['num_landmarks'] == 10, 'The number of landmarks in T5 or T6 should be 10.'
@@ -1554,7 +1587,22 @@ class ABCD_Session():
         session['test_landmark_id'] = test_landmark_id
 
         return session
+
+    def get_data_lm_idx(self, session):
+        '''Get the landmark id of every data entry'''
         
+        # Find landmark entry and exit idx
+        lm_entry, lm_exit = self.get_lm_entry_exit(session)
+
+        # Find datapoints within a landmark
+        lm_idx = np.zeros(len(session['position']))
+        for i in range(len(session['all_lms'])):
+            lm_idx[lm_entry[i]:lm_exit[i]+1] = i+1
+
+        session['data_lm_idx'] = lm_idx
+
+        return session
+    
     def analyse_session_pre7_behav(self, plot=True):
         '''Wrapper for session analysis using behaviour data'''
 
