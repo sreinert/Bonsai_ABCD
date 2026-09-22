@@ -1,13 +1,13 @@
 #!/bin/bash
-#SBATCH --job-name=goal_progress
-#SBATCH --output=goal_progress_%j.out
-#SBATCH --error=goal_progress_%j.err
+#SBATCH --job-name=GP
+#SBATCH --output=GP_%j.out
+#SBATCH --error=GP_%j.err
 #
-#SBATCH -p gpu
-#SBATCH -n 1
-#SBATCH -t 16:00:00
-#SBATCH --mem=32G
-#SBATCH --gres gpu:1
+#SBATCH --partition=cpu             # use your cluster's normal CPU partition name
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=1
+#SBATCH -t 24:00:00
+#SBATCH --mem=16G
 #SBATCH --mail-type ALL
 #SBATCH --mail-user athina.apostolelli.24@ucl.ac.uk
 
@@ -20,8 +20,8 @@ conda activate bonsai_abcd
 condition="monotonic_trend"
 
 PAIRS=(
-  "mouse=TAA0000059 cohort=2 t5:t5 t6:t6"
-#   "mouse=TAA0000066 cohort=2 t5:t5 t6:t6"
+#   "mouse=TAA0000059 cohort=2 t5:t5 t6:t6"
+  "mouse=TAA0000066 cohort=2 t5:t5 t6:t6"
 #   "mouse=004 cohort=3 full020:t5 full030:t6"
 #   "mouse=006 cohort=3 full011:t5 full014:t6"
 #   "mouse=007 cohort=3 full010:t5 full012:t6"

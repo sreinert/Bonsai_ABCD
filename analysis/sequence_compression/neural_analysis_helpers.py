@@ -2587,7 +2587,7 @@ def get_max_phase_pref_goal_activity(dF, cell, session, event_frames, ngoals, bi
     #                                 bins=bins, shuffle=False, print_results=False)
 
     # phase_preference = int(phase_preference)
-    phase_preference = cellTV.calc_goal_tuningix(dF, cell, session, 
+    phase_preference = cellTV.calc_phase_preference(dF, cell, session, 
                                     condition='arb', event_frames=event_frames, n_goals=ngoals, bins=bins)
 
     max_window_activity = np.empty((binned_all.shape[0], ngoals))

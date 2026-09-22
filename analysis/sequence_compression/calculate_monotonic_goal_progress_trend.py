@@ -54,8 +54,7 @@ if int(cohort) == 3:
         world = 'random'
     else:
         world = 'stable'
-    session = parse_session_functions.analyse_npz_pre7(mouse, session_id, behav_root, stage, world)
-
+    session = parse_session_functions.analyse_npz_pre7(mouse, session_id, behav_root, stage, world, plot=False)
     event_idx = np.sort(np.concatenate([session['rewards'], session['miss_rew_idx'], session['test_rew_idx']])).astype(int)
 
 elif int(cohort) == 2:
@@ -64,10 +63,9 @@ elif int(cohort) == 2:
 
     # Load dF and valid neurons
     dF, neurons = cellTV.load_dF(root, mouse, stage)
-
+            
     # Create session struct
-    session = parse_session_functions.analyse_npz_pre7(mouse, date, stage)
-
+    session = parse_session_functions.analyse_npz_pre7(mouse, date, stage, root, plot=False)
     event_idx = np.sort(np.concatenate([session['reward_idx'], session['miss_rew_idx'], session['test_rew_idx']])).astype(int)
 
 # 2. Define saving directory 
@@ -90,9 +88,9 @@ for cell in goal_progress_tuned:
                                                            plot=False, shuffle=False)
 
 # 5. Calculate monotonic trend score
-monotonic_trend_results = neural_analysis_helpers.calc_monotonic_trend_score(neurons, max_window_activity, 
+monotonic_trend_results = neural_analysis_helpers.calc_monotonic_trend_score(goal_progress_tuned, max_window_activity, 
                                                             ngoals=5, shuffle=True, nreps=1000, 
-                                                            print_results=True, reload=False)
+                                                            print_results=False, save_dir=save_dir, reload=False)
 
 # 6. Plot the analysis results for each cell 
 for cell in goal_progress_tuned:
