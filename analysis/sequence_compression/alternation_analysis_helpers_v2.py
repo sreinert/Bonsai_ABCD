@@ -878,7 +878,7 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, x_data=None, heatm
 
     # Get x data if not provided
     if x_data is None:
-        if condition == 'Y2_ramp':
+        if data_type == 'Y2_ramp':
             # Define patches
             _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
 
@@ -898,17 +898,40 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, x_data=None, heatm
     # Perform linear regression 
     if os.path.exists(results_file) and not reload:
         print('Linear regression file found. Loading...')
-        results = np.load(results_file, allow_pickle=True)
-        slopes = results['slopes'].item() 
-        rvalues = results['rvalues'].item() 
-        pvalues = results['pvalues'].item() 
-        intercepts = results['intercepts'].item()
-        if 'slopes_shuffled' in results:
-            slopes_shuffled = results['slopes_shuffled'].item() 
-            rvalues_shuffled = results['rvalues_shuffled'].item() 
-            pvalues_shuffled = results['pvalues_shuffled'].item() 
-            intercepts_shuffled = results['intercepts_shuffled'].item()
-            pvalue = results['pvalue'].item() 
+
+        with np.load(results_file, allow_pickle=True) as saved:
+            results = {
+                key: value.item()
+                if isinstance(value, np.ndarray) and value.shape == ()
+                else value
+                for key, value in saved.items()
+            }
+
+        if "slopes_shuffled" in results:
+            print('\tCorrecting p-values')
+            pvalue = {}
+
+            for cell, slope in results["slopes"].items():
+                null = np.asarray(results["slopes_shuffled"][cell])
+
+                if (
+                    null.size == 0
+                    or not np.isfinite(slope)
+                    or not np.all(np.isfinite(null))
+                ):
+                    pvalue[cell] = np.nan
+                    continue
+
+                n_extreme = np.count_nonzero(np.abs(null) >= abs(slope))
+                pvalue[cell] = (n_extreme + 1) / (null.size + 1)
+
+            results["pvalue"] = pvalue
+
+            if save_dir:
+                np_results = {key: np.array(value, dtype=object) for key, value in results.items()}
+                np.savez(results_file, **np_results)
+                print(f"\tSaved results in: {results_file}")
+            
 
         return results
 
@@ -925,11 +948,12 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, x_data=None, heatm
                 'slopes': {cell: np.nan for cell in neurons},
                 'rvalues': {cell: np.nan for cell in neurons},
                 'pvalues': {cell: np.nan for cell in neurons},
-                'intercepts': {cell: np.nan for cell in neurons}
+                'intercepts': {cell: np.nan for cell in neurons},
+                'pvalue': {cell: np.nan for cell in neurons},
             }
 
             return results
-        
+
         else:
             linear_regression_result = {}
 
@@ -971,7 +995,13 @@ def fit_linear_regression_XYlen(neurons, y_data, dF, session, x_data=None, heatm
                 for cell in neurons:
                     null_dist = np.abs(slopes_shuffled[cell])
                     obs = np.abs(slopes[cell])
-                    pvalue[cell] = np.mean(null_dist >= obs, axis=0) # pvalues = % null slopes >= observed slope
+
+                    if not np.isfinite(obs) or not np.all(np.isfinite(null_dist)):
+                        pvalue[cell] = np.nan
+                        continue
+            
+                    n_extreme = np.count_nonzero(np.abs(null_dist) >= abs(obs)) # pvalues = % null slopes >= observed slope
+                    pvalue[cell] = (n_extreme + 1) / (null_dist.size + 1) # avoid p-values = 0
 
             # Save results
             results = {}
@@ -1161,3 +1191,49 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data, x_data
 
         if len(neurons) > 100:
             plt.close(fig)
+
+def bonferroni_correction(pvalues, alpha=0.05, n_tests=None):
+    """Correct a flat or condition-grouped dictionary of p-values.
+
+    NaN entries are retained and counted in the default number of tests.
+    For grouped input, the default corrects across all conditions together.
+    """
+    def unwrap(value):
+        if isinstance(value, np.ndarray) and value.shape == ():
+            return value.item()
+        return value
+
+    pvalues = {key: unwrap(value) for key, value in unwrap(pvalues).items()}
+    grouped = bool(pvalues) and isinstance(next(iter(pvalues.values())), dict)
+    groups = pvalues if grouped else {None: pvalues}
+
+    if n_tests is None:
+        n_tests = sum(len(values) for values in groups.values())
+
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be between 0 and 1.")
+    if not np.isfinite(n_tests) or n_tests < 0 or int(n_tests) != n_tests:
+        raise ValueError("n_tests must be a nonnegative integer.")
+    if n_tests == 0 and any(groups.values()):
+        raise ValueError("n_tests must be positive for nonempty input.")
+
+    adjusted = {}
+    significant = {}
+
+    for name, values in groups.items():
+        adjusted[name] = {}
+        for cell, p in values.items():
+            if np.isfinite(p) and not 0 <= p <= 1:
+                raise ValueError(f"Invalid p-value for cell {cell}: {p}")
+            adjusted[name][cell] = (
+                min(p * n_tests, 1.0) if np.isfinite(p) else np.nan
+            )
+
+        significant[name] = [
+            cell for cell, p in adjusted[name].items()
+            if np.isfinite(p) and p <= alpha
+        ]
+
+    if grouped:
+        return adjusted, significant
+    return adjusted[None], significant[None]
