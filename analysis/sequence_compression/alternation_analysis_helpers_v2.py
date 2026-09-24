@@ -424,20 +424,11 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
     # Perform linear regression per time bin
     if os.path.exists(results_file) and not reload:
         print('Linear regression with CPA file found. Loading...')
-        results = np.load(results_file, allow_pickle=True)
-        slopes = results['slopes'].item() 
-        rvalues = results['rvalues'].item() 
-        pvalues = results['pvalues'].item() 
-        clusters = results['clusters'].item() 
-        cluster_mass_stat = results['cluster_mass_stat'].item() 
-        if 'slopes_shuffled' in results:
-            slopes_shuffled = results['slopes_shuffled'].item() 
-            rvalues_shuffled = results['rvalues_shuffled'].item() 
-            pvalues_shuffled = results['pvalues_shuffled'].item() 
-            clusters_shuffled = results['clusters_shuffled'].item() 
-            cluster_mass_stat_shuffled = results['cluster_mass_stat_shuffled'].item() 
-            pvalue = results['pvalue'].item() 
-            cluster_pvalue = results['cluster_pvalue'].item() 
+
+        with np.load(results_file, allow_pickle=True) as saved:
+            results = update_cpa_permutation_pvalues(saved)
+
+        np.savez(results_file, **{key: np.array(value, dtype=object) for key, value in results.items()})
 
         return results
 
@@ -457,6 +448,9 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                 'clusters': {cell: [] for cell in neurons},
                 'cluster_mass_stat': {cell: {} for cell in neurons},
             }
+            if shuffle:
+                results["pvalue"] = {cell: np.full(bins, np.nan) for cell in neurons}
+                results["cluster_pvalue"] = {cell: {} for cell in neurons}
 
             return results
         
@@ -556,15 +550,34 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                 pvalue = {}
                 cluster_pvalue = {cell: {} for cell in neurons}
                 for cell in neurons:
-                    null_dist = np.abs(slopes_shuffled[cell])
-                    obs = np.abs(slopes[cell])
-                    pvalue[cell] = np.mean(null_dist >= obs, axis=0) # pvalues = % null slopes >= observed slope
+                    # Per-bin p-values.
+                    null_dist = np.abs(slopes_shuffled[cell])  # (n_shuffles, bins)
+                    obs = np.abs(slopes[cell])                 # (bins,)
 
-                    null_cluster_dist = np.array(list(cluster_mass_stat_shuffled[cell].values()))
-                    
-                    for c in range(len(clusters[cell])):
-                        cluster_obs = np.abs(cluster_mass_stat[cell][c])
-                        cluster_pvalue[cell][c] = np.mean(null_cluster_dist >= cluster_obs)
+                    pvalue[cell] = np.full(obs.shape, np.nan, dtype=float)
+
+                    if null_dist.shape[0] > 0:
+                        valid = np.isfinite(obs) & np.all(np.isfinite(null_dist), axis=0)
+                        n_extreme = np.count_nonzero(null_dist >= obs, axis=0) # pvalues = % null slopes >= observed slope
+
+                        pvalue[cell][valid] = ((n_extreme[valid] + 1) / (null_dist.shape[0] + 1))
+
+                    # Cluster p-values against the maximum cluster mass per shuffle.
+                    null_cluster_dist = np.asarray(list(cluster_mass_stat_shuffled[cell].values()), dtype=float)
+
+                    for c, mass in cluster_mass_stat[cell].items():
+                        cluster_obs = abs(mass)
+
+                        if (
+                            null_cluster_dist.size == 0
+                            or not np.isfinite(cluster_obs)
+                            or not np.all(np.isfinite(null_cluster_dist))
+                        ):
+                            cluster_pvalue[cell][c] = np.nan
+                            continue
+
+                        n_extreme = np.count_nonzero(null_cluster_dist >= cluster_obs)
+                        cluster_pvalue[cell][c] = ((n_extreme + 1) / (null_cluster_dist.size + 1))
 
             # Save results
             results = {}
@@ -597,6 +610,11 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
                      condition='AB', data_type='YY_diff', bins=30, sort_heatmap=True, 
                      cluster_repeats=False, zscored=True, save_plot=False, plot_dir='', axes=None):
 
+
+    if len(neurons) == 0:
+        print(f"No cells to plot for condition {condition}.")
+        return
+    
     # Unwrap CPA results
     cpa_results = {
         k: v.item() if isinstance(v, np.ndarray) and v.shape == () else v
@@ -1237,3 +1255,59 @@ def bonferroni_correction(pvalues, alpha=0.05, n_tests=None):
     if grouped:
         return adjusted, significant
     return adjusted[None], significant[None]
+
+def update_cpa_permutation_pvalues(results):
+    """Recompute permutation p-values from stored null distributions."""
+    def unwrap(value):
+        if isinstance(value, np.ndarray) and value.shape == ():
+            return value.item()
+        return value
+
+    results = {key: unwrap(value) for key, value in results.items()}
+
+    # No permutation results available, e.g. shuffle=False.
+    if "slopes_shuffled" not in results:
+        return results
+
+    pvalue = {}
+    cluster_pvalue = {}
+
+    for cell, slopes in results["slopes"].items():
+        # Per-bin p-values: shuffled slopes have shape (n_shuffles, bins).
+        obs = np.abs(np.asarray(slopes))
+        null = np.abs(np.asarray(results["slopes_shuffled"][cell]))
+
+        bin_p = np.full(obs.shape, np.nan, dtype=float)
+        if null.shape[0] > 0:
+            valid = np.isfinite(obs) & np.all(np.isfinite(null), axis=0)
+            n_extreme = np.count_nonzero(null >= obs, axis=0)
+            bin_p[valid] = (
+                (n_extreme[valid] + 1) / (null.shape[0] + 1)
+            )
+
+        pvalue[cell] = bin_p
+
+        # Cluster p-values: null contains the maximum mass per shuffle.
+        null_cluster = np.asarray(
+            list(results["cluster_mass_stat_shuffled"][cell].values()),
+            dtype=float,
+        )
+        cluster_pvalue[cell] = {}
+
+        for cluster_id, mass in results["cluster_mass_stat"][cell].items():
+            if (
+                null_cluster.size == 0
+                or not np.isfinite(mass)
+                or not np.all(np.isfinite(null_cluster))
+            ):
+                p = np.nan
+            else:
+                n_extreme = np.count_nonzero(null_cluster >= abs(mass))
+                p = (n_extreme + 1) / (null_cluster.size + 1)
+
+            cluster_pvalue[cell][cluster_id] = p
+
+    results["pvalue"] = pvalue
+    results["cluster_pvalue"] = cluster_pvalue
+
+    return results
