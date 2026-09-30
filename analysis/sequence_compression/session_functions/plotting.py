@@ -1,6 +1,7 @@
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+from matplotlib.lines import Line2D
 import numpy as np
 import re, os, sys
 from session_functions.utils import *
@@ -662,3 +663,462 @@ def plot_lick_maps(session, behaviour):
     plt.tight_layout()
 
     return sess, fig
+
+def plot_psth_per_landmark(session, behaviour, bins=300, title=None):
+    # Existing analysis provides landmark IDs and entry indices.
+    sess = session.analyse_session_pre7_behav(plot=False)
+    
+    entry_idx, exit_idx = session.get_lm_entry_exit(sess)
+    landmark_ids = np.asarray(sess["all_lms"])
+
+    if len(entry_idx) != len(landmark_ids):
+        raise ValueError("Landmark IDs and entry indices must have matching lengths.")
+
+    if sess["num_landmarks"] != 10:
+        raise ValueError("Expected a session with 10 landmarks.")
+
+    # Use an even number of samples so entry falls exactly at the midpoint.
+    bins = int(bins)
+    if bins < 2 or bins % 2:
+        raise ValueError("bins must be a positive even integer.")
+
+    half = bins // 2
+
+    # Estimate seconds per sample using the same approach as your function.
+    if "LM_Count" in session.dataframe.columns:
+        release_df = session.estimate_lm_events()
+    else:
+        release_df = session.estimate_release_events()
+
+    delta_idx = np.diff(release_df["Index"].to_numpy())
+    delta_seconds = (
+        release_df.index.to_series()
+        .diff()
+        .dt.total_seconds()
+        .to_numpy()[1:]
+    )
+
+    valid = (
+        (delta_idx > 0)
+        & np.isfinite(delta_seconds)
+        & (delta_seconds > 0)
+    )
+    if not valid.any():
+        raise ValueError("Cannot estimate the sampling interval.")
+
+    dt = np.median(delta_seconds[valid] / delta_idx[valid])
+    time = (np.arange(bins) - half) * dt
+
+    fig, axes = plt.subplots(
+        2, 10,
+        figsize=(24, 6),
+        sharex=True,
+        sharey="row",
+        constrained_layout=True,
+    )
+    leg_colors = {
+        "goal": "#1E2985",
+        "non-goal": "#9D1DA3",
+        "test": "darkorange",
+    }
+
+    colors = {
+        lm_id: leg_colors[
+            "goal" if lm_id in sess['goal_ids']
+            else "test" if lm_id == 9
+            else "non-goal"
+        ]
+        for lm_id in range(10)
+    }
+
+    for lm_id in range(10):
+        events = entry_idx[landmark_ids == lm_id]
+
+        # Select visits with complete PSTH windows and valid exit indices.
+        visit_mask = (
+            (landmark_ids == lm_id)
+            & (entry_idx >= half)
+            & (entry_idx + half <= len(sess["position"]))
+            & (exit_idx >= entry_idx)
+        )
+
+        events = np.sort(entry_idx[visit_mask]).astype(int)
+
+        # Representative time spent inside this landmark, in seconds.
+        durations = (exit_idx[visit_mask] - entry_idx[visit_mask]) * dt
+        median_duration = np.median(durations) if len(durations) else np.nan
+
+        axes[0, lm_id].set_title(
+            f"Landmark {lm_id + 1}\n(n={len(events)})"
+        )
+
+        if len(events):
+            speed, licks = compute_psth_pair(
+                behaviour, events, bins
+            )
+
+            for ax, (mean, sem) in zip(axes[:, lm_id], (speed, licks)):
+                ax.plot(time, mean, color=colors[lm_id])
+                if len(events) > 1:
+                    ax.fill_between(
+                        time, mean - sem, mean + sem,
+                        color=colors[lm_id], alpha=0.25,
+                    )
+        else:
+            axes[0, lm_id].text(
+                0.5, 0.5, "No complete windows",
+                transform=axes[0, lm_id].transAxes,
+                ha="center", fontsize=8,
+            )
+
+        axes[0, lm_id].axhline(
+            session.settings["velocityThreshold"],
+            color="grey", linestyle="--", linewidth=1,
+        )
+
+        for ax in axes[:, lm_id]:
+            if np.isfinite(median_duration):
+                ax.axvspan(
+                    0,
+                    min(median_duration, time[-1]),
+                    color="grey",
+                    alpha=0.2,
+                    linewidth=0,
+                    zorder=0,
+                )
+            ax.axvline(0, color="grey", linestyle="--", linewidth=1)
+            ax.spines[["top", "right"]].set_visible(False)
+            ax.set_xlim(time[0], time[-1])
+
+    axes[0, 0].set_ylabel("Speed")
+    axes[1, 0].set_ylabel("Mean licks / sample")
+    fig.supxlabel("Time from landmark entry (s)")
+
+    if title:
+        fig.suptitle(title)
+
+    return fig
+
+def plot_lick_rate_dist_from_last_goal(session, behaviour, x, y, yerr):
+    """
+    Plot landmark 9 (or 8) and 10 (or 9) lick rates as functions of distance
+    from landmark 8 (or y) i.e., from last goal.
+
+    Parameters
+    ----------
+    x : list of array-like
+        Distance values for the 8→9 and 8→10 comparisons.
+
+    y : list of array-like
+        Mean lick rates corresponding to each distance.
+
+    yerr : list of array-like
+        SEM corresponding to each mean lick rate.
+
+    Returns
+    -------
+    fig : matplotlib.figure.Figure
+    """
+
+    distances, lick_rates, lick_rate_err = behaviour.get_lick_rate_dist_from_last_goal()
+
+    goal = session.sess['goal_landmark_id'][-1]
+    nongoal = goal + 1
+    test = session.sess['test_landmark_id']
+
+    labels = [f"{goal + 1}→{nongoal + 1}", f"{goal + 1}→{test + 1}"]
+
+    color_map = {
+        f"{goal + 1}→{nongoal + 1}": "#9D1DA3",
+        f"{goal + 1}→{test + 1}": "darkorange",
+    }
+
+    if not (len(x) == len(y) == len(yerr) == len(labels)):
+        raise ValueError(
+            "x, y, and yerr must each contain two arrays: "
+            "one for goal→nongoal and one for goal→test."
+        )
+
+    all_distances = np.concatenate([
+        np.asarray(values, dtype=float)
+        for values in x
+    ])
+        
+    finite_distances = all_distances[np.isfinite(all_distances)]
+
+    if finite_distances.size == 0:
+        raise ValueError("No finite distance values were provided.")
+
+    xmin = np.round(np.min(finite_distances))
+    xmax = np.round(np.max(finite_distances))
+
+    all_y = np.concatenate([
+        np.asarray(values, dtype=float)
+        for values in y
+    ])
+
+    with mpl.rc_context({
+        "axes.labelsize": 18,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+        "legend.fontsize": 18,
+    }):
+        fig, ax = plt.subplots(figsize=(6, 4))
+
+        for label, x_values, means, sems in zip(
+            labels,
+            x,
+            y,
+            yerr,
+        ):
+            ax.errorbar(
+                x_values,
+                means,
+                yerr=sems,
+                marker="o",
+                linestyle="-",
+                linewidth=2,
+                markersize=7,
+                elinewidth=1.5,
+                capsize=4,
+                capthick=1.5,
+                color=color_map[label],
+                markerfacecolor=color_map[label],
+                markeredgecolor=color_map[label],
+                label="_nolegend_",
+            )
+
+        ax.set_xlabel(f"Distance from landmark {goal}")
+        ax.set_ylabel("Lick rate")
+
+        if xmin == xmax:
+            ax.set_xticks([xmin])
+        else:
+            if len(all_distances) > 5:
+                ax.set_xticks([xmin, xmax])
+            else:
+                ax.set_xticks(all_distances)
+        ax.set_yticks([np.round(np.min(all_y), 3), np.round(np.max(all_y), 3)])
+
+        ax.spines[["top", "right"]].set_visible(False)
+
+        # Invisible proxy artists create a genuinely text-only legend.
+        text_handles = [
+            Line2D(
+                [],
+                [],
+                linestyle="none",
+                marker=None,
+                color="none",
+            )
+            for _ in labels
+        ]
+
+        legend = ax.legend(
+            handles=text_handles,
+            labels=labels,
+            frameon=False,
+            loc="best",
+            handlelength=0,
+            handletextpad=0,
+            borderpad=0,
+        )
+
+        for text in legend.get_texts():
+            text.set_color(
+                color_map[text.get_text()]
+            )
+
+        fig.tight_layout()
+
+    return fig
+
+from matplotlib import colors as mcolors
+from matplotlib.lines import Line2D
+
+
+def plot_lick_rate_dist_across_sessions(session_data):
+    """Plot distance-dependent lick rates across sessions."""
+
+    session_names = list(session_data)
+    n_sessions = len(session_names)
+
+    if not n_sessions:
+        raise ValueError("No session data were provided.")
+
+    relationships = [
+        ("goal → non-goal", "#9D1DA3"),
+        ("goal → test", "darkorange"),
+    ]
+
+    # Create one light-to-dark colormap per relationship
+    color_maps = [
+        mcolors.LinearSegmentedColormap.from_list(
+            f"gradient_{i}",
+            ["white", base_color],
+        )
+        for i, (_, base_color) in enumerate(relationships)
+    ]
+
+    if n_sessions == 1:
+        color_positions = np.array([1.0])
+    else:
+        color_positions = np.linspace(
+            0.25,
+            1.0,
+            n_sessions,
+        )
+
+    with mpl.rc_context({
+        "axes.labelsize": 18,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+        "legend.fontsize": 14,
+    }):
+        fig, ax = plt.subplots(
+            figsize=(7, 4.5),
+            constrained_layout=True,
+        )
+
+        # Plot both relationships for every session
+        for session_idx, session_name in enumerate(
+            session_names
+        ):
+            result = session_data[session_name]
+
+            for relation_idx, (_, _) in enumerate(
+                relationships
+            ):
+                x = np.asarray(
+                    result["distances"][relation_idx],
+                    dtype=float,
+                )
+                y = np.asarray(
+                    result["means"][relation_idx],
+                    dtype=float,
+                )
+                sem = np.asarray(
+                    result["sems"][relation_idx],
+                    dtype=float,
+                )
+
+                valid = np.isfinite(x) & np.isfinite(y)
+                color = color_maps[relation_idx](
+                    color_positions[session_idx]
+                )
+
+                ax.errorbar(
+                    x[valid],
+                    y[valid],
+                    yerr=sem[valid],
+                    fmt="o-",
+                    color=color,
+                    linewidth=1.5,
+                    markersize=6,
+                    elinewidth=1,
+                    capsize=3,
+                    alpha=0.95,
+                )
+
+        # Combine values for global axis formatting
+        all_distances = np.concatenate([
+            np.asarray(result["distances"][i])
+            for result in session_data.values()
+            for i in range(2)
+        ])
+        all_distances = all_distances[
+            np.isfinite(all_distances)
+        ]
+
+        all_y = np.concatenate([
+            np.asarray(result["means"][i])
+            for result in session_data.values()
+            for i in range(2)
+        ])
+        all_y = all_y[np.isfinite(all_y)]
+
+        if not all_distances.size:
+            raise ValueError(
+                "No finite distance values were provided."
+            )
+
+        if not all_y.size:
+            raise ValueError(
+                "No finite lick-rate values were provided."
+            )
+
+        # Axis formatting
+        unique_distances = np.unique(all_distances)
+
+        ax.set_xticks(
+            unique_distances
+            if len(unique_distances) <= 8
+            else unique_distances[[0, -1]]
+        )
+
+        ymin, ymax = np.min(all_y), np.max(all_y)
+        ax.set_yticks(
+            [ymin] if ymin == ymax else [ymin, ymax]
+        )
+        ax.set_yticklabels([
+            f"{value:.3f}"
+            for value in ax.get_yticks()
+        ])
+
+        ax.set_xlabel("Distance from last goal")
+        ax.set_ylabel("Mean lick rate")
+        ax.spines[["top", "right"]].set_visible(False)
+
+        # Text-only relationship legend
+        handles = [
+            Line2D([], [], linestyle="none")
+            for _ in relationships
+        ]
+
+        legend = ax.legend(
+            handles,
+            [label for label, _ in relationships],
+            frameon=False,
+            handlelength=0,
+            handletextpad=0,
+        )
+
+        for text, (_, color) in zip(
+            legend.get_texts(),
+            relationships,
+        ):
+            text.set_color(color)
+
+        # Neutral session-progression colour bar
+        session_cmap = mcolors.LinearSegmentedColormap.from_list(
+            "session_progression",
+            ["#dddddd", "#222222"],
+        )
+        session_norm = mcolors.Normalize(
+            0,
+            max(n_sessions - 1, 1),
+        )
+
+        colorbar = fig.colorbar(
+            mpl.cm.ScalarMappable(
+                norm=session_norm,
+                cmap=session_cmap,
+            ),
+            ax=ax,
+            fraction=0.04,
+            pad=0.02,
+            shrink=0.5,
+            aspect=20,
+        )
+
+        colorbar.set_ticks([
+            0,
+            max(n_sessions - 1, 1),
+        ])
+        colorbar.set_ticklabels(["Early", "Late"])
+        colorbar.set_label("Sessions", fontsize=14)
+        colorbar.outline.set_visible(False)
+
+        plt.tight_layout()
+
+    return fig

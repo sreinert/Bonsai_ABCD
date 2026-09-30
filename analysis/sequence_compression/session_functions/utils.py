@@ -3,6 +3,7 @@ import numpy as np
 import re, os, sys
 import matplotlib.pyplot as plt
 from pathlib import Path
+from scipy import stats
 
 np.set_printoptions(suppress=True, precision=2)
 
@@ -199,27 +200,37 @@ def get_disengagement_periods(A_A_dt, A_B_dt, plot=True):
     return ix_AA, ix_AB
       
 def compute_binned_lick_rate(distances, licks, bins):
+    distances = np.asarray(distances, dtype=float)
+    licks = np.asarray(licks, dtype=float)
     
+    # Exclude missing observations before binning
+    valid = (np.isfinite(distances) & np.isfinite(licks))
+    distances = distances[valid]
+    licks = licks[valid]
+
     bin_idx = np.digitize(distances, bins)
-    
+
     means = []
     sems = []
     centers = []
 
     for b in range(1, len(bins)):
-        mask = bin_idx == b
-        
-        if np.sum(mask) > 0:
-            vals = licks[mask].astype(float)
-            means.append(np.mean(vals))
-            sems.append(np.std(vals) / np.sqrt(len(vals)))
+        values = licks[bin_idx == b]
+
+        if len(values) > 0:
+            means.append(np.mean(values))
+
+            if len(values) > 1:
+                sems.append(stats.sem(values, nan_policy="omit"))
+            else:
+                sems.append(np.nan)
         else:
             means.append(np.nan)
             sems.append(np.nan)
-        
-        centers.append(np.round((bins[b] + bins[b-1]) / 2, 2))
 
-    return np.array(centers), np.array(means), np.array(sems)
+        centers.append(np.round((bins[b] + bins[b - 1]) / 2, 2))
+
+    return np.asarray(centers), np.asarray(means), np.asarray(sems)
 
 def format_condition_label(cond=None, pattern=None):
     
@@ -320,3 +331,57 @@ def merge_positions_keep_single(pos1, pos2, tol, offset):
         j += 1
 
     return np.array(merged)
+
+def mean_sem_by_distance(distances, lick_rates):
+    distances = np.asarray(
+        distances,
+        dtype=float,
+    )
+    lick_rates = np.asarray(
+        lick_rates,
+        dtype=float,
+    )
+
+    # Handle an incomplete final lap
+    n = min(
+        len(distances),
+        len(lick_rates),
+    )
+
+    distances = distances[:n]
+    lick_rates = lick_rates[:n]
+
+    valid = (
+        np.isfinite(distances)
+        & np.isfinite(lick_rates)
+    )
+
+    distances = distances[valid]
+    lick_rates = lick_rates[valid]
+
+    unique_distances = np.sort(np.unique(distances))
+
+    means = np.full(
+        len(unique_distances),
+        np.nan,
+    )
+    sems = np.full(
+        len(unique_distances),
+        np.nan,
+    )
+
+    # print(unique_distances)
+    for i, distance in enumerate(unique_distances):
+        values = lick_rates[
+            distances == distance
+        ]
+
+        means[i] = np.nanmean(values)
+
+        if len(values) > 1:
+            sems[i] = stats.sem(
+                values,
+                nan_policy="omit",
+            )
+
+    return unique_distances, means, sems

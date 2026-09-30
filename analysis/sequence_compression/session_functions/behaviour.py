@@ -2,7 +2,9 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats as stats
-from session_functions.utils import *
+import importlib 
+from session_functions import utils
+importlib.reload(utils)
 
 np.set_printoptions(suppress=True, precision=2)
 
@@ -96,7 +98,7 @@ class Behaviour():
             fig = plt.figure(figsize=(6,4))
 
             if include_A:
-                cA, mA, sA = compute_binned_lick_rate(A_A_diff, licked_As, bins)
+                cA, mA, sA = utils.compute_binned_lick_rate(A_A_diff, licked_As, bins)
                 plt.errorbar(cA, mA, yerr=sA, label='A', marker='o', color='darkblue')
 
             for i in range(num_Bs):
@@ -107,7 +109,7 @@ class Behaviour():
                 elif i == 2:
                     color = 'brown'
                 
-                c, m, s = compute_binned_lick_rate(A_B_diff_list[i], licked_Bs[i], bins)
+                c, m, s = utils.compute_binned_lick_rate(A_B_diff_list[i], licked_Bs[i], bins)
                 plt.errorbar(c, m, yerr=s, label=f'B{i+1}', marker='o', color=color)
 
             ax = plt.gca()
@@ -148,7 +150,7 @@ class Behaviour():
         missed_lms, missed_pos = self.get_misses()
 
         # Find total number of licks inside each landmark 
-        lick_counter = np.zeros(len(release_positions))
+        lick_counter = np.full(len(release_positions), np.nan, dtype=float)
 
         for i, pos in enumerate(release_positions):
             # Licks within landmark boundaries
@@ -209,7 +211,7 @@ class Behaviour():
         
         # Count licks as a function of distance from A1 
         # Licks in As
-        licked_As = np.zeros_like(A_positions)
+        licked_As = np.full(A_positions.shape, np.nan, dtype=float)
         for i, pos in enumerate(A_positions): # NOTE the first A is not considered 
             for j in range(num_As):
                 curr_pos = pos[j]
@@ -228,7 +230,7 @@ class Behaviour():
                 licked_As[i, j] = np.sum(mask)
         
         # Licks in Bs
-        licked_Bs = np.zeros_like(B_positions)
+        licked_Bs = np.full(B_positions.shape, np.nan, dtype=float)
         for i, pos in enumerate(B_positions):
             for j in range(num_Bs):
                 curr_pos = pos[j]
@@ -311,12 +313,12 @@ class Behaviour():
                 for i, A_val in enumerate(A_order):
                     label = "A" if (num_As == 1 and i == 0) else f"A{i+1}"
                     display_label = (f"{label} (miss)" if misses else f"{label} (omitted)" if omissions else label)
-                    c, m, s = compute_binned_lick_rate(A_A_diff_list[A_val], licked_As[A_val], bins)
+                    c, m, s = utils.compute_binned_lick_rate(A_A_diff_list[A_val], licked_As[A_val], bins)
                     ax[1].errorbar(c, m, yerr=s, label=display_label, marker='o', color=colors[label][0])
 
                 for i in range(num_Bs):
                     label = "B" if (num_Bs == 1 and i == 0) else f"B{i+1}"
-                    c, m, s = compute_binned_lick_rate(A_B_diff_list[i], licked_Bs[i], bins)
+                    c, m, s = utils.compute_binned_lick_rate(A_B_diff_list[i], licked_Bs[i], bins)
                     ax[1].errorbar(c, m, yerr=s, label=label, marker='o', color=colors[label][0])
 
                 ymin, ymax = ax[1].get_ylim()
@@ -379,10 +381,7 @@ class Behaviour():
 
         target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = self.session.find_targets_distractors()
 
-        if self.session.cohort == 1:
-            seq_start = np.where(target_positions[0] == all_positions)[0][0]
-        elif self.session.cohort == 2:
-            seq_start = 0
+        seq_start = np.where(target_positions[0] == all_positions)[0][0]
         all_events = all_events[seq_start:]
         all_positions = all_positions[seq_start:]
 
@@ -459,7 +458,7 @@ class Behaviour():
         '''Get lick rate around landmark entry'''
 
         # Threshold licks 
-        licks = threshold_lick_events(self.session.sess, self.session.dataframe)
+        licks = utils.threshold_lick_events(self.session.sess, self.session.dataframe)
 
         if 'LM_Count' in self.session.dataframe.columns:
             release_df = self.session.estimate_lm_events()
@@ -674,16 +673,13 @@ class Behaviour():
     def get_lm_lick_rate(self, bins=16, return_sess=False):  # TODO I really need to fix this and make it consistent across sessions
         '''Get lick rate per frame bin as the mean per bin for each landmark'''
         
-        sess = self.session.sess
+        sess = self.session.analyse_session_pre7_behav(plot=False)
         
-        # Get all datapoints within landmarks
-        sess = self.session.get_data_lm_idx(sess)
-
-
         # Create a binary lick map for the entire session 
         binary_licks = np.zeros(len(sess['position']))
-        thresholded_lick_idx = np.where(sess["thresholded_licks"] == 1)[0]
-        binary_licks[thresholded_lick_idx] = 1 # (actually not binary)
+        thresholded_lick_idx = np.where(sess["thresholded_licks"] > 0)[0]
+        lick_signal = sess["thresholded_licks"].astype(float)
+        # binary_licks[thresholded_lick_idx] = 1 # (actually not binary)
 
         if ('stage' in sess) and ('3' in sess['stage'] or '4' in sess['stage']):
             
@@ -718,7 +714,8 @@ class Behaviour():
                     lm_idx = np.where(sess['data_lm_idx'] == lm+1)[0]
 
                     # binary licks within landmark
-                    lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+                    # lm_licks = binary_licks[lm_idx[0]:lm_idx[-1]+1]
+                    lm_licks = lick_signal[lm_idx[0]:lm_idx[-1]+1]
                     
                     # calculate lick rate within each landmark (mean in each bin)
                     lm_lick_rate_dict[key], _, _ = stats.binned_statistic(lm_idx, lm_licks, bins=bins)
@@ -750,3 +747,50 @@ class Behaviour():
             return sess
         else:
             return lm_lick_rate
+
+    def get_lick_rate_dist_from_last_goal(self, bins=16):
+
+        sess = self.session.analyse_session_pre7_behav(plot=False)
+
+        # Get last goal, non-goal and test
+        goal = sess['goal_landmark_id'][-1]
+        nongoal = goal + 1
+        test = sess['test_landmark_id']
+
+        # 1. Get goal -> nongoal and goal -> test distances
+        lm_entry_idx, lm_exit_idx = self.session.get_lm_entry_exit(sess)
+        lm_entry = sess['position'][lm_entry_idx]
+        lm_exit = sess['position'][lm_exit_idx]
+
+        lm_distances = np.round((lm_entry[1:] - lm_exit[:-1] + self.session.lm_size))
+
+        dist_goal_nongoal = lm_distances[goal::sess['num_landmarks']] # distance 7 = distance between 7-8 i.e. lms 8-9
+        dist_goal_test = []
+        for i, (dist_g_ng, dist_ng_t) in enumerate(zip(lm_distances[goal::sess['num_landmarks']], lm_distances[nongoal::sess['num_landmarks']])):
+            dist_goal_test.append(dist_g_ng + dist_ng_t)
+
+        # 2. Calculate mean lick rate across the 16 bins for every lap and landmark
+        lick_rate = self.get_lm_lick_rate()
+
+        n_landmarks = sess["num_landmarks"]
+
+        lap_lm_lick_rate = np.column_stack([
+            np.nanmean(
+                lick_rate[:, lm * bins:(lm + 1) * bins],
+                axis=1,
+            )
+            for lm in range(n_landmarks)
+        ])
+
+        nongoal_lick_rate = lap_lm_lick_rate[:, nongoal]
+        test_lick_rate = lap_lm_lick_rate[:, test]
+
+        x_g_to_ng, mean_g_to_ng, sem_g_to_ng = utils.mean_sem_by_distance(dist_goal_nongoal, nongoal_lick_rate)
+        x_g_to_t, mean_g_to_t, sem_g_to_t = utils.mean_sem_by_distance(dist_goal_test, test_lick_rate)
+
+        # 3. Plot lick rate based on distance from 8 
+        distances = [x_g_to_ng, x_g_to_t]
+        lick_rates = [mean_g_to_ng, mean_g_to_t]
+        lick_rate_err = [sem_g_to_ng, sem_g_to_t]
+
+        return distances, lick_rates, lick_rate_err

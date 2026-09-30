@@ -1563,10 +1563,16 @@ class ABCD_Session():
 
         if t == 5 or t == 6:
             assert session['num_landmarks'] == 10, 'The number of landmarks in T5 or T6 should be 10.'
-            
+
+            rewarded_sequence = []
+            for landmark_idx, landmark in enumerate(self.trial["landmarks"]):
+                if landmark[0]["rewardSequencePosition"] != -1:
+                    rewarded_sequence.append(landmark_idx)
+
             if session['sequence'] == 'ABAB':
-                goal_landmark_id = np.array([1, 3, 5, 7])
-                test_landmark_id = 9
+                goal_landmark_id = np.array(rewarded_sequence)
+                test_landmark_id = rewarded_sequence[-1] + 2
+            
             elif session['sequence'] == 'AABB':  
                 goal_landmark_id = np.array([0, 1, 4, 5])
                 test_landmark_id = np.array([8, 9])
@@ -1631,6 +1637,7 @@ class ABCD_Session():
         session = self.get_licked_lms(session)
         session = self.get_rewarded_lms(session)
         session = self.get_reward_idx(session)
+        session = self.get_data_lm_idx(session)
         # session = get_active_goal(session)
         # session = calc_acceleration(session)
         # session = calculate_frame_lick_rate(session)
