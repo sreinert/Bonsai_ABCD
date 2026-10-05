@@ -14,6 +14,8 @@ parser.add_argument('--mouse', type=str, default='010', help="The mouse ID (e.g.
 parser.add_argument('--session', type=str, default='full010', help="The session ID (e.g. 'full010')")
 parser.add_argument('--stage', type=str, default='t5', help="The imaging timepoint (e.g. t5)")
 parser.add_argument('--cohort', type=str, default='2', help="Behavioural cohort the mouse belongs to")
+parser.add_argument('--nreps', type=int, default=1000, help="Number of shuffles for the monotonic trend test")
+parser.add_argument('--reload', action='store_true', help="Recompute results even if a saved result file exists")
 args = parser.parse_args()
 
 mouse =  args.mouse 
@@ -89,8 +91,8 @@ for cell in goal_progress_tuned:
 
 # 5. Calculate monotonic trend score
 monotonic_trend_results = neural_analysis_helpers.calc_monotonic_trend_score(goal_progress_tuned, max_window_activity, 
-                                                            ngoals=5, shuffle=True, nreps=1000, 
-                                                            print_results=False, save_dir=save_dir, reload=False)
+                                                            ngoals=5, shuffle=True, nreps=args.nreps,
+                                                            print_results=False, save_dir=save_dir, reload=args.reload)
 
 # 6. Plot the analysis results for each cell 
 for cell in goal_progress_tuned:

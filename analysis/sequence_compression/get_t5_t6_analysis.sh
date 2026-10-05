@@ -18,9 +18,10 @@ conda activate bonsai_abcd
 
 # condition="goal_progress"
 condition="monotonic_trend"
+nreps=10000
 
 PAIRS=(
-#   "mouse=TAA0000059 cohort=2 t5:t5 t6:t6"
+  "mouse=TAA0000059 cohort=2 t5:t5 t6:t6"
   "mouse=TAA0000066 cohort=2 t5:t5 t6:t6"
 #   "mouse=004 cohort=3 full020:t5 full030:t6"
 #   "mouse=006 cohort=3 full011:t5 full014:t6"
@@ -55,13 +56,15 @@ for ENTRY in "${PAIRS[@]}"; do
             echo "Finished extracting goal progress for mouse=$mouse session=$session stage=$stage cohort=$cohort"
 
         elif [[ "$condition" == "monotonic_trend" ]]; then
-            echo "Calculating monotonic trend across goals in max activity for mouse=$mouse session=$session stage=$stage cohort=$cohort"
+            echo "Calculating monotonic trend across goals in max activity for mouse=$mouse session=$session stage=$stage cohort=$cohort with $nreps shuffles"
 
             python calculate_monotonic_goal_progress_trend.py \
                 --mouse "$mouse" \
                 --session "$session" \
                 --stage "$stage" \
-                --cohort "$cohort"
+                --cohort "$cohort" \
+                --nreps "$nreps" \
+                --reload
 
             echo "Finished calculating monotonic trend across goals in max activity for mouse=$mouse session=$session stage=$stage cohort=$cohort"
 

@@ -2668,15 +2668,34 @@ def calc_monotonic_trend_score(neurons, activity, ngoals=5, shuffle=False, nreps
             """Return one Spearman rho per trial and circular start point."""
             scores = np.full((cell_activity.shape[0], ngoals), np.nan)
 
-            for trial_i, trial_activity in enumerate(cell_activity):
-                for start in range(ngoals):
-                    # Try all possible circular starting points
-                    rotated = np.roll(trial_activity, -start)
-                    valid = np.isfinite(rotated)
+            for start in range(ngoals):
+                rotated = np.roll(cell_activity, -start, axis=1)
+                valid = np.isfinite(rotated)
+                valid_rows = valid.sum(axis=1) >= 3
 
-                    if valid.sum() >= 3:
-                        rho, _ = stats.spearmanr(progress[valid], rotated[valid])
-                        scores[trial_i, start] = rho
+                if not np.any(valid_rows):
+                   continue
+
+                rotated = rotated[valid_rows].copy()
+                valid = valid[valid_rows]
+                rotated[~valid] = np.nan
+                x = np.broadcast_to(progress, rotated.shape).astype(float).copy()
+                x[~valid] = np.nan
+
+                rank_x = stats.rankdata(x, axis=1, nan_policy="omit")
+                rank_y = stats.rankdata(rotated, axis=1, nan_policy="omit")
+                rank_x -= np.nanmean(rank_x, axis=1, keepdims=True)
+                rank_y -= np.nanmean(rank_y, axis=1, keepdims=True)
+
+                numerator = np.nansum(rank_x * rank_y, axis=1)
+                denominator = np.sqrt(
+                    np.nansum(rank_x**2, axis=1)
+                    * np.nansum(rank_y**2, axis=1)
+                )
+                valid_correlations = denominator > 0
+                scores[np.flatnonzero(valid_rows)[valid_correlations], start] = (
+                    numerator[valid_correlations] / denominator[valid_correlations]
+                )
 
             return scores
 
