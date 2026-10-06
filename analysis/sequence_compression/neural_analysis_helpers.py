@@ -1866,7 +1866,7 @@ def get_high_peak_tuned_cells(dF, goal_firing, event_idx, session_idx, neurons, 
     return high_test_goal_cells
 
 
-def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, period='goal', labels=None, ax=None):
+def plot_arb_progress(dF, cell, event_frames, ngoals, bins, session, stage=None, period='goal', labels=None, ax=None):
     """
     Extract the progress tuning between arbitrary events.
     If ax1/ax2 are given, plot into them. Otherwise, create a new figure.
@@ -1928,6 +1928,8 @@ def plot_arb_progress(dF, cell, event_frames, ngoals, bins, stage, session, peri
     std_bin = np.nanstd(binned_all, axis=0)
     sem_bin = std_bin / np.sqrt(binned_all.shape[0])
 
+    if stage is not None:
+        stage = int(stage[-1])
     if stage == 3:
         color = '#325235'
     elif stage == 4:
@@ -2790,10 +2792,10 @@ def plot_progress_with_monotonic_trend(
     event_frames,
     ngoals,
     bins,
-    stage,
     session,
     activity_by_cell,
     trend_results,
+    stage=None,
     period="goal",
     labels=None,
     interval_labels=None,
@@ -2883,7 +2885,7 @@ def plot_progress_with_monotonic_trend(
         event_frames=event_frames,
         ngoals=ngoals,
         bins=bins,
-        stage=int(stage[-1]),
+        stage=stage,
         session=session,
         period=period,
         labels=labels,
@@ -2948,7 +2950,7 @@ def plot_progress_with_monotonic_trend(
         trend_ax.text(
             0.02,
             0.89,
-            f"{significance_label} = {significance_value:.3g}",
+            f"{significance_label} = {significance_value:.8g}",
             transform=trend_ax.transAxes,
             va="top",
         )
