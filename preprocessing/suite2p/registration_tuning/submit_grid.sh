@@ -30,8 +30,14 @@ array_spec=${TASK_RANGE:-0-${last_task}%${max_concurrent}}
 output_root=${manifest_dir}
 mkdir -p "${output_root}/logs"
 
-cd "${output_root}"
+echo "Manifest: ${manifest}"
+echo "Working directory: ${output_root}"
+echo "Logs: ${output_root}/logs/s2p_reg_<job>_<task>.{out,err}"
+
 sbatch --array="${array_spec}" \
+  --chdir="${output_root}" \
+  --output="${output_root}/logs/s2p_reg_%A_%a.out" \
+  --error="${output_root}/logs/s2p_reg_%A_%a.err" \
   "${script_dir}/run_grid_array.sbatch" \
   "${manifest}" \
   "${repo_root}" \

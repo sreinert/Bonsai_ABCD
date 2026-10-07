@@ -156,6 +156,10 @@ TASK_RANGE=0 bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
   "${TUNING_ROOT}/tasks.csv"
 ```
 
+The submission command prints the resolved manifest, working directory, and
+absolute log directory before printing the Slurm job ID. This avoids dependence
+on the shell directory from which `sbatch` was invoked.
+
 Inspect its Slurm log, `status.json`, `provenance.json`, and `ops.npy`. After it
 completes successfully, submit the full array. The completed pilot task will be
 detected and skipped:
