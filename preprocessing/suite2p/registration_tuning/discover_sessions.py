@@ -301,7 +301,13 @@ def main() -> None:
     parser.add_argument("--fs", type=float, default=45.0)
     parser.add_argument("--tau", type=float, default=0.4)
     parser.add_argument("--nplanes", type=int, default=1)
-    parser.add_argument("--nchannels", type=int, default=1)
+    parser.add_argument(
+        "--nchannels",
+        type=int,
+        default=2,
+        choices=(2,),
+        help="Number of interleaved imaging channels (fixed at 2 for this project)",
+    )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 

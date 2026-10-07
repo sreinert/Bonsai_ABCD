@@ -54,6 +54,12 @@ def build_tasks(
 ) -> list[dict[str, object]]:
     output_root = output_root.resolve()
     for session in sessions:
+        if int(session["nchannels"]) != 2:
+            raise ValueError(
+                f"Session {session['mouse_id']}/{session['session_id']} has "
+                f"nchannels={session['nchannels']}; this project requires 2. "
+                "Regenerate selected_sessions.csv with the current discovery script."
+            )
         input_path = Path(session["input_path"]).resolve()
         if paths_overlap(output_root, input_path):
             raise ValueError(
@@ -116,4 +122,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

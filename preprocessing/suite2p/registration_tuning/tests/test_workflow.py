@@ -164,7 +164,7 @@ def test_task_builder_rejects_output_inside_input(tmp_path: Path) -> None:
             "fs": "45",
             "tau": "0.4",
             "nplanes": "1",
-            "nchannels": "1",
+            "nchannels": "2",
         }
     ]
     candidates = [{"name": "rigid", "registration": {"nonrigid": False}}]
@@ -186,7 +186,7 @@ def test_task_builder_is_cartesian_and_deterministic(tmp_path: Path) -> None:
             "fs": "45",
             "tau": "0.4",
             "nplanes": "1",
-            "nchannels": "1",
+            "nchannels": "2",
         }
         for path in inputs
     ]

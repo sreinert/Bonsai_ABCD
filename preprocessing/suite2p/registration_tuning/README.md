@@ -129,6 +129,11 @@ The timestamp in names such as
 `ses-abab-random-001_date-20260824T102425` is parsed directly and used for
 chronological first/last selection.
 
+All recordings in this project contain two interleaved channels, so discovery
+defaults to `nchannels=2`. The explicit `--nchannels 2` above documents this in
+the command and the value is also saved in the session and task manifests.
+Task creation rejects older session manifests containing `nchannels=1`.
+
 ### 2. Create the task manifest
 
 ```bash
@@ -248,7 +253,7 @@ stack is used for every parameter candidate within that session even if a newer
 file is added later.
 
 For two-channel recordings, 4,000 TIFF pages represent approximately 2,000
-timepoints per channel. Pass `--nchannels 2` during discovery so that value is
+timepoints per channel. Discovery defaults to `--nchannels 2`, and that value is
 carried into every Suite2p task. Do not use `--expected-frames 2000` for these
 files; no exact page count is required by default.
 
