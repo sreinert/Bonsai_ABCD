@@ -149,7 +149,25 @@ an output root that overlaps any `funcimg/others` input directory.
 
 ### 3. Submit the Slurm array
 
-Before launching the complete screen, submit task zero as a cluster/API pilot:
+Before launching the complete screen, test task zero directly from an allocated
+GPU node. This bypasses Slurm log routing while checking the environment, CUDA,
+manifest paths, TIFF access, Suite2p execution, and expected output files:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/run_pilot.sh \
+  "${TUNING_ROOT}/tasks.csv"
+```
+
+The wrapper writes timestamped `pilot_task0_*.out` and `pilot_task0_*.err`
+files under `${TUNING_ROOT}/logs` while also displaying their contents in the
+terminal. It defaults to `suite2p-reg-1.1.0`, task zero, and CUDA. Override these
+only when needed with `SUITE2P_ENV`, `PILOT_TASK_ID`, or `PILOT_DEVICE`.
+
+The final output should include `Completed task 0:` and `Pilot finished
+successfully.` The task directory recorded in `tasks.csv` should contain
+`status.json` with `state: complete` and `suite2p/plane0/ops.npy`.
+
+Alternatively, submit task zero as a Slurm pilot:
 
 ```bash
 TASK_RANGE=0 bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
