@@ -51,7 +51,7 @@ source activate suite2p-reg-1.1.0
 
 # Install the cluster-recommended CUDA/PyTorch build here, then:
 python -m pip install -r preprocessing/suite2p/registration_tuning/requirements.txt
-python -c "import suite2p, torch; print(suite2p.__version__, torch.cuda.is_available())"
+python -c "from importlib.metadata import version; import torch; print(version('suite2p'), torch.cuda.is_available())"
 ```
 
 Do not proceed with GPU jobs unless this prints Suite2p `1.1.0` and CUDA
@@ -87,6 +87,26 @@ scan to known mice, repeat `--mouse`, for example:
 
 The defaults assume mouse directories named `TAA*`, session directories named
 `ses-*`, and inputs below `funcimg/others`.
+
+For Sequence Compression cohort 2, whose layout is
+`rawdata/cohort2/sub-XX/ses-..._date-YYYYMMDDTHHMMSS/funcimg/others`, use:
+
+```bash
+DATA_ROOT=/ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression/rawdata/cohort2
+TUNING_ROOT=/ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression/_suite2p_registration_tuning/cohort2
+
+python preprocessing/suite2p/registration_tuning/discover_sessions.py \
+  --data-root "${DATA_ROOT}" \
+  --mouse-glob 'sub-*' \
+  --session-glob 'ses-*' \
+  --others-relative 'funcimg/others' \
+  --output "${TUNING_ROOT}/selected_sessions.csv" \
+  --seed 20261007
+```
+
+The timestamp in names such as
+`ses-abab-random-001_date-20260824T102425` is parsed directly and used for
+chronological first/last selection.
 
 ### 2. Create the task manifest
 

@@ -18,7 +18,10 @@ from common import write_csv
 
 
 TIFF_SUFFIXES = {".tif", ".tiff"}
-DATE_PATTERN = re.compile(r"(?:^|[_-])date[-_]?([0-9]{8})(?:[_-]|$)", re.IGNORECASE)
+DATE_PATTERN = re.compile(
+    r"(?:^|[_-])date[-_]?([0-9]{8})(?:T([0-9]{6}))?(?=[_-]|$)",
+    re.IGNORECASE,
+)
 SESSION_PATTERN = re.compile(r"(?:^|[_-])ses(?:sion)?[-_]?([0-9]+)(?:[_-]|$)", re.IGNORECASE)
 
 
@@ -39,6 +42,8 @@ def parse_date(name: str) -> datetime | None:
     if not match:
         return None
     try:
+        if match.group(2):
+            return datetime.strptime(match.group(1) + match.group(2), "%Y%m%d%H%M%S")
         return datetime.strptime(match.group(1), "%Y%m%d")
     except ValueError:
         return None

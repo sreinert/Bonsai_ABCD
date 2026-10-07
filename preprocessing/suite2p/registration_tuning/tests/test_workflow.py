@@ -37,6 +37,14 @@ def test_tiff_frame_count_uses_metadata(tmp_path: Path) -> None:
     assert discover_sessions.tiff_frame_count(path) == 7
 
 
+def test_timestamped_sequence_compression_session_date() -> None:
+    parsed = discover_sessions.parse_date(
+        "ses-abab-random-001_date-20260824T102425"
+    )
+    assert parsed is not None
+    assert parsed.isoformat() == "2026-08-24T10:24:25"
+
+
 def test_session_selection_is_seeded_and_keeps_endpoints() -> None:
     sessions = [make_session("m1", f"ses-{index:03d}", index) for index in range(1, 8)]
     first = discover_sessions.choose_sessions(sessions, seed=123)
@@ -116,4 +124,3 @@ def test_metrics_detect_bad_frames_and_boundary_hits() -> None:
     metrics = evaluate.compute_metrics(ops, outputs)
     assert metrics["boundary_hit_fraction"] == pytest.approx(2 / 3)
     assert metrics["bad_frame_fraction"] == pytest.approx(1 / 3)
-
