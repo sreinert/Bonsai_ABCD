@@ -15,7 +15,14 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from common import is_relative_to, paths_overlap, read_csv, require_columns, write_json_atomic
+from common import (
+    is_relative_to,
+    paths_overlap,
+    read_csv,
+    remap_mounted_path,
+    require_columns,
+    write_json_atomic,
+)
 
 
 TASK_COLUMNS = {
@@ -53,15 +60,18 @@ def file_snapshot(paths: list[Path]) -> dict[str, dict[str, int]]:
 
 
 def validate_paths(row: dict[str, str]) -> tuple[Path, Path, list[Path]]:
-    input_path = Path(row["input_path"]).resolve()
-    run_dir = Path(row["run_dir"]).resolve()
+    input_path = remap_mounted_path(Path(row["input_path"]), must_exist=True)
+    run_dir = remap_mounted_path(Path(row["run_dir"]), must_exist=False)
     if not input_path.is_dir():
         raise NotADirectoryError(f"Input directory does not exist: {input_path}")
     if paths_overlap(run_dir, input_path):
         raise ValueError(
             f"Refusing unsafe task: output {run_dir} overlaps input {input_path}"
         )
-    files = [Path(value).resolve() for value in json.loads(row["tiff_files_json"])]
+    files = [
+        remap_mounted_path(Path(value), must_exist=True)
+        for value in json.loads(row["tiff_files_json"])
+    ]
     if not files:
         raise ValueError("Task has no input TIFF files")
     for path in files:
@@ -91,7 +101,8 @@ def build_suite2p_configuration(
     settings["fs"] = float(row["fs"])
     settings["tau"] = float(row["tau"])
     settings["run"]["do_registration"] = 2
-    settings["run"]["do_regmetrics"] = True
+    frame_count = int(row.get("frame_count") or 0)
+    settings["run"]["do_regmetrics"] = frame_count >= 1500
     settings["run"]["do_detection"] = False
     settings["run"]["do_deconvolution"] = False
     settings["io"]["delete_bin"] = False

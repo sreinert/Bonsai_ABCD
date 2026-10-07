@@ -12,7 +12,7 @@ while keeping the computational search practical on the HPC cluster.
 The registration evaluation should:
 
 - use the same Suite2p version and parameter set for every mouse;
-- screen parameter candidates on short, 2,000-frame stacks before committing
+- screen parameter candidates on the available short TIFF stacks before committing
   resources to complete recordings of approximately 81,000 frames;
 - run on the Slurm HPC cluster against data on network storage;
 - combine quantitative diagnostics with visual inspection of registered data;
@@ -65,10 +65,16 @@ deliberately separate from every mouse/session input directory.
 ### 1. Discover and lock the selected sessions
 
 ```bash
-TUNING_ROOT=/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/_suite2p_registration_tuning
+if [[ -d /ceph/mrsic_flogel/public/projects ]]; then
+  PROJECTS_ROOT=/ceph/mrsic_flogel/public/projects
+else
+  PROJECTS_ROOT=/Volumes/mrsic_flogel/public/projects
+fi
+
+TUNING_ROOT=${PROJECTS_ROOT}/AtApSuKuSaRe_20250129_HFScohort2/_suite2p_registration_tuning
 
 python preprocessing/suite2p/registration_tuning/discover_sessions.py \
-  --data-root /ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2 \
+  --data-root AtApSuKuSaRe_20250129_HFScohort2 \
   --output "${TUNING_ROOT}/selected_sessions.csv" \
   --seed 20261007
 ```
@@ -88,12 +94,25 @@ scan to known mice, repeat `--mouse`, for example:
 The defaults assume mouse directories named `TAA*`, session directories named
 `ses-*`, and inputs below `funcimg/others`.
 
+`--data-root` can be absolute or relative to the MRSIC projects directory. A
+relative value uses `/ceph/mrsic_flogel/public/projects` when that mount exists,
+otherwise `/Volumes/mrsic_flogel/public/projects`. Set `MRSIC_PROJECTS_ROOT` to
+override both locations. This means the same relative `--data-root` argument
+works locally and on the HPC.
+
+Paths saved in manifests are portable between the two standard mounts. The
+runner and evaluator preserve everything after `public/projects` and remap an
+unavailable `/Volumes/...` prefix to `/ceph/...`, or vice versa. Therefore a
+manifest created locally can be used on the HPC without editing its CSV path
+fields. The path used to invoke the manifest itself must still be valid on the
+current machine.
+
 For Sequence Compression cohort 2, whose layout is
 `rawdata/cohort2/sub-XX/ses-..._date-YYYYMMDDTHHMMSS/funcimg/others`, use:
 
 ```bash
-DATA_ROOT=/ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression/rawdata/cohort2
-TUNING_ROOT=/ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression/_suite2p_registration_tuning/cohort2
+DATA_ROOT=AtAp_20260119_SequenceCompression/rawdata/cohort2
+TUNING_ROOT=${PROJECTS_ROOT}/AtAp_20260119_SequenceCompression/_suite2p_registration_tuning/cohort2
 
 python preprocessing/suite2p/registration_tuning/discover_sessions.py \
   --data-root "${DATA_ROOT}" \
@@ -177,12 +196,16 @@ For each mouse, a session is eligible when:
 
 1. the session contains a `funcimg` directory;
 2. `funcimg/others` exists; and
-3. `funcimg/others` contains the intended 2,000-frame TIFF stack.
+3. `funcimg/others` contains at least one readable TIFF stack.
 
-The selection step should inspect the TIFF metadata and verify the total frame
-count instead of relying only on the filename. If a stack is split across
-multiple TIFF files, their combined frame count should be checked. Sessions
-with missing, unreadable, ambiguous, or incorrectly sized stacks should be
+If several TIFF files are present, the discovery step selects the one with the
+newest filesystem modification time (with filename as a deterministic
+tie-breaker). It reads that file's metadata and records its actual frame count;
+no exact frame count is required by default. The audit CSV records the selected
+file, its modification time, and the number of TIFF alternatives. An exact
+count can still be requested explicitly with `--expected-frames N`.
+
+Sessions with a missing directory, no TIFF, or an unreadable newest TIFF are
 reported and excluded rather than silently accepted.
 
 ### Three sessions per mouse
@@ -214,14 +237,17 @@ Edge cases should be explicit:
 
 ## Screening dataset
 
-The existing 2,000-frame stacks in `funcimg/others` will be used directly. The
-same stack must be used for every parameter candidate within a session.
+The newest TIFF stack in each selected session's `funcimg/others` directory is
+used directly. The chosen path is locked into the session manifest, so the same
+stack is used for every parameter candidate within that session even if a newer
+file is added later.
 
-Two thousand frames are sufficient for an initial screen and exceed the
-1,500-frame requirement for Suite2p registration metrics. They do not,
-however, capture every long-timescale drift or rare motion event. The screen is
-therefore intended to eliminate weak candidates and identify a shortlist, not
-to replace full-session validation.
+Suite2p registration metrics require at least 1,500 frames. Shorter TIFFs can
+still be registered, but some built-in metrics may be unavailable and the
+resulting ranking will use the remaining diagnostics. Short stacks do not
+capture every long-timescale drift or rare motion event, so the screen is
+intended to eliminate weak candidates and identify a shortlist rather than
+replace full-session validation.
 
 ## Initial registration candidates
 
@@ -345,7 +371,7 @@ frequent shifts at the allowed limit, even if their scalar score is high.
 
 ## Full-session validation
 
-After the 2,000-frame screen:
+After the short-stack screen:
 
 1. inspect the quantitative ranking and visual report;
 2. retain the best two or three candidates;
@@ -375,8 +401,8 @@ step after the registration parameters and version have been accepted.
 
 ### Files
 
-- `discover_sessions.py`: validates TIFF frame counts and performs reproducible
-  three-session selection.
+- `discover_sessions.py`: selects the newest TIFF, records its frame count, and
+  performs reproducible three-session selection.
 - `candidates.json`: explicit initial parameter candidates.
 - `make_tasks.py`: creates the session-by-candidate task table and enforces the
   input/output safety boundary.

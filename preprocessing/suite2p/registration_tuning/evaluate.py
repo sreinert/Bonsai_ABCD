@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from common import read_csv, require_columns, write_csv
+from common import read_csv, remap_mounted_path, require_columns, write_csv
 
 
 TASK_COLUMNS = {
@@ -172,7 +172,7 @@ def show_image(axis: plt.Axes, image: np.ndarray, title: str) -> None:
 def make_qc_plot(
     task: dict[str, str], ops: dict[str, Any], outputs: dict[str, Any], metrics: dict[str, float]
 ) -> Path:
-    run_dir = Path(task["run_dir"])
+    run_dir = remap_mounted_path(Path(task["run_dir"]), must_exist=True)
     output_path = run_dir / "qc.png"
     figure, axes = plt.subplots(2, 3, figsize=(15, 9), constrained_layout=True)
     show_image(axes[0, 0], array_from(outputs, ops, key="refImg"), "Reference image")
@@ -398,7 +398,7 @@ def main() -> None:
     errors: list[str] = []
     for task in tasks:
         try:
-            run_dir = Path(task["run_dir"])
+            run_dir = remap_mounted_path(Path(task["run_dir"]), must_exist=True)
             status_path = run_dir / "status.json"
             if not status_path.is_file():
                 raise RuntimeError("missing status.json")
@@ -417,7 +417,7 @@ def main() -> None:
                     "session_id": task["session_id"],
                     "candidate_name": task["candidate_name"],
                     **metrics,
-                    "run_dir": task["run_dir"],
+                    "run_dir": str(run_dir),
                     "qc_path": str(qc_path),
                     "montage_path": str(montage_path) if montage_path else "",
                 }
@@ -443,4 +443,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

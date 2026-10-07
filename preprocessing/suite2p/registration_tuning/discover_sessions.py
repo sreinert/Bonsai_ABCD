@@ -6,10 +6,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import tifffile
@@ -18,6 +19,10 @@ from common import write_csv
 
 
 TIFF_SUFFIXES = {".tif", ".tiff"}
+DEFAULT_PROJECT_ROOTS = (
+    Path("/ceph/mrsic_flogel/public/projects"),
+    Path("/Volumes/mrsic_flogel/public/projects"),
+)
 DATE_PATTERN = re.compile(
     r"(?:^|[_-])date[-_]?([0-9]{8})(?:T([0-9]{6}))?(?=[_-]|$)",
     re.IGNORECASE,
@@ -35,6 +40,28 @@ class Session:
     frame_count: int
     date: datetime | None
     session_number: int | None
+
+
+def resolve_data_root(
+    value: Path,
+    project_roots: tuple[Path, ...] = DEFAULT_PROJECT_ROOTS,
+) -> Path:
+    """Resolve an absolute path or a path relative to the mounted projects root."""
+    if value.is_absolute():
+        return value.resolve()
+
+    override = os.environ.get("MRSIC_PROJECTS_ROOT")
+    roots = (Path(override),) if override else project_roots
+    attempted: list[Path] = []
+    for root in roots:
+        candidate = (root / value).resolve()
+        attempted.append(candidate)
+        if candidate.is_dir():
+            return candidate
+    locations = ", ".join(str(path) for path in attempted)
+    raise NotADirectoryError(
+        f"Could not resolve relative data root {value!s}; checked: {locations}"
+    )
 
 
 def parse_date(name: str) -> datetime | None:
@@ -113,7 +140,7 @@ def discover_mouse(
     mouse_path: Path,
     session_glob: str,
     others_relative: Path,
-    expected_frames: int,
+    expected_frames: int | None,
 ) -> tuple[list[Session], list[dict[str, object]]]:
     eligible: list[Session] = []
     audit: list[dict[str, object]] = []
@@ -124,6 +151,9 @@ def discover_mouse(
             "session_id": session_path.name,
             "session_path": str(session_path.resolve()),
             "input_path": str(input_path.resolve()),
+            "tiff_file_count": 0,
+            "selected_tiff": "",
+            "selected_tiff_mtime_utc": "",
         }
         if not input_path.is_dir():
             audit.append({**base, "eligible": False, "frame_count": "", "reason": "missing input directory"})
@@ -138,15 +168,36 @@ def discover_mouse(
         if not files:
             audit.append({**base, "eligible": False, "frame_count": 0, "reason": "no TIFF files"})
             continue
+        selected_file = max(
+            files,
+            key=lambda path: (path.stat().st_mtime_ns, path.name),
+        )
+        selected_mtime = datetime.fromtimestamp(
+            selected_file.stat().st_mtime,
+            tz=timezone.utc,
+        ).isoformat()
+        file_details = {
+            **base,
+            "tiff_file_count": len(files),
+            "selected_tiff": str(selected_file),
+            "selected_tiff_mtime_utc": selected_mtime,
+        }
         try:
-            frame_count = sum(tiff_frame_count(path) for path in files)
+            frame_count = tiff_frame_count(selected_file)
         except Exception as exc:
-            audit.append({**base, "eligible": False, "frame_count": "", "reason": f"TIFF metadata error: {exc}"})
-            continue
-        if frame_count != expected_frames:
             audit.append(
                 {
-                    **base,
+                    **file_details,
+                    "eligible": False,
+                    "frame_count": "",
+                    "reason": f"TIFF metadata error: {exc}",
+                }
+            )
+            continue
+        if expected_frames is not None and frame_count != expected_frames:
+            audit.append(
+                {
+                    **file_details,
                     "eligible": False,
                     "frame_count": frame_count,
                     "reason": f"expected {expected_frames} frames",
@@ -158,26 +209,47 @@ def discover_mouse(
             session_id=session_path.name,
             session_path=session_path.resolve(),
             input_path=input_path.resolve(),
-            tiff_files=files,
+            tiff_files=(selected_file,),
             frame_count=frame_count,
             date=parse_date(session_path.name),
             session_number=parse_session_number(session_path.name),
         )
         eligible.append(session)
-        audit.append({**base, "eligible": True, "frame_count": frame_count, "reason": ""})
+        reason = f"selected newest of {len(files)} TIFF files" if len(files) > 1 else ""
+        audit.append(
+            {
+                **file_details,
+                "eligible": True,
+                "frame_count": frame_count,
+                "reason": reason,
+            }
+        )
     return eligible, audit
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--data-root", type=Path, required=True)
+    parser.add_argument(
+        "--data-root",
+        type=Path,
+        required=True,
+        help=(
+            "Absolute path, or path relative to the MRSIC projects mount. "
+            "Relative paths auto-detect /ceph or /Volumes."
+        ),
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--audit", type=Path)
     parser.add_argument("--mouse", action="append", help="Mouse directory name; repeat as needed")
     parser.add_argument("--mouse-glob", default="TAA*")
     parser.add_argument("--session-glob", default="ses-*")
     parser.add_argument("--others-relative", type=Path, default=Path("funcimg/others"))
-    parser.add_argument("--expected-frames", type=int, default=2000)
+    parser.add_argument(
+        "--expected-frames",
+        type=int,
+        default=None,
+        help="Optional exact frame-count filter; omitted by default",
+    )
     parser.add_argument("--seed", type=int, default=20261007)
     parser.add_argument("--fs", type=float, default=45.0)
     parser.add_argument("--tau", type=float, default=0.4)
@@ -186,7 +258,7 @@ def main() -> None:
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
-    data_root = args.data_root.resolve()
+    data_root = resolve_data_root(args.data_root)
     if not data_root.is_dir():
         raise NotADirectoryError(f"Data root does not exist: {data_root}")
     if args.mouse:
@@ -215,6 +287,9 @@ def main() -> None:
                     "session_id": "",
                     "session_path": "",
                     "input_path": "",
+                    "tiff_file_count": 0,
+                    "selected_tiff": "",
+                    "selected_tiff_mtime_utc": "",
                     "eligible": False,
                     "frame_count": "",
                     "reason": f"no session directories matched {args.session_glob!r}",
@@ -244,7 +319,7 @@ def main() -> None:
                 }
             )
     if not selected_rows:
-        raise RuntimeError("No eligible 2,000-frame sessions were found")
+        raise RuntimeError("No eligible sessions containing a readable TIFF were found")
 
     audit_path = args.audit or args.output.with_name(args.output.stem + "_audit.csv")
     write_csv(args.output, selected_rows, overwrite=args.overwrite)

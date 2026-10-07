@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,7 @@ sys.path.insert(0, str(WORKFLOW_DIR))
 import discover_sessions  # noqa: E402
 import evaluate  # noqa: E402
 import make_tasks  # noqa: E402
+from common import remap_mounted_path  # noqa: E402
 
 
 def make_session(mouse: str, session: str, order: int) -> discover_sessions.Session:
@@ -43,6 +45,69 @@ def test_timestamped_sequence_compression_session_date() -> None:
     )
     assert parsed is not None
     assert parsed.isoformat() == "2026-08-24T10:24:25"
+
+
+def test_relative_data_root_uses_available_projects_mount(tmp_path: Path) -> None:
+    projects_root = tmp_path / "projects"
+    relative = Path("project-name/rawdata/cohort2")
+    expected = projects_root / relative
+    expected.mkdir(parents=True)
+
+    resolved = discover_sessions.resolve_data_root(
+        relative,
+        project_roots=(tmp_path / "missing", projects_root),
+    )
+
+    assert resolved == expected.resolve()
+
+
+def test_manifest_path_remaps_between_mounts(tmp_path: Path) -> None:
+    volumes_root = tmp_path / "Volumes" / "projects"
+    ceph_root = tmp_path / "ceph" / "projects"
+    destination = ceph_root / "project" / "sub-02" / "sample.tif"
+    destination.parent.mkdir(parents=True)
+    destination.touch()
+
+    stored_path = volumes_root / "project" / "sub-02" / "sample.tif"
+    remapped = remap_mounted_path(
+        stored_path,
+        must_exist=True,
+        project_roots=(ceph_root, volumes_root),
+    )
+
+    assert remapped == destination.resolve()
+
+
+def test_discovery_selects_most_recent_tiff_without_frame_requirement(
+    tmp_path: Path,
+) -> None:
+    mouse = tmp_path / "sub-02"
+    others = (
+        mouse
+        / "ses-abab-random-001_date-20260824T102425"
+        / "funcimg"
+        / "others"
+    )
+    others.mkdir(parents=True)
+    older = others / "older.tif"
+    newer = others / "newer.tif"
+    tifffile.imwrite(older, np.zeros((5, 8, 9), dtype=np.uint16), photometric="minisblack")
+    tifffile.imwrite(newer, np.zeros((7, 8, 9), dtype=np.uint16), photometric="minisblack")
+    os.utime(older, (1000, 1000))
+    os.utime(newer, (2000, 2000))
+
+    sessions, audit = discover_sessions.discover_mouse(
+        mouse,
+        "ses-*",
+        Path("funcimg/others"),
+        expected_frames=None,
+    )
+
+    assert len(sessions) == 1
+    assert sessions[0].tiff_files == (newer.resolve(),)
+    assert sessions[0].frame_count == 7
+    assert audit[0]["tiff_file_count"] == 2
+    assert audit[0]["selected_tiff"] == str(newer.resolve())
 
 
 def test_session_selection_is_seeded_and_keeps_endpoints() -> None:
