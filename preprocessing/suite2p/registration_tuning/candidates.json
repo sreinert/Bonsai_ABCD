@@ -1,0 +1,64 @@
+{
+  "suite2p_version": "1.1.0",
+  "fixed_registration": {
+    "nimg_init": 1000,
+    "maxregshift": 0.1,
+    "maxregshiftNR": 5,
+    "smooth_sigma": 1.15,
+    "snr_thresh": 1.2,
+    "norm_frames": true,
+    "batch_size": 100,
+    "two_step_registration": false,
+    "reg_tif": false,
+    "reg_tif_chan2": false
+  },
+  "candidates": [
+    {
+      "name": "rigid_time_smooth",
+      "registration": {
+        "nonrigid": false,
+        "smooth_sigma_time": 1
+      }
+    },
+    {
+      "name": "rigid",
+      "registration": {
+        "nonrigid": false,
+        "smooth_sigma_time": 0
+      }
+    },
+    {
+      "name": "nonrigid_128",
+      "registration": {
+        "nonrigid": true,
+        "block_size": [128, 128],
+        "smooth_sigma_time": 0
+      }
+    },
+    {
+      "name": "nonrigid_128_time_smooth",
+      "registration": {
+        "nonrigid": true,
+        "block_size": [128, 128],
+        "smooth_sigma_time": 1
+      }
+    },
+    {
+      "name": "nonrigid_64",
+      "registration": {
+        "nonrigid": true,
+        "block_size": [64, 64],
+        "smooth_sigma_time": 0
+      }
+    },
+    {
+      "name": "nonrigid_64_time_smooth",
+      "registration": {
+        "nonrigid": true,
+        "block_size": [64, 64],
+        "smooth_sigma_time": 1
+      }
+    }
+  ]
+}
+

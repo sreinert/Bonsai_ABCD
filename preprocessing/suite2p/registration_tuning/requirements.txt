@@ -1,0 +1,5 @@
+# Install the cluster-compatible CUDA build of PyTorch first.
+suite2p==1.1.0
+matplotlib>=3.8,<4
+numpy>=1.26,<3
+tifffile>=2024.2.12
