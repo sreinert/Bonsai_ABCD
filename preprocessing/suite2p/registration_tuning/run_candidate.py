@@ -183,7 +183,16 @@ def main() -> None:
         import suite2p
         import torch
 
-        if args.device == "cuda" and not torch.cuda.is_available():
+        torch_version = importlib.metadata.version("torch")
+        torch_module = getattr(torch, "__file__", None)
+        if not hasattr(torch, "cuda"):
+            raise RuntimeError(
+                "The imported torch module does not expose torch.cuda. "
+                f"Imported from {torch_module!r}; torch distribution is "
+                f"{torch_version}."
+            )
+        cuda_available = torch.cuda.is_available()
+        if args.device == "cuda" and not cuda_available:
             raise RuntimeError("CUDA was requested but torch.cuda.is_available() is False")
 
         db, settings = build_suite2p_configuration(
@@ -194,11 +203,14 @@ def main() -> None:
             {
                 **provenance,
                 "suite2p_version": installed_version,
-                "torch_version": torch.__version__,
-                "cuda_available": torch.cuda.is_available(),
-                "torch_cuda_version": torch.version.cuda,
+                "torch_version": torch_version,
+                "torch_module": str(torch_module),
+                "cuda_available": cuda_available,
+                "torch_cuda_version": getattr(
+                    getattr(torch, "version", None), "cuda", None
+                ),
                 "cuda_device": (
-                    torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+                    torch.cuda.get_device_name(0) if cuda_available else None
                 ),
                 "db": db,
                 "settings": settings,

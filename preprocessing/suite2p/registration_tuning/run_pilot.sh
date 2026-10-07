@@ -65,13 +65,22 @@ import sys
 import torch
 
 device = sys.argv[1]
+torch_version = importlib.metadata.version("torch")
+torch_module = getattr(torch, "__file__", None)
 print("Python version:", sys.version.replace("\n", " "))
 print("Suite2p version:", importlib.metadata.version("suite2p"))
-print("Torch version:", torch.__version__)
-print("CUDA available:", torch.cuda.is_available())
-if torch.cuda.is_available():
+print("Torch distribution version:", torch_version)
+print("Torch module path:", torch_module)
+if not hasattr(torch, "cuda"):
+    raise RuntimeError(
+        "The imported torch module does not expose torch.cuda. "
+        f"Imported from {torch_module!r}; torch distribution is {torch_version}."
+    )
+cuda_available = torch.cuda.is_available()
+print("CUDA available:", cuda_available)
+if cuda_available:
     print("CUDA device:", torch.cuda.get_device_name(0))
-if device == "cuda" and not torch.cuda.is_available():
+if device == "cuda" and not cuda_available:
     raise RuntimeError(
         "CUDA is unavailable. Run this script inside an allocated GPU node, "
         "or set PILOT_DEVICE=cpu for a CPU test."
