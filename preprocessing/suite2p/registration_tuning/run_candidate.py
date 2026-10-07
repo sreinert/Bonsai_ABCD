@@ -101,8 +101,14 @@ def build_suite2p_configuration(
     settings["fs"] = float(row["fs"])
     settings["tau"] = float(row["tau"])
     settings["run"]["do_registration"] = 2
-    frame_count = int(row.get("frame_count") or 0)
-    settings["run"]["do_regmetrics"] = frame_count >= 1500
+    frame_count_text = row.get("frame_count", "").strip()
+    if frame_count_text:
+        timepoints_per_channel = int(frame_count_text) // int(row["nchannels"])
+        settings["run"]["do_regmetrics"] = timepoints_per_channel >= 1500
+    else:
+        # Discovery intentionally avoids walking every TIFF page over network
+        # storage. Suite2p will determine the movie length while reading it.
+        settings["run"]["do_regmetrics"] = True
     settings["run"]["do_detection"] = False
     settings["run"]["do_deconvolution"] = False
     settings["io"]["delete_bin"] = False

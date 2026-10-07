@@ -37,7 +37,7 @@ class Session:
     session_path: Path
     input_path: Path
     tiff_files: tuple[Path, ...]
-    frame_count: int
+    frame_count: int | None
     date: datetime | None
     session_number: int | None
 
@@ -101,6 +101,14 @@ def tiff_frame_count(path: Path) -> int:
         return page_count
 
 
+def validate_tiff_header(path: Path) -> None:
+    """Quickly verify that a file is readable and starts with a TIFF header."""
+    with path.open("rb") as stream:
+        header = stream.read(4)
+    if header not in {b"II*\x00", b"MM\x00*", b"II+\x00", b"MM\x00+"}:
+        raise ValueError(f"unrecognised TIFF header {header!r}")
+
+
 def stable_mouse_seed(seed: int, mouse_id: str) -> int:
     digest = hashlib.sha256(f"{seed}:{mouse_id}".encode("utf-8")).digest()
     return int.from_bytes(digest[:8], byteorder="big", signed=False)
@@ -141,6 +149,7 @@ def discover_mouse(
     session_glob: str,
     others_relative: Path,
     expected_frames: int | None,
+    count_frames: bool = False,
 ) -> tuple[list[Session], list[dict[str, object]]]:
     eligible: list[Session] = []
     audit: list[dict[str, object]] = []
@@ -154,6 +163,7 @@ def discover_mouse(
             "tiff_file_count": 0,
             "selected_tiff": "",
             "selected_tiff_mtime_utc": "",
+            "frame_count_status": "not_checked",
         }
         if not input_path.is_dir():
             audit.append({**base, "eligible": False, "frame_count": "", "reason": "missing input directory"})
@@ -161,7 +171,7 @@ def discover_mouse(
         files = tuple(
             sorted(
                 path.resolve()
-                for path in input_path.rglob("*")
+                for path in input_path.iterdir()
                 if path.is_file() and path.suffix.lower() in TIFF_SUFFIXES
             )
         )
@@ -183,23 +193,47 @@ def discover_mouse(
             "selected_tiff_mtime_utc": selected_mtime,
         }
         try:
-            frame_count = tiff_frame_count(selected_file)
+            validate_tiff_header(selected_file)
         except Exception as exc:
             audit.append(
                 {
                     **file_details,
                     "eligible": False,
                     "frame_count": "",
-                    "reason": f"TIFF metadata error: {exc}",
+                    "frame_count_status": "not_checked",
+                    "reason": f"TIFF read/header error: {exc}",
                 }
             )
             continue
+
+        frame_count: int | None = None
+        frame_count_status = "not_counted"
+        count_error = ""
+        if count_frames or expected_frames is not None:
+            try:
+                frame_count = tiff_frame_count(selected_file)
+                frame_count_status = "counted"
+            except Exception as exc:
+                frame_count_status = "count_failed"
+                count_error = f"frame count failed: {exc}"
+                if expected_frames is not None:
+                    audit.append(
+                        {
+                            **file_details,
+                            "eligible": False,
+                            "frame_count": "",
+                            "frame_count_status": frame_count_status,
+                            "reason": count_error,
+                        }
+                    )
+                    continue
         if expected_frames is not None and frame_count != expected_frames:
             audit.append(
                 {
                     **file_details,
                     "eligible": False,
                     "frame_count": frame_count,
+                    "frame_count_status": frame_count_status,
                     "reason": f"expected {expected_frames} frames",
                 }
             )
@@ -215,13 +249,18 @@ def discover_mouse(
             session_number=parse_session_number(session_path.name),
         )
         eligible.append(session)
-        reason = f"selected newest of {len(files)} TIFF files" if len(files) > 1 else ""
+        reasons = []
+        if len(files) > 1:
+            reasons.append(f"selected newest of {len(files)} TIFF files")
+        if count_error:
+            reasons.append(count_error)
         audit.append(
             {
                 **file_details,
                 "eligible": True,
-                "frame_count": frame_count,
-                "reason": reason,
+                "frame_count": frame_count if frame_count is not None else "",
+                "frame_count_status": frame_count_status,
+                "reason": "; ".join(reasons),
             }
         )
     return eligible, audit
@@ -249,6 +288,14 @@ def main() -> None:
         type=int,
         default=None,
         help="Optional exact frame-count filter; omitted by default",
+    )
+    parser.add_argument(
+        "--count-frames",
+        action="store_true",
+        help=(
+            "Count TIFF pages for reporting. This can be slow for large TIFFs on "
+            "network storage and is not needed for discovery."
+        ),
     )
     parser.add_argument("--seed", type=int, default=20261007)
     parser.add_argument("--fs", type=float, default=45.0)
@@ -279,6 +326,7 @@ def main() -> None:
             args.session_glob,
             args.others_relative,
             args.expected_frames,
+            args.count_frames,
         )
         if not audit:
             audit.append(
@@ -292,6 +340,7 @@ def main() -> None:
                     "selected_tiff_mtime_utc": "",
                     "eligible": False,
                     "frame_count": "",
+                    "frame_count_status": "not_checked",
                     "reason": f"no session directories matched {args.session_glob!r}",
                 }
             )
@@ -310,7 +359,7 @@ def main() -> None:
                     "ordering_method": method,
                     "session_path": str(session.session_path),
                     "input_path": str(session.input_path),
-                    "frame_count": session.frame_count,
+                    "frame_count": session.frame_count if session.frame_count is not None else "",
                     "tiff_files_json": json.dumps([str(path) for path in session.tiff_files]),
                     "fs": args.fs,
                     "tau": args.tau,
@@ -318,13 +367,16 @@ def main() -> None:
                     "nchannels": args.nchannels,
                 }
             )
-    if not selected_rows:
-        raise RuntimeError("No eligible sessions containing a readable TIFF were found")
-
     audit_path = args.audit or args.output.with_name(args.output.stem + "_audit.csv")
-    write_csv(args.output, selected_rows, overwrite=args.overwrite)
     if audit_rows:
         write_csv(audit_path, audit_rows, overwrite=args.overwrite)
+    if not selected_rows:
+        raise RuntimeError(
+            "No eligible sessions containing a readable TIFF were found. "
+            f"See the audit report: {audit_path}"
+        )
+
+    write_csv(args.output, selected_rows, overwrite=args.overwrite)
     print(f"Selected {len(selected_rows)} sessions across {len(mouse_paths)} mice")
     print(f"Manifest: {args.output}")
     print(f"Audit: {audit_path}")

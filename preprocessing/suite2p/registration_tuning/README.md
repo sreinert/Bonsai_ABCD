@@ -79,7 +79,8 @@ python preprocessing/suite2p/registration_tuning/discover_sessions.py \
   --seed 20261007
 ```
 
-This reads TIFF metadata only. It produces:
+This checks each selected TIFF's header without loading pixels or walking all
+TIFF pages. It produces:
 
 - `selected_sessions.csv`, the immutable first/random-middle/last selection;
 - `selected_sessions_audit.csv`, including rejected sessions and reasons.
@@ -119,6 +120,7 @@ python preprocessing/suite2p/registration_tuning/discover_sessions.py \
   --mouse-glob 'sub-*' \
   --session-glob 'ses-*' \
   --others-relative 'funcimg/others' \
+  --nchannels 2 \
   --output "${TUNING_ROOT}/selected_sessions.csv" \
   --seed 20261007
 ```
@@ -196,14 +198,17 @@ For each mouse, a session is eligible when:
 
 1. the session contains a `funcimg` directory;
 2. `funcimg/others` exists; and
-3. `funcimg/others` contains at least one readable TIFF stack.
+3. `funcimg/others` directly contains at least one readable TIFF stack.
 
-If several TIFF files are present, the discovery step selects the one with the
+Nested TIFFs are ignored so that prior Suite2p outputs such as `meanImg.tiff`
+cannot be mistaken for raw input. If several TIFF files are present directly
+in `funcimg/others`, the discovery step selects the one with the
 newest filesystem modification time (with filename as a deterministic
-tie-breaker). It reads that file's metadata and records its actual frame count;
-no exact frame count is required by default. The audit CSV records the selected
-file, its modification time, and the number of TIFF alternatives. An exact
-count can still be requested explicitly with `--expected-frames N`.
+tie-breaker). By default it performs a fast TIFF-header read, rather than
+walking thousands of TIFF page records over network storage. The audit CSV
+records the selected file, its modification time, and the number of TIFF
+alternatives. Use `--count-frames` to record the page count when desired, or
+`--expected-frames N` to count and require an exact number.
 
 Sessions with a missing directory, no TIFF, or an unreadable newest TIFF are
 reported and excluded rather than silently accepted.
@@ -242,7 +247,12 @@ used directly. The chosen path is locked into the session manifest, so the same
 stack is used for every parameter candidate within that session even if a newer
 file is added later.
 
-Suite2p registration metrics require at least 1,500 frames. Shorter TIFFs can
+For two-channel recordings, 4,000 TIFF pages represent approximately 2,000
+timepoints per channel. Pass `--nchannels 2` during discovery so that value is
+carried into every Suite2p task. Do not use `--expected-frames 2000` for these
+files; no exact page count is required by default.
+
+Suite2p registration metrics require at least 1,500 timepoints. Shorter TIFFs can
 still be registered, but some built-in metrics may be unavailable and the
 resulting ranking will use the remaining diagnostics. Short stacks do not
 capture every long-timescale drift or rare motion event, so the screen is
@@ -401,8 +411,8 @@ step after the registration parameters and version have been accepted.
 
 ### Files
 
-- `discover_sessions.py`: selects the newest TIFF, records its frame count, and
-  performs reproducible three-session selection.
+- `discover_sessions.py`: validates and selects the newest TIFF, optionally
+  counts its pages, and performs reproducible three-session selection.
 - `candidates.json`: explicit initial parameter candidates.
 - `make_tasks.py`: creates the session-by-candidate task table and enforces the
   input/output safety boundary.

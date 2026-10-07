@@ -91,10 +91,36 @@ def test_discovery_selects_most_recent_tiff_without_frame_requirement(
     others.mkdir(parents=True)
     older = others / "older.tif"
     newer = others / "newer.tif"
+    derived = others / "suite2p" / "plane0" / "meanImg.tif"
+    derived.parent.mkdir(parents=True)
     tifffile.imwrite(older, np.zeros((5, 8, 9), dtype=np.uint16), photometric="minisblack")
     tifffile.imwrite(newer, np.zeros((7, 8, 9), dtype=np.uint16), photometric="minisblack")
+    tifffile.imwrite(derived, np.zeros((8, 9), dtype=np.uint16), photometric="minisblack")
     os.utime(older, (1000, 1000))
     os.utime(newer, (2000, 2000))
+    os.utime(derived, (3000, 3000))
+
+    sessions, audit = discover_sessions.discover_mouse(
+        mouse,
+        "ses-*",
+        Path("funcimg/others"),
+        expected_frames=None,
+        count_frames=True,
+    )
+
+    assert len(sessions) == 1
+    assert sessions[0].tiff_files == (newer.resolve(),)
+    assert sessions[0].frame_count == 7
+    assert audit[0]["tiff_file_count"] == 2
+    assert audit[0]["selected_tiff"] == str(newer.resolve())
+
+
+def test_discovery_does_not_need_to_count_network_tiff_pages(tmp_path: Path) -> None:
+    mouse = tmp_path / "sub-02"
+    others = mouse / "ses-001_date-20260824T102425" / "funcimg" / "others"
+    others.mkdir(parents=True)
+    stack = others / "stack.tif"
+    tifffile.imwrite(stack, np.zeros((7, 8, 9), dtype=np.uint16), photometric="minisblack")
 
     sessions, audit = discover_sessions.discover_mouse(
         mouse,
@@ -104,10 +130,9 @@ def test_discovery_selects_most_recent_tiff_without_frame_requirement(
     )
 
     assert len(sessions) == 1
-    assert sessions[0].tiff_files == (newer.resolve(),)
-    assert sessions[0].frame_count == 7
-    assert audit[0]["tiff_file_count"] == 2
-    assert audit[0]["selected_tiff"] == str(newer.resolve())
+    assert sessions[0].frame_count is None
+    assert audit[0]["eligible"] is True
+    assert audit[0]["frame_count_status"] == "not_counted"
 
 
 def test_session_selection_is_seeded_and_keeps_endpoints() -> None:
