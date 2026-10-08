@@ -97,6 +97,12 @@ def build_suite2p_configuration(
         )
     if isinstance(registration.get("block_size"), list):
         registration["block_size"] = tuple(registration["block_size"])
+    if float(registration.get("smooth_sigma_time", 0)) != 0:
+        raise ValueError("This project requires smooth_sigma_time=0")
+    if float(registration.get("bidiphase", 0)) != 0:
+        raise ValueError("This project requires bidiphase=0")
+    if bool(registration.get("do_bidiphase", False)):
+        raise ValueError("This project requires do_bidiphase=False")
     settings["torch_device"] = device
     settings["fs"] = float(row["fs"])
     settings["tau"] = float(row["tau"])

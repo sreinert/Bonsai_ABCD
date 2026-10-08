@@ -305,26 +305,31 @@ replace full-session validation.
 Begin with a small, interpretable candidate set rather than a large Cartesian
 grid:
 
-| Candidate | Non-rigid | Block size | Temporal smoothing |
-|---|---:|---:|---:|
-| Current-style rigid baseline | No | — | 1 |
-| Rigid without temporal smoothing | No | — | 0 |
-| Non-rigid default blocks | Yes | 128 × 128 | 0 |
-| Non-rigid default blocks, low-SNR smoothing | Yes | 128 × 128 | 1 |
-| Fine non-rigid blocks | Yes | 64 × 64 | 0 |
-| Fine non-rigid blocks, low-SNR smoothing | Yes | 64 × 64 | 1 |
+| Candidate | Non-rigid | Block size |
+|---|---:|---:|
+| Rigid baseline | No | — |
+| Non-rigid default blocks | Yes | 128 × 128 |
+| Fine non-rigid blocks | Yes | 64 × 64 |
 
 Initially hold the following settings constant:
 
 | Parameter | Initial value |
 |---|---:|
 | `smooth_sigma` | `1.15` |
+| `smooth_sigma_time` | `0` |
 | `maxregshift` | `0.1` |
 | `maxregshiftNR` | `5` |
 | `snr_thresh` | `1.2` |
 | `norm_frames` | `True` |
 | `nimg_init` | `1000` |
+| `do_bidiphase` | `False` |
+| `bidiphase` | `0.0` |
 | `two_step_registration` | `False` |
+
+Temporal smoothing is disabled for every candidate. In Suite2p 1.1.0,
+`smooth_sigma_time > 0` sends a CUDA tensor into SciPy's NumPy-only Gaussian
+filter and fails before registration. Bidirectional phase correction and its
+automatic estimation are also disabled explicitly for this project.
 
 These values form a controlled first screen. Expand the search only in response
 to a diagnosed failure:
@@ -334,8 +339,7 @@ to a diagnosed failure:
 - noisy or implausible local deformation: increase `snr_thresh` or use larger
   blocks;
 - a poor or blurred reference image: examine `nimg_init` and then test
-  two-step registration; or
-- consistently low-SNR registration: examine temporal smoothing.
+  two-step registration.
 
 The candidate file should store explicit values even when they equal Suite2p
 defaults, so future changes in upstream defaults cannot alter the experiment.
