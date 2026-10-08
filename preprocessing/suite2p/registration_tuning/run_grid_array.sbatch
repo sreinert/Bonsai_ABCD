@@ -23,9 +23,19 @@ conda_env=$3
 
 module load mamba
 source activate "${conda_env}"
+export PYTHONNOUSERSITE=1
+
+python - <<'PY'
+import importlib.metadata
+import sys
+import suite2p
+
+print("Python executable:", sys.executable)
+print("Suite2p version:", importlib.metadata.version("suite2p"))
+print("Suite2p module:", suite2p.__file__)
+PY
 
 python "${repo_root}/preprocessing/suite2p/registration_tuning/run_candidate.py" \
   --manifest "${manifest}" \
   --task-id "${SLURM_ARRAY_TASK_ID}" \
   --device cuda
-

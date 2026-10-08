@@ -193,14 +193,16 @@ def main() -> None:
     write_json_atomic(status_path, {"state": "running", **provenance})
 
     try:
+        import suite2p
+
         required_version = row["suite2p_version"]
         installed_version = importlib.metadata.version("suite2p")
         if installed_version != required_version:
             raise RuntimeError(
-                f"Task requires suite2p=={required_version}, found {installed_version}"
+                f"Task requires suite2p=={required_version}, found "
+                f"{installed_version} from {suite2p.__file__} using {sys.executable}"
             )
 
-        import suite2p
         import torch
 
         torch_version = importlib.metadata.version("torch")

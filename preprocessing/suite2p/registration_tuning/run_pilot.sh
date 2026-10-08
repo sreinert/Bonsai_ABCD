@@ -1,5 +1,6 @@
 #!/bin/bash
 set -euo pipefail
+export PYTHONNOUSERSITE=1
 
 if [[ $# -ne 1 ]]; then
   echo "Usage: $0 /absolute/path/to/tasks.csv" >&2
