@@ -17,7 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-from common import read_csv, remap_mounted_path, require_columns, write_csv
+from common import read_csv, remap_mounted_path, require_columns, slug, write_csv
 
 
 TASK_COLUMNS = {
@@ -214,22 +214,40 @@ def make_qc_plot(
     return output_path
 
 
-def find_registered_binary(ops_path: Path, ops: dict[str, Any]) -> Path | None:
+def find_registered_binary(
+    ops_path: Path, ops: dict[str, Any], channel: int = 1
+) -> Path | None:
+    if channel not in (1, 2):
+        raise ValueError(f"channel must be 1 or 2, got {channel}")
     db = ops.get("db") if isinstance(ops.get("db"), dict) else {}
     candidates = []
+    key = "reg_file" if channel == 1 else "reg_file_chan2"
     for mapping in (ops, db):
-        for key in ("reg_file", "reg_file_chan2"):
-            if mapping.get(key):
-                candidates.append(Path(str(mapping[key])))
-    candidates.extend([ops_path.parent / "data.bin", ops_path.parent / "data_chan2.bin"])
+        if mapping.get(key):
+            candidates.append(Path(str(mapping[key])))
+    filename = "data.bin" if channel == 1 else "data_chan2.bin"
+    candidates.append(ops_path.parent / filename)
     return next((path for path in candidates if path.is_file()), None)
 
 
 def make_registered_montage(
-    ops_path: Path, ops: dict[str, Any], outputs: dict[str, Any]
+    ops_path: Path,
+    ops: dict[str, Any],
+    outputs: dict[str, Any],
+    channel: int = 1,
 ) -> Path | None:
-    binary = find_registered_binary(ops_path, ops)
-    mean_image = array_from(outputs, ops, key="meanImg")
+    if channel not in (1, 2):
+        raise ValueError(f"channel must be 1 or 2, got {channel}")
+    output_name = (
+        "registered_frames.png" if channel == 1 else "registered_frames_chan2.png"
+    )
+    output_path = Path(ops_path).parents[2] / output_name
+    # The montage is deliberately retained when binary movies are cleaned up.
+    if output_path.is_file():
+        return output_path
+    binary = find_registered_binary(ops_path, ops, channel=channel)
+    mean_key = "meanImg" if channel == 1 else "meanImg_chan2"
+    mean_image = array_from(outputs, ops, key=mean_key)
     if mean_image.ndim != 2 or binary is None:
         return None
     ly, lx = mean_image.shape
@@ -246,8 +264,7 @@ def make_registered_montage(
     for axis, frame_index in zip(axes.ravel(), indices):
         axis.imshow(frames[frame_index], cmap="gray", vmin=low, vmax=high)
         axis.set_title(f"frame {frame_index}")
-    output_path = Path(ops_path).parents[2] / "registered_frames.png"
-    figure.suptitle("Registered frames sampled across the stack")
+    figure.suptitle(f"Channel {channel}: registered frames sampled across the stack")
     figure.savefig(output_path, dpi=150)
     plt.close(figure)
     del frames
@@ -327,6 +344,49 @@ def summarize_candidates(
     return summaries
 
 
+def summarize_mouse_candidates(
+    results: list[dict[str, Any]], tasks: list[dict[str, str]]
+) -> list[dict[str, Any]]:
+    expected_sessions = {row["session_id"] for row in tasks}
+    candidate_names = sorted({row["candidate_name"] for row in tasks})
+    summaries: list[dict[str, Any]] = []
+    for candidate in candidate_names:
+        selected = [row for row in results if row["candidate_name"] == candidate]
+        scores = np.asarray(
+            [row["within_session_score"] for row in selected], dtype=float
+        )
+        scores = scores[np.isfinite(scores)]
+        median = float(np.median(scores)) if scores.size else math.nan
+        worst = float(np.min(scores)) if scores.size else math.nan
+        robust = 0.7 * median + 0.3 * worst if scores.size else math.nan
+        completed_sessions = {row["session_id"] for row in selected}
+        summaries.append(
+            {
+                "candidate_name": candidate,
+                "robust_mouse_score": robust,
+                "median_session_score": median,
+                "worst_session_score": worst,
+                "sessions_completed": len(completed_sessions),
+                "sessions_expected": len(expected_sessions),
+                "complete": completed_sessions == expected_sessions,
+            }
+        )
+    summaries.sort(
+        key=lambda row: (
+            bool(row["complete"]),
+            (
+                float(row["robust_mouse_score"])
+                if np.isfinite(row["robust_mouse_score"])
+                else -math.inf
+            ),
+        ),
+        reverse=True,
+    )
+    for rank, row in enumerate(summaries, start=1):
+        row["rank"] = rank
+    return summaries
+
+
 def format_value(value: Any) -> str:
     if isinstance(value, (float, np.floating)):
         return "n/a" if not np.isfinite(value) else f"{value:.4g}"
@@ -338,7 +398,18 @@ def relative_link(path: str | Path, report_dir: Path) -> str:
 
 
 def write_report(
-    path: Path, summaries: list[dict[str, Any]], results: list[dict[str, Any]]
+    path: Path,
+    summaries: list[dict[str, Any]],
+    results: list[dict[str, Any]],
+    *,
+    title: str = "Suite2p registration QC",
+    ranking_heading: str = "Cross-mouse ranking",
+    description: str = (
+        "Scores are robustly normalised within each session, aggregated within "
+        "mouse, then combined as 70% median-mouse and 30% worst-mouse "
+        "performance. Incomplete candidates rank below complete candidates. "
+        "Always inspect the images and traces before choosing."
+    ),
 ) -> None:
     headers = list(summaries[0]) if summaries else []
     summary_rows = "".join(
@@ -357,27 +428,33 @@ def write_report(
             if montage
             else ""
         )
+        montage_chan2 = row.get("montage_chan2_path")
+        montage_chan2_link = (
+            f' · <a href="{html.escape(relative_link(montage_chan2, path.parent))}">channel 2 frames</a>'
+            if montage_chan2
+            else ""
+        )
         cards.append(
             "<article class='card'>"
             f"<h3>{html.escape(row['mouse_id'])} · {html.escape(row['session_id'])}</h3>"
             f"<p>{html.escape(row['candidate_name'])} · score "
             f"{format_value(row['within_session_score'])} · "
-            f"<a href='{qc_link}'>full QC</a>{montage_link}</p>"
+            f"<a href='{qc_link}'>full QC</a>{montage_link}{montage_chan2_link}</p>"
             f"<a href='{qc_link}'><img src='{qc_link}' alt='registration QC'></a>"
             f"<small>{html.escape(row['run_dir'])}</small>"
             "</article>"
         )
     document = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Suite2p registration QC</title>
+<html lang="en"><head><meta charset="utf-8"><title>{html.escape(title)}</title>
 <style>
 body{{font-family:system-ui,sans-serif;margin:2rem;max-width:1600px}}
 table{{border-collapse:collapse}}th,td{{border:1px solid #ccc;padding:.4rem;text-align:right}}
 th:first-child,td:first-child{{text-align:left}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:1rem}}
 .card{{border:1px solid #ccc;padding:1rem}}.card img{{width:100%;height:auto}}small{{display:block;overflow-wrap:anywhere}}
 </style></head><body>
-<h1>Suite2p registration QC</h1>
-<p>Scores are robustly normalised within each session, aggregated within mouse, then combined as 70% median-mouse and 30% worst-mouse performance. Incomplete candidates rank below complete candidates. Always inspect the images and traces before choosing.</p>
-<h2>Cross-mouse ranking</h2>
+<h1>{html.escape(title)}</h1>
+<p>{html.escape(description)}</p>
+<h2>{html.escape(ranking_heading)}</h2>
 <table><thead><tr>{''.join(f'<th>{html.escape(header)}</th>' for header in headers)}</tr></thead><tbody>{summary_rows}</tbody></table>
 <h2>Run QC</h2><div class="grid">{''.join(cards)}</div>
 </body></html>"""
@@ -410,6 +487,9 @@ def main() -> None:
             metrics = compute_metrics(ops, outputs)
             qc_path = make_qc_plot(task, ops, outputs, metrics)
             montage_path = make_registered_montage(ops_path, ops, outputs)
+            montage_chan2_path = make_registered_montage(
+                ops_path, ops, outputs, channel=2
+            )
             results.append(
                 {
                     "task_id": int(task["task_id"]),
@@ -420,6 +500,9 @@ def main() -> None:
                     "run_dir": str(run_dir),
                     "qc_path": str(qc_path),
                     "montage_path": str(montage_path) if montage_path else "",
+                    "montage_chan2_path": (
+                        str(montage_chan2_path) if montage_chan2_path else ""
+                    ),
                 }
             )
         except Exception as exc:
@@ -432,6 +515,41 @@ def main() -> None:
     write_csv(qc_dir / "run_metrics.csv", results, overwrite=args.overwrite)
     write_csv(qc_dir / "candidate_summary.csv", summaries, overwrite=args.overwrite)
     write_report(qc_dir / "index.html", summaries, results)
+
+    mouse_report_paths: list[Path] = []
+    for mouse_id in sorted({row["mouse_id"] for row in tasks}):
+        mouse_tasks = [row for row in tasks if row["mouse_id"] == mouse_id]
+        mouse_results = [row for row in results if row["mouse_id"] == mouse_id]
+        if not mouse_results:
+            continue
+        mouse_dir = qc_dir / "mice" / slug(mouse_id)
+        mouse_dir.mkdir(parents=True, exist_ok=True)
+        mouse_summaries = summarize_mouse_candidates(mouse_results, mouse_tasks)
+        write_csv(
+            mouse_dir / "run_metrics.csv",
+            mouse_results,
+            overwrite=args.overwrite,
+        )
+        write_csv(
+            mouse_dir / "candidate_summary.csv",
+            mouse_summaries,
+            overwrite=args.overwrite,
+        )
+        mouse_report = mouse_dir / "index.html"
+        write_report(
+            mouse_report,
+            mouse_summaries,
+            mouse_results,
+            title=f"Suite2p registration QC — {mouse_id}",
+            ranking_heading=f"Candidate ranking for {mouse_id}",
+            description=(
+                "Scores are normalised within each session and aggregated across "
+                "this mouse's completed sessions as 70% median-session and 30% "
+                "worst-session performance. Choose parameters for this mouse using "
+                "both the ranking and visual QC."
+            ),
+        )
+        mouse_report_paths.append(mouse_report)
     if errors:
         error_path = qc_dir / "evaluation_errors.txt"
         error_path.write_text("\n".join(errors) + "\n", encoding="utf-8")
@@ -439,6 +557,8 @@ def main() -> None:
         if args.strict:
             raise RuntimeError("Some tasks were incomplete or invalid")
     print(f"Evaluated {len(results)} runs; open {qc_dir / 'index.html'}")
+    for path in mouse_report_paths:
+        print(f"Per-mouse report: {path}")
 
 
 if __name__ == "__main__":

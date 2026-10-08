@@ -16,6 +16,7 @@ sys.path.insert(0, str(WORKFLOW_DIR))
 import discover_sessions  # noqa: E402
 import evaluate  # noqa: E402
 import make_tasks  # noqa: E402
+import run_candidate  # noqa: E402
 from common import remap_mounted_path  # noqa: E402
 
 
@@ -214,3 +215,34 @@ def test_metrics_detect_bad_frames_and_boundary_hits() -> None:
     metrics = evaluate.compute_metrics(ops, outputs)
     assert metrics["boundary_hit_fraction"] == pytest.approx(2 / 3)
     assert metrics["bad_frame_fraction"] == pytest.approx(1 / 3)
+
+
+def test_montages_survive_derived_binary_cleanup(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    plane_dir = run_dir / "suite2p" / "plane0"
+    plane_dir.mkdir(parents=True)
+    frames = np.arange(3 * 4 * 5, dtype=np.int16).reshape(3, 4, 5)
+    (plane_dir / "data.bin").write_bytes(frames.tobytes())
+    (plane_dir / "data_chan2.bin").write_bytes((frames + 10).tobytes())
+    ops = {
+        "meanImg": frames.mean(axis=0),
+        "meanImg_chan2": (frames + 10).mean(axis=0),
+    }
+    ops_path = plane_dir / "ops.npy"
+    np.save(ops_path, ops)
+
+    exports = run_candidate.export_registered_montages([ops_path])
+    removed = run_candidate.remove_derived_binaries(run_dir)
+
+    assert {path.name for path in exports} == {
+        "registered_frames.png",
+        "registered_frames_chan2.png",
+    }
+    assert all(path.is_file() for path in exports)
+    assert {Path(item["path"]).name for item in removed} == {
+        "data.bin",
+        "data_chan2.bin",
+    }
+    assert not list(plane_dir.glob("*.bin"))
+    # The evaluator reuses the retained asset after the binary is gone.
+    assert evaluate.make_registered_montage(ops_path, ops, ops) == exports[0]

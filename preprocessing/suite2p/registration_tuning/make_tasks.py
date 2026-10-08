@@ -110,10 +110,22 @@ def main() -> None:
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument(
+        "--mouse",
+        action="append",
+        help="Include only this mouse ID; repeat to include multiple mice",
+    )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
     sessions = require_columns(read_csv(args.sessions), SESSION_COLUMNS, "session manifest")
+    if args.mouse:
+        requested = set(args.mouse)
+        available = {row["mouse_id"] for row in sessions}
+        missing = sorted(requested - available)
+        if missing:
+            raise ValueError(f"Requested mice are absent from the session manifest: {missing}")
+        sessions = [row for row in sessions if row["mouse_id"] in requested]
     suite2p_version, candidates = load_candidates(args.candidates)
     tasks = build_tasks(sessions, candidates, suite2p_version, args.output_root)
     write_csv(args.manifest, tasks, overwrite=args.overwrite)
