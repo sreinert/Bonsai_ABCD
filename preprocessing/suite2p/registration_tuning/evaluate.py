@@ -158,6 +158,25 @@ def compute_metrics(ops: dict[str, Any], outputs: dict[str, Any]) -> dict[str, f
     }
 
 
+def resource_metrics(status: dict[str, Any]) -> dict[str, float]:
+    usage = status.get("resource_usage")
+    if not isinstance(usage, dict):
+        usage = {}
+
+    def gib(key: str) -> float:
+        value = usage.get(key)
+        try:
+            return float(value) / 1024**3
+        except (TypeError, ValueError):
+            return math.nan
+
+    return {
+        "peak_python_rss_gib": gib("peak_python_rss_bytes"),
+        "peak_cuda_allocated_gib": gib("peak_cuda_allocated_bytes"),
+        "peak_cuda_reserved_gib": gib("peak_cuda_reserved_bytes"),
+    }
+
+
 def show_image(axis: plt.Axes, image: np.ndarray, title: str) -> None:
     image = np.asarray(image)
     if image.ndim != 2 or not image.size:
@@ -434,12 +453,16 @@ def write_report(
             if montage_chan2
             else ""
         )
+        peak_rss = format_value(row.get("peak_python_rss_gib", math.nan))
+        peak_cuda = format_value(row.get("peak_cuda_reserved_gib", math.nan))
         cards.append(
             "<article class='card'>"
             f"<h3>{html.escape(row['mouse_id'])} · {html.escape(row['session_id'])}</h3>"
             f"<p>{html.escape(row['candidate_name'])} · score "
             f"{format_value(row['within_session_score'])} · "
             f"<a href='{qc_link}'>full QC</a>{montage_link}{montage_chan2_link}</p>"
+            f"<p>Peak Python RAM: {peak_rss} GiB · "
+            f"peak CUDA reserved: {peak_cuda} GiB</p>"
             f"<a href='{qc_link}'><img src='{qc_link}' alt='registration QC'></a>"
             f"<small>{html.escape(row['run_dir'])}</small>"
             "</article>"
@@ -497,6 +520,7 @@ def main() -> None:
                     "session_id": task["session_id"],
                     "candidate_name": task["candidate_name"],
                     **metrics,
+                    **resource_metrics(status),
                     "run_dir": str(run_dir),
                     "qc_path": str(qc_path),
                     "montage_path": str(montage_path) if montage_path else "",

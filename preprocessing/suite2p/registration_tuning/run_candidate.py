@@ -8,6 +8,7 @@ import importlib.metadata
 import json
 import os
 import platform
+import resource
 import socket
 import sys
 import time
@@ -184,6 +185,29 @@ def remove_derived_binaries(run_dir: Path) -> list[dict[str, Any]]:
     return removed
 
 
+def collect_resource_usage(torch_module: Any | None = None) -> dict[str, Any]:
+    max_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    # Linux reports KiB; macOS reports bytes. Production jobs run on Linux.
+    peak_rss_bytes = int(max_rss if sys.platform == "darwin" else max_rss * 1024)
+    usage: dict[str, Any] = {
+        "peak_python_rss_bytes": peak_rss_bytes,
+        "slurm_mem_per_node": os.environ.get("SLURM_MEM_PER_NODE"),
+        "slurm_cpus_per_task": os.environ.get("SLURM_CPUS_PER_TASK"),
+        "slurm_job_gpus": os.environ.get("SLURM_JOB_GPUS"),
+    }
+    try:
+        if torch_module is not None and torch_module.cuda.is_available():
+            usage["peak_cuda_allocated_bytes"] = int(
+                torch_module.cuda.max_memory_allocated()
+            )
+            usage["peak_cuda_reserved_bytes"] = int(
+                torch_module.cuda.max_memory_reserved()
+            )
+    except Exception as exc:
+        usage["cuda_measurement_error"] = repr(exc)
+    return usage
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
@@ -259,6 +283,7 @@ def main() -> None:
     }
     write_json_atomic(status_path, {"state": "running", **provenance})
 
+    torch_module: Any | None = None
     try:
         import suite2p
 
@@ -272,12 +297,14 @@ def main() -> None:
 
         import torch
 
+        torch_module = torch
+
         torch_version = importlib.metadata.version("torch")
-        torch_module = getattr(torch, "__file__", None)
+        torch_module_path = getattr(torch, "__file__", None)
         if not hasattr(torch, "cuda"):
             raise RuntimeError(
                 "The imported torch module does not expose torch.cuda. "
-                f"Imported from {torch_module!r}; torch distribution is "
+                f"Imported from {torch_module_path!r}; torch distribution is "
                 f"{torch_version}."
             )
         cuda_available = torch.cuda.is_available()
@@ -287,13 +314,15 @@ def main() -> None:
         db, settings = build_suite2p_configuration(
             row, input_path, run_dir, tiff_files, args.device
         )
+        if args.device == "cuda":
+            torch.cuda.reset_peak_memory_stats()
         write_json_atomic(
             run_dir / "provenance.json",
             {
                 **provenance,
                 "suite2p_version": installed_version,
                 "torch_version": torch_version,
-                "torch_module": str(torch_module),
+                "torch_module": str(torch_module_path),
                 "cuda_available": cuda_available,
                 "torch_cuda_version": getattr(
                     getattr(torch, "version", None), "cuda", None
@@ -319,6 +348,7 @@ def main() -> None:
         if source_after != source_before:
             raise RuntimeError("Raw TIFF metadata changed while Suite2p was running")
         finished = time.time()
+        resource_usage = collect_resource_usage(torch_module)
         write_json_atomic(
             status_path,
             {
@@ -327,6 +357,7 @@ def main() -> None:
                 "suite2p_version": installed_version,
                 "finished_unix": finished,
                 "elapsed_seconds": finished - started,
+                "resource_usage": resource_usage,
                 "ops_files": [str(path) for path in ops_files],
                 "mean_image_exports": [str(path) for path in mean_image_exports],
                 "registered_montage_exports": [
@@ -340,6 +371,15 @@ def main() -> None:
         print(f"Completed task {args.task_id}: {run_dir}")
         print("Mean images: " + ", ".join(str(path) for path in mean_image_exports))
         print("Registered-frame montages: " + ", ".join(map(str, montage_exports)))
+        print(
+            "Peak Python RSS: "
+            f"{resource_usage['peak_python_rss_bytes'] / 1024**3:.2f} GiB"
+        )
+        if "peak_cuda_reserved_bytes" in resource_usage:
+            print(
+                "Peak CUDA memory reserved: "
+                f"{resource_usage['peak_cuda_reserved_bytes'] / 1024**3:.2f} GiB"
+            )
         if removed_binaries:
             freed = sum(item["bytes"] for item in removed_binaries)
             print(
@@ -355,6 +395,7 @@ def main() -> None:
                 **provenance,
                 "finished_unix": finished,
                 "elapsed_seconds": finished - started,
+                "resource_usage": collect_resource_usage(torch_module),
                 "error": repr(exc),
                 "traceback": traceback.format_exc(),
             },

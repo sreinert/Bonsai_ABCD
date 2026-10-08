@@ -283,6 +283,20 @@ before its large binary movies are removed, so the evaluator can reuse the
 saved PNGs without needing those movies.
 Re-run with `--overwrite` when intentionally regenerating an existing report.
 
+Each new run records peak Python-process RAM, peak CUDA memory allocated, and
+peak CUDA memory reserved in `status.json`. These measurements are copied into
+`qc/run_metrics.csv` and displayed on each HTML QC card. They measure the
+registration Python process and PyTorch's CUDA allocator; Slurm's `MaxRSS`
+remains the authoritative scheduler-level memory measurement and is available
+after a job exits:
+
+```bash
+sacct -j JOB_ID --units=G \
+  --format=JobID,State,Elapsed,AllocCPUS,ReqMem,MaxRSS,AllocTRES%50
+```
+
+Runs completed before resource recording was added show `n/a` in the report.
+
 For a mouse-specific manifest, the report is written below that manifest's
 directory, for example `${TUNING_ROOT}/mice/sub-02/qc/index.html`. Candidate
 ranking in this report is aggregated only across the selected sessions for

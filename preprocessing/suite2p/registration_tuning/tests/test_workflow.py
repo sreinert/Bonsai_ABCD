@@ -217,6 +217,23 @@ def test_metrics_detect_bad_frames_and_boundary_hits() -> None:
     assert metrics["bad_frame_fraction"] == pytest.approx(1 / 3)
 
 
+def test_resource_metrics_convert_bytes_to_gib() -> None:
+    metrics = evaluate.resource_metrics(
+        {
+            "resource_usage": {
+                "peak_python_rss_bytes": 3 * 1024**3,
+                "peak_cuda_allocated_bytes": 2 * 1024**3,
+                "peak_cuda_reserved_bytes": 4 * 1024**3,
+            }
+        }
+    )
+    assert metrics == {
+        "peak_python_rss_gib": 3.0,
+        "peak_cuda_allocated_gib": 2.0,
+        "peak_cuda_reserved_gib": 4.0,
+    }
+
+
 def test_montages_survive_derived_binary_cleanup(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     plane_dir = run_dir / "suite2p" / "plane0"
