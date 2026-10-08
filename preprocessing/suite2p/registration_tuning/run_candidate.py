@@ -104,6 +104,10 @@ def build_suite2p_configuration(
         raise ValueError("This project requires bidiphase=0")
     if bool(registration.get("do_bidiphase", False)):
         raise ValueError("This project requires do_bidiphase=False")
+    if not bool(registration.get("nonrigid", False)):
+        raise ValueError("This project requires nonrigid=True")
+    if not bool(registration.get("two_step_registration", False)):
+        raise ValueError("This project requires two_step_registration=True")
     settings["torch_device"] = device
     settings["fs"] = float(row["fs"])
     settings["tau"] = float(row["tau"])

@@ -1,9 +1,13 @@
 {
   "suite2p_version": "1.1.0",
   "fixed_registration": {
+    "nonrigid": true,
+    "block_size": [128, 128],
+    "two_step_registration": true,
     "nimg_init": 1000,
-    "maxregshift": 0.1,
-    "maxregshiftNR": 5,
+    "maxregshift": 0.2,
+    "maxregshiftNR": 10,
+    "align_by_chan2": false,
     "smooth_sigma": 1.15,
     "smooth_sigma_time": 0,
     "snr_thresh": 1.2,
@@ -11,30 +15,53 @@
     "do_bidiphase": false,
     "bidiphase": 0.0,
     "batch_size": 100,
-    "two_step_registration": false,
     "reg_tif": false,
     "reg_tif_chan2": false
   },
   "candidates": [
     {
-      "name": "rigid",
-      "registration": {
-        "nonrigid": false
-      }
+      "name": "baseline",
+      "registration": {}
     },
     {
-      "name": "nonrigid_128",
-      "registration": {
-        "nonrigid": true,
-        "block_size": [128, 128]
-      }
+      "name": "maxregshift_0p1",
+      "registration": {"maxregshift": 0.1}
     },
     {
-      "name": "nonrigid_64",
-      "registration": {
-        "nonrigid": true,
-        "block_size": [64, 64]
-      }
+      "name": "maxregshift_0p3",
+      "registration": {"maxregshift": 0.3}
+    },
+    {
+      "name": "maxregshift_0p4",
+      "registration": {"maxregshift": 0.4}
+    },
+    {
+      "name": "maxregshiftNR_5",
+      "registration": {"maxregshiftNR": 5}
+    },
+    {
+      "name": "maxregshiftNR_15",
+      "registration": {"maxregshiftNR": 15}
+    },
+    {
+      "name": "align_by_chan2",
+      "registration": {"align_by_chan2": true}
+    },
+    {
+      "name": "smooth_sigma_1p5",
+      "registration": {"smooth_sigma": 1.5}
+    },
+    {
+      "name": "smooth_sigma_2p0",
+      "registration": {"smooth_sigma": 2.0}
+    },
+    {
+      "name": "snr_thresh_1p0",
+      "registration": {"snr_thresh": 1.0}
+    },
+    {
+      "name": "snr_thresh_1p5",
+      "registration": {"snr_thresh": 1.5}
     }
   ]
 }

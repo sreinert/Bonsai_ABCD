@@ -311,37 +311,42 @@ replace full-session validation.
 
 ## Initial registration candidates
 
-Begin with a small, interpretable candidate set rather than a large Cartesian
-grid:
+All candidates use non-rigid registration, 128 × 128 blocks, and two-step
+registration. The first pass uses an 11-candidate one-factor-at-a-time screen
+rather than the 216 jobs per session required by the full Cartesian product:
 
-| Candidate | Non-rigid | Block size |
-|---|---:|---:|
-| Rigid baseline | No | — |
-| Non-rigid default blocks | Yes | 128 × 128 |
-| Fine non-rigid blocks | Yes | 64 × 64 |
+| Candidate group | Values |
+|---|---|
+| Baseline | `maxregshift=0.2`, `maxregshiftNR=10`, channel 1 alignment, `smooth_sigma=1.15`, `snr_thresh=1.2` |
+| `maxregshift` | `0.1`, `0.3`, `0.4` |
+| `maxregshiftNR` | `5`, `15` |
+| Alignment channel | channel 2 |
+| `smooth_sigma` | `1.5`, `2.0` |
+| `snr_thresh` | `1.0`, `1.5` |
 
 Initially hold the following settings constant:
 
 | Parameter | Initial value |
 |---|---:|
-| `smooth_sigma` | `1.15` |
 | `smooth_sigma_time` | `0` |
-| `maxregshift` | `0.1` |
-| `maxregshiftNR` | `5` |
-| `snr_thresh` | `1.2` |
 | `norm_frames` | `True` |
 | `nimg_init` | `1000` |
 | `do_bidiphase` | `False` |
 | `bidiphase` | `0.0` |
-| `two_step_registration` | `False` |
+| `nonrigid` | `True` |
+| `block_size` | `128 × 128` |
+| `two_step_registration` | `True` |
 
 Temporal smoothing is disabled for every candidate. In Suite2p 1.1.0,
 `smooth_sigma_time > 0` sends a CUDA tensor into SciPy's NumPy-only Gaussian
 filter and fails before registration. Bidirectional phase correction and its
-automatic estimation are also disabled explicitly for this project.
+automatic estimation are also disabled explicitly for this project. The runner
+rejects candidate manifests that disable non-rigid or two-step registration.
 
-These values form a controlled first screen. Expand the search only in response
-to a diagnosed failure:
+These values form a controlled first screen. Run the first 11 tasks initially
+to compare all candidates on one session, then use the resulting QC to select a
+smaller combined shortlist for the full cross-mouse screen. Expand or combine
+settings only in response to a diagnosed failure:
 
 - rigid offsets reaching the search boundary: examine `maxregshift`;
 - non-rigid blocks reaching their limit: examine `maxregshiftNR`;
