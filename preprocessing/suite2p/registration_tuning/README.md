@@ -41,17 +41,31 @@ Once the environment is working, its complete package lock should be saved.
 
 ### HPC setup
 
-Create a dedicated environment on the cluster. Install the cluster-supported
-CUDA build of PyTorch first, then install the pinned workflow requirements:
+Create a dedicated environment on the cluster. Its NVIDIA 580 driver supports
+the official PyTorch 2.13 CUDA 12.6 wheel, which is pinned together with the
+workflow requirements:
 
 ```bash
 module load mamba
 mamba create -n suite2p-reg-1.1.0 python=3.11 pip -y
 source activate suite2p-reg-1.1.0
 
-# Install the cluster-recommended CUDA/PyTorch build here, then:
-python -m pip install -r preprocessing/suite2p/registration_tuning/requirements.txt
-python -c "from importlib.metadata import version; import torch; print(version('suite2p'), torch.cuda.is_available())"
+python -m pip install --upgrade pip
+python -m pip install --no-cache-dir \
+  -r preprocessing/suite2p/registration_tuning/requirements-hpc-cu126.txt
+
+python - <<'PY'
+from importlib.metadata import version
+import torch
+
+print("Suite2p:", version("suite2p"))
+print("Torch:", version("torch"))
+print("Torch module:", torch.__file__)
+print("CUDA runtime:", torch.version.cuda)
+print("CUDA available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("GPU:", torch.cuda.get_device_name(0))
+PY
 ```
 
 Do not proceed with GPU jobs unless this prints Suite2p `1.1.0` and CUDA
@@ -448,3 +462,5 @@ step after the registration parameters and version have been accepted.
 - `evaluate.py`: metrics, registered-frame montages, per-run QC, and the HTML
   comparison/ranking report.
 - `requirements.txt`: pinned Suite2p and QC dependencies.
+- `requirements-hpc-cu126.txt`: the official CUDA 12.6 PyTorch wheel plus the
+  pinned workflow dependencies for the cluster.

@@ -1,0 +1,6 @@
+# Official PyTorch CUDA 12.6 wheels. The cluster's NVIDIA 580 driver supports
+# this older CUDA runtime while the RTX A4500 remains fully supported.
+--extra-index-url https://download.pytorch.org/whl/cu126
+torch==2.13.0+cu126
+
+-r requirements.txt
