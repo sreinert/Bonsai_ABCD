@@ -258,6 +258,16 @@ PYTHON_EXECUTABLE=/absolute/path/to/python MAX_CONCURRENT=3 \
   "${TUNING_ROOT}/tasks.csv"
 ```
 
+Nodes with a confirmed hardware or Slurm launch problem can be excluded
+explicitly. The submit wrapper passes this value to `sbatch --exclude` and
+prints it before submission:
+
+```bash
+EXCLUDE_NODES=gpu-350-02 MAX_CONCURRENT=6 \
+  bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
+  "${TUNING_ROOT}/tasks.csv"
+```
+
 `TASK_RANGE` accepts any Slurm array expression, such as `0-5%2`, for a larger
 pilot subset.
 

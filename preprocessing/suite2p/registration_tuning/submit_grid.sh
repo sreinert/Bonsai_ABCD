@@ -27,6 +27,7 @@ last_task=$((task_count - 1))
 max_concurrent=${MAX_CONCURRENT:-6}
 array_spec=${TASK_RANGE:-0-${last_task}%${max_concurrent}}
 output_root=${manifest_dir}
+exclude_nodes=${EXCLUDE_NODES:-}
 if [[ -n "${PYTHON_EXECUTABLE:-}" ]]; then
   python_executable=${PYTHON_EXECUTABLE}
 else
@@ -57,11 +58,19 @@ echo "Manifest: ${manifest}"
 echo "Working directory: ${output_root}"
 echo "Logs: ${output_root}/logs/s2p_reg_<job>_<task>.{out,err}"
 echo "Python executable: ${python_executable}"
+echo "Excluded nodes: ${exclude_nodes:-<none>}"
 
-sbatch --array="${array_spec}" \
-  --chdir="${output_root}" \
-  --output="${output_root}/logs/s2p_reg_%A_%a.out" \
-  --error="${output_root}/logs/s2p_reg_%A_%a.err" \
+sbatch_options=(
+  --array="${array_spec}"
+  --chdir="${output_root}"
+  --output="${output_root}/logs/s2p_reg_%A_%a.out"
+  --error="${output_root}/logs/s2p_reg_%A_%a.err"
+)
+if [[ -n "${exclude_nodes}" ]]; then
+  sbatch_options+=(--exclude="${exclude_nodes}")
+fi
+
+sbatch "${sbatch_options[@]}" \
   "${script_dir}/run_grid_array.sbatch" \
   "${manifest}" \
   "${repo_root}" \
