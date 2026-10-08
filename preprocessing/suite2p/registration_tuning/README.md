@@ -179,7 +179,16 @@ only when needed with `SUITE2P_ENV`, `PILOT_TASK_ID`, or `PILOT_DEVICE`.
 
 The final output should include `Completed task 0:` and `Pilot finished
 successfully.` The task directory recorded in `tasks.csv` should contain
-`status.json` with `state: complete` and `suite2p/plane0/ops.npy`.
+`status.json` with `state: complete` and `suite2p/plane0/ops.npy`. The runner
+also exports `meanImg_chan1.tiff`, `meanImg_chan2.tiff`, individual PNG
+previews, and a side-by-side `meanImgs.png` under `suite2p/plane0`.
+
+To add these files to a run that completed before mean-image export was added:
+
+```bash
+python preprocessing/suite2p/registration_tuning/export_mean_images.py \
+  --run-dir /absolute/path/to/the/candidate/run
+```
 
 Alternatively, submit task zero as a Slurm pilot:
 
@@ -465,6 +474,8 @@ step after the registration parameters and version have been accepted.
 - `run_grid_array.sbatch` and `submit_grid.sh`: Slurm array execution.
 - `evaluate.py`: metrics, registered-frame montages, per-run QC, and the HTML
   comparison/ranking report.
+- `export_mean_images.py`: viewable TIFF and PNG exports of both channel mean
+  images from each `ops.npy`.
 - `requirements.txt`: pinned Suite2p and QC dependencies.
 - `requirements-hpc-cu126.txt`: the official CUDA 12.6 PyTorch wheel plus the
   pinned workflow dependencies for the cluster.

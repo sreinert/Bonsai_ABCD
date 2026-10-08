@@ -23,6 +23,7 @@ from common import (
     require_columns,
     write_json_atomic,
 )
+from export_mean_images import export_mean_images
 
 
 TASK_COLUMNS = {
@@ -158,7 +159,16 @@ def main() -> None:
                     "Input TIFF metadata changed after this task completed; create a "
                     "new manifest/output root rather than reusing the old result"
                 )
+            mean_image_exports = export_mean_images(run_dir, require_chan2=True)
+            previous["mean_image_exports"] = [
+                str(path) for path in mean_image_exports
+            ]
+            write_json_atomic(status_path, previous)
             print(f"Task {args.task_id} is already complete: {run_dir}")
+            print(
+                "Mean images: "
+                + ", ".join(str(path) for path in mean_image_exports)
+            )
             return
 
     started = time.time()
@@ -227,6 +237,7 @@ def main() -> None:
         ops_files = find_ops_files(run_dir)
         if not ops_files:
             raise RuntimeError("Suite2p returned without creating suite2p/plane*/ops.npy")
+        mean_image_exports = export_mean_images(run_dir, require_chan2=True)
         source_after = file_snapshot(tiff_files)
         if source_after != source_before:
             raise RuntimeError("Raw TIFF metadata changed while Suite2p was running")
@@ -240,11 +251,13 @@ def main() -> None:
                 "finished_unix": finished,
                 "elapsed_seconds": finished - started,
                 "ops_files": [str(path) for path in ops_files],
+                "mean_image_exports": [str(path) for path in mean_image_exports],
                 "suite2p_return": repr(result),
                 "source_snapshot_after": source_after,
             },
         )
         print(f"Completed task {args.task_id}: {run_dir}")
+        print("Mean images: " + ", ".join(str(path) for path in mean_image_exports))
     except Exception as exc:
         finished = time.time()
         write_json_atomic(
