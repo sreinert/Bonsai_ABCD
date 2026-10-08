@@ -210,11 +210,14 @@ bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
   "${TUNING_ROOT}/tasks.csv"
 ```
 
-The default environment is `suite2p-reg-1.1.0` and at most six tasks run at
-once. These can be overridden without editing the script:
+Run submission from the activated `suite2p-reg-1.1.0` environment. The submit
+script validates Suite2p 1.1.0 and passes that exact absolute Python executable
+to every Slurm task, avoiding environment-name resolution differences on
+compute nodes. At most six tasks run at once. These settings can be overridden
+without editing the script:
 
 ```bash
-SUITE2P_ENV=my-suite2p-env MAX_CONCURRENT=3 \
+PYTHON_EXECUTABLE=/absolute/path/to/python MAX_CONCURRENT=3 \
   bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
   "${TUNING_ROOT}/tasks.csv"
 ```
