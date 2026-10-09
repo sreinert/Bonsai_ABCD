@@ -66,7 +66,9 @@ def discover_mouse(mouse_path: Path) -> list[FullSession]:
             sorted(
                 path.resolve()
                 for path in input_path.iterdir()
-                if path.is_file() and path.suffix.lower() in TIFF_SUFFIXES
+                if path.is_file()
+                and not path.name.startswith("._")
+                and path.suffix.lower() in TIFF_SUFFIXES
             )
         )
         if not tiff_files:

@@ -24,6 +24,9 @@ def write_session(root: Path, mouse: str, session: str) -> Path:
         np.zeros((4, 8, 9), dtype=np.uint16),
         photometric="minisblack",
     )
+    # macOS creates AppleDouble metadata files on some network volumes. They
+    # retain the TIFF suffix but begin with 0x00051607 and are not image data.
+    (funcimg / "._full.tif").write_bytes(b"\x00\x05\x16\x07metadata")
     others = funcimg / "others"
     others.mkdir()
     tifffile.imwrite(
