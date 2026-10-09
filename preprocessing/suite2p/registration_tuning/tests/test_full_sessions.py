@@ -74,4 +74,16 @@ def test_builds_first_last_full_session_tasks(tmp_path: Path) -> None:
     registration = json.loads(rows[0]["registration_json"])
     assert registration["align_by_chan2"] is True
     assert registration["smooth_sigma"] == 3.0
+    assert registration["smooth_sigma_time"] == 0
+    assert registration["norm_frames"] is True
+    assert registration["nimg_init"] == 1000
+    assert registration["do_bidiphase"] is False
+    assert registration["bidiphase"] == 0.0
+    assert registration["nonrigid"] is True
+    assert registration["block_size"] == [128, 128]
+    assert registration["two_step_registration"] is True
+    assert "maxregshift" not in registration
+    assert "maxregshiftNR" not in registration
+    assert "snr_thresh" not in registration
+    assert "batch_size" not in registration
     assert rows[0]["nchannels"] == 2

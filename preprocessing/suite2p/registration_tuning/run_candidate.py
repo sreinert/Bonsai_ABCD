@@ -16,6 +16,8 @@ import traceback
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from common import (
     is_relative_to,
     paths_overlap,
@@ -43,11 +45,10 @@ TASK_COLUMNS = {
     "run_dir",
 }
 
-# These are derived, reproducible Suite2p movies. Restrict cleanup to this
-# explicit allowlist so source TIFFs and analysis metadata can never be removed.
-DERIVED_BINARY_NAMES = {
-    "data.bin",
-    "data_chan2.bin",
+# These are Suite2p-generated pre-registration movies. Restrict cleanup to
+# this explicit allowlist inside the processed run directory. Registered
+# data.bin and data_chan2.bin are permanent downstream inputs.
+RAW_BINARY_NAMES = {
     "data_raw.bin",
     "data_raw_chan2.bin",
     "data_chan2_raw.bin",
@@ -145,6 +146,7 @@ def build_suite2p_configuration(
         "input_format": "tif",
         "nplanes": int(row["nplanes"]),
         "nchannels": int(row["nchannels"]),
+        "functional_chan": 1,
         "keep_movie_raw": bool(registration.get("two_step_registration", False)),
     }
     return db, settings
@@ -174,11 +176,42 @@ def export_registered_montages(ops_files: list[Path]) -> list[Path]:
     return exports
 
 
-def remove_derived_binaries(run_dir: Path) -> list[dict[str, Any]]:
+def validate_registered_binaries(
+    run_dir: Path, *, require_chan2: bool
+) -> list[dict[str, Any]]:
+    retained: list[dict[str, Any]] = []
+    plane_dirs = sorted(run_dir.glob("suite2p/plane*"))
+    if not plane_dirs:
+        raise FileNotFoundError(f"No Suite2p plane directories found under {run_dir}")
+    for plane_dir in plane_dirs:
+        db_path = plane_dir / "db.npy"
+        if not db_path.is_file():
+            raise FileNotFoundError(f"Missing Suite2p database: {db_path}")
+        db = np.load(db_path, allow_pickle=True).item()
+        expected_bytes = int(db["nframes"]) * int(db["Ly"]) * int(db["Lx"]) * 2
+        names = ["data.bin", *(["data_chan2.bin"] if require_chan2 else [])]
+        for name in names:
+            path = plane_dir / name
+            if not path.is_file():
+                raise FileNotFoundError(f"Required registered binary is missing: {path}")
+            size = path.stat().st_size
+            if size != expected_bytes:
+                raise RuntimeError(
+                    f"Registered binary has {size} bytes, expected {expected_bytes}: {path}"
+                )
+            retained.append({"path": str(path), "bytes": size})
+    return retained
+
+
+def remove_generated_raw_binaries(run_dir: Path) -> list[dict[str, Any]]:
     removed: list[dict[str, Any]] = []
+    resolved_run_dir = run_dir.resolve()
     for path in sorted(run_dir.glob("suite2p/plane*/*.bin")):
-        if path.name not in DERIVED_BINARY_NAMES:
+        if path.name not in RAW_BINARY_NAMES:
             continue
+        resolved = path.resolve()
+        if not is_relative_to(resolved, resolved_run_dir):
+            raise ValueError(f"Refusing to remove binary outside processed run: {resolved}")
         size = path.stat().st_size
         path.unlink()
         removed.append({"path": str(path), "bytes": size})
@@ -213,15 +246,7 @@ def main() -> None:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--task-id", type=int, required=True)
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
-    parser.add_argument(
-        "--keep-derived-binaries",
-        action="store_true",
-        help="retain Suite2p .bin movies after exporting visual QC assets",
-    )
     args = parser.parse_args()
-    keep_derived_binaries = args.keep_derived_binaries or os.environ.get(
-        "KEEP_DERIVED_BINARIES"
-    ) == "1"
 
     row = read_task(args.manifest, args.task_id)
     input_path, run_dir, tiff_files = validate_paths(row)
@@ -238,18 +263,20 @@ def main() -> None:
                 )
             mean_image_exports = export_mean_images(run_dir, require_chan2=True)
             montage_exports = export_registered_montages(find_ops_files(run_dir))
-            removed_binaries = (
-                [] if keep_derived_binaries else remove_derived_binaries(run_dir)
+            retained_binaries = validate_registered_binaries(
+                run_dir, require_chan2=int(row["nchannels"]) == 2
             )
+            removed_raw_binaries = remove_generated_raw_binaries(run_dir)
             previous["mean_image_exports"] = [
                 str(path) for path in mean_image_exports
             ]
             previous["registered_montage_exports"] = [
                 str(path) for path in montage_exports
             ]
-            previous["removed_derived_binaries"] = [
-                *previous.get("removed_derived_binaries", []),
-                *removed_binaries,
+            previous["retained_registered_binaries"] = retained_binaries
+            previous["removed_generated_raw_binaries"] = [
+                *previous.get("removed_generated_raw_binaries", []),
+                *removed_raw_binaries,
             ]
             write_json_atomic(status_path, previous)
             print(f"Task {args.task_id} is already complete: {run_dir}")
@@ -258,10 +285,10 @@ def main() -> None:
                 + ", ".join(str(path) for path in mean_image_exports)
             )
             print("Registered-frame montages: " + ", ".join(map(str, montage_exports)))
-            if removed_binaries:
-                freed = sum(item["bytes"] for item in removed_binaries)
+            if removed_raw_binaries:
+                freed = sum(item["bytes"] for item in removed_raw_binaries)
                 print(
-                    f"Removed {len(removed_binaries)} derived binary movie(s); "
+                    f"Removed {len(removed_raw_binaries)} generated raw binary movie(s); "
                     f"freed {freed / 1024**3:.2f} GiB"
                 )
             return
@@ -341,12 +368,13 @@ def main() -> None:
             raise RuntimeError("Suite2p returned without creating suite2p/plane*/ops.npy")
         mean_image_exports = export_mean_images(run_dir, require_chan2=True)
         montage_exports = export_registered_montages(ops_files)
-        removed_binaries = (
-            [] if keep_derived_binaries else remove_derived_binaries(run_dir)
+        retained_binaries = validate_registered_binaries(
+            run_dir, require_chan2=int(row["nchannels"]) == 2
         )
         source_after = file_snapshot(tiff_files)
         if source_after != source_before:
             raise RuntimeError("Raw TIFF metadata changed while Suite2p was running")
+        removed_raw_binaries = remove_generated_raw_binaries(run_dir)
         finished = time.time()
         resource_usage = collect_resource_usage(torch_module)
         write_json_atomic(
@@ -363,7 +391,8 @@ def main() -> None:
                 "registered_montage_exports": [
                     str(path) for path in montage_exports
                 ],
-                "removed_derived_binaries": removed_binaries,
+                "retained_registered_binaries": retained_binaries,
+                "removed_generated_raw_binaries": removed_raw_binaries,
                 "suite2p_return": repr(result),
                 "source_snapshot_after": source_after,
             },
@@ -380,10 +409,10 @@ def main() -> None:
                 "Peak CUDA memory reserved: "
                 f"{resource_usage['peak_cuda_reserved_bytes'] / 1024**3:.2f} GiB"
             )
-        if removed_binaries:
-            freed = sum(item["bytes"] for item in removed_binaries)
+        if removed_raw_binaries:
+            freed = sum(item["bytes"] for item in removed_raw_binaries)
             print(
-                f"Removed {len(removed_binaries)} derived binary movie(s); "
+                f"Removed {len(removed_raw_binaries)} generated raw binary movie(s); "
                 f"freed {freed / 1024**3:.2f} GiB"
             )
     except Exception as exc:

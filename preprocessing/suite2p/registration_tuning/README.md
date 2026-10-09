@@ -210,14 +210,13 @@ previews, and a side-by-side `meanImgs.png` under `suite2p/plane0`. It also
 exports registered-frame montages for both channels as `registered_frames.png`
 and `registered_frames_chan2.png` in the candidate run directory.
 
-After those visual assets have been created, the runner deletes Suite2p's
-derived binary movie copies (`data*.bin`). These files account for almost all
-of a run's disk usage and are not needed by the evaluator or final HTML report.
-The original TIFF input is never modified or deleted. The removed paths and
-sizes are recorded in `status.json`; the binary movies can be recreated by
-rerunning Suite2p. To retain them temporarily for debugging, set
-`KEEP_DERIVED_BINARIES=1` or pass `--keep-derived-binaries` directly to
-`run_candidate.py`.
+After those visual assets have been created, the runner retains the registered
+movies `data.bin` and `data_chan2.bin`. It may remove only Suite2p-generated
+pre-registration binaries such as `data_raw.bin` and `data_raw_chan2.bin`, and
+only from within the processed run directory. The original TIFF inputs are
+read-only inputs: they are never modified, moved, renamed, or deleted.
+`status.json` records both the retained registered binaries and any generated
+raw binaries that were removed.
 
 To add these files to a run that completed before mean-image export was added:
 
@@ -597,3 +596,46 @@ step after the registration parameters and version have been accepted.
 - `requirements.txt`: pinned Suite2p and QC dependencies.
 - `requirements-hpc-cu126.txt`: the official CUDA 12.6 PyTorch wheel plus the
   pinned workflow dependencies for the cluster.
+
+## Default Cellpose full-session pilot
+
+The default Cellpose pilot re-runs task 0 from the newest full-session manifest
+in a new, isolated output directory. Registration uses the dataset metadata
+(`fs=45`, `tau=0.4`, one plane, two channels, functional channel 1), with only
+these registration overrides:
+
+| Parameter | Value |
+| --- | --- |
+| `align_by_chan2` | `True` |
+| `smooth_sigma` | `3.0` |
+| `smooth_sigma_time` | `0` |
+| `norm_frames` | `True` |
+| `nimg_init` | `1000` |
+| `do_bidiphase` | `False` |
+| `bidiphase` | `0.0` |
+| `nonrigid` | `True` |
+| `block_size` | `(128, 128)` |
+| `two_step_registration` | `True` |
+
+All other settings come from Suite2p 1.1.0 defaults. On the HPC system, submit
+the registration and dependent detection-only job with:
+
+```bash
+module load mamba
+source activate suite2p-reg-1.1.0
+bash preprocessing/suite2p/registration_tuning/submit_default_cellpose_pilot.sh
+```
+
+Set `SOURCE_MANIFEST` and/or `SOURCE_TASK_ID` to override the automatically
+selected newest full-session manifest and task 0. The launcher writes a
+timestamped one-row pilot manifest, registers into
+`suite2p_pilots/default-cpsam`, and submits detection only after registration
+succeeds.
+
+Detection uses Suite2p's `algorithm="cellpose"` defaults: the effective `cpsam`
+model, `log(max_proj / meanImg)` input, diameter `[12, 12]`, flow threshold
+`0.4`, and cell-probability threshold `0.0`. Results are kept separate from
+canonical Suite2p outputs under `cellpose_exploration/default_cpsam`, including
+`stat.npy`, masks, the model input, overlays, distributions, provenance, and an
+HTML/PNG QC report. The pilot rejects any run that creates `F.npy`, `Fneu.npy`,
+`iscell.npy`, or `spks.npy`.

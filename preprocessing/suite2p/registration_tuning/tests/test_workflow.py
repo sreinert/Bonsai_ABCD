@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -234,13 +236,21 @@ def test_resource_metrics_convert_bytes_to_gib() -> None:
     }
 
 
-def test_montages_survive_derived_binary_cleanup(tmp_path: Path) -> None:
+def test_cleanup_retains_registered_and_removes_only_generated_raw_binaries(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "run"
     plane_dir = run_dir / "suite2p" / "plane0"
     plane_dir.mkdir(parents=True)
     frames = np.arange(3 * 4 * 5, dtype=np.int16).reshape(3, 4, 5)
     (plane_dir / "data.bin").write_bytes(frames.tobytes())
     (plane_dir / "data_chan2.bin").write_bytes((frames + 10).tobytes())
+    (plane_dir / "data_raw.bin").write_bytes(frames.tobytes())
+    (plane_dir / "data_raw_chan2.bin").write_bytes((frames + 10).tobytes())
+    np.save(
+        plane_dir / "db.npy",
+        {"nframes": 3, "Ly": 4, "Lx": 5, "nchannels": 2},
+    )
     ops = {
         "meanImg": frames.mean(axis=0),
         "meanImg_chan2": (frames + 10).mean(axis=0),
@@ -249,17 +259,98 @@ def test_montages_survive_derived_binary_cleanup(tmp_path: Path) -> None:
     np.save(ops_path, ops)
 
     exports = run_candidate.export_registered_montages([ops_path])
-    removed = run_candidate.remove_derived_binaries(run_dir)
+    retained = run_candidate.validate_registered_binaries(run_dir, require_chan2=True)
+    removed = run_candidate.remove_generated_raw_binaries(run_dir)
 
     assert {path.name for path in exports} == {
         "registered_frames.png",
         "registered_frames_chan2.png",
     }
     assert all(path.is_file() for path in exports)
-    assert {Path(item["path"]).name for item in removed} == {
+    assert {Path(item["path"]).name for item in retained} == {
         "data.bin",
         "data_chan2.bin",
     }
-    assert not list(plane_dir.glob("*.bin"))
-    # The evaluator reuses the retained asset after the binary is gone.
+    assert {Path(item["path"]).name for item in removed} == {
+        "data_raw.bin",
+        "data_raw_chan2.bin",
+    }
+    assert (plane_dir / "data.bin").is_file()
+    assert (plane_dir / "data_chan2.bin").is_file()
+    assert not (plane_dir / "data_raw.bin").exists()
+    assert not (plane_dir / "data_raw_chan2.bin").exists()
     assert evaluate.make_registered_montage(ops_path, ops, ops) == exports[0]
+
+
+def test_registration_configuration_inherits_suite2p_defaults(monkeypatch, tmp_path: Path) -> None:
+    registration_defaults = {
+        "align_by_chan2": False,
+        "smooth_sigma": 1.15,
+        "smooth_sigma_time": 0,
+        "norm_frames": True,
+        "nimg_init": 400,
+        "do_bidiphase": False,
+        "bidiphase": 0.0,
+        "nonrigid": True,
+        "block_size": (128, 128),
+        "two_step_registration": False,
+        "maxregshift": 0.1,
+        "maxregshiftNR": 5,
+        "snr_thresh": 1.2,
+        "batch_size": 100,
+    }
+    defaults = {
+        "torch_device": "cpu",
+        "fs": 30.0,
+        "tau": 1.0,
+        "run": {
+            "do_registration": 1,
+            "do_regmetrics": True,
+            "do_detection": True,
+            "do_deconvolution": True,
+        },
+        "io": {"delete_bin": False, "move_bin": False, "save_ops_orig": True},
+        "registration": registration_defaults,
+    }
+    fake_suite2p = SimpleNamespace(default_settings=lambda: deepcopy(defaults))
+    monkeypatch.setitem(sys.modules, "suite2p", fake_suite2p)
+    input_path = tmp_path / "raw" / "funcimg"
+    input_path.mkdir(parents=True)
+    tiff = input_path / "movie.tif"
+    tiff.touch()
+    row = {
+        "fs": "45",
+        "tau": "0.4",
+        "nplanes": "1",
+        "nchannels": "2",
+        "frame_count": "",
+        "registration_json": json.dumps(
+            {
+                "align_by_chan2": True,
+                "smooth_sigma": 3.0,
+                "smooth_sigma_time": 0,
+                "norm_frames": True,
+                "nimg_init": 1000,
+                "do_bidiphase": False,
+                "bidiphase": 0.0,
+                "nonrigid": True,
+                "block_size": [128, 128],
+                "two_step_registration": True,
+            }
+        ),
+    }
+
+    db, settings = run_candidate.build_suite2p_configuration(
+        row, input_path, tmp_path / "processed", [tiff], "cuda"
+    )
+
+    assert settings["registration"]["align_by_chan2"] is True
+    assert settings["registration"]["smooth_sigma"] == 3.0
+    assert settings["registration"]["maxregshift"] == 0.1
+    assert settings["registration"]["maxregshiftNR"] == 5
+    assert settings["registration"]["snr_thresh"] == 1.2
+    assert settings["registration"]["batch_size"] == 100
+    assert settings["run"]["do_detection"] is False
+    assert settings["run"]["do_deconvolution"] is False
+    assert db["functional_chan"] == 1
+    assert db["keep_movie_raw"] is True

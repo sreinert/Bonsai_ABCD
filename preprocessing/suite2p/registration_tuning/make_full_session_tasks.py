@@ -20,18 +20,12 @@ REGISTRATION = {
     "block_size": [128, 128],
     "two_step_registration": True,
     "nimg_init": 1000,
-    "maxregshift": 0.2,
-    "maxregshiftNR": 10,
     "align_by_chan2": True,
     "smooth_sigma": 3.0,
     "smooth_sigma_time": 0,
-    "snr_thresh": 1.2,
     "norm_frames": True,
     "do_bidiphase": False,
     "bidiphase": 0.0,
-    "batch_size": 100,
-    "reg_tif": False,
-    "reg_tif_chan2": False,
 }
 
 
