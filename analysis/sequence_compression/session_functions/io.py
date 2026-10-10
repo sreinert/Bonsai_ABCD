@@ -25,30 +25,99 @@ class AnalogData(Reader):
         return pd.DataFrame(data, columns=self.columns)
 
     
-from datetime import datetime
+from datetime import datetime as DateTime
 
-def find_base_path(mouse, date, root):
+
+def _session_folder_timestamp(folder):
+    """Return the timestamp encoded in a session folder name, if valid."""
+    try:
+        timestamp = folder.name.rsplit("date-", 1)[1]
+        return DateTime.strptime(timestamp, "%Y%m%dT%H%M%S")
+    except (IndexError, ValueError):
+        return None
+
+
+def _date_matches_timestamp(date, timestamp):
+    """Match the YYMMDD or YYYYMMDD date formats used by analysis scripts."""
+    requested_date = str(date)
+    if len(requested_date) == 6:
+        return timestamp.strftime("%y%m%d") == requested_date
+    if len(requested_date) == 8:
+        return timestamp.strftime("%Y%m%d") == requested_date
+    return requested_date in timestamp.strftime("%Y%m%d")
+
+
+def _concatenated_session_contains_date(folder, date):
+    """Check whether a combined session contains a source from ``date``."""
+    manifest_path = folder / "concatenation_manifest.json"
+    if manifest_path.is_file():
+        try:
+            with manifest_path.open("r", encoding="utf-8") as file:
+                manifest = json.load(file)
+            for source in manifest.get("sources", []):
+                acquired_at = source.get("acquired_at")
+                if acquired_at:
+                    timestamp = DateTime.fromisoformat(acquired_at)
+                    if _date_matches_timestamp(date, timestamp):
+                        return True
+                source_name = Path(source.get("path", "")).name
+                if str(date) in source_name:
+                    return True
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            # Fall back to inspecting the archived source directory names.
+            pass
+
+    originals = folder / "original_sessions"
+    if originals.is_dir():
+        return any(
+            source.is_dir() and str(date) in source.name
+            for source in originals.iterdir()
+        )
+    return False
+
+def find_base_path(mouse, date, root, prefer_concatenated=False):
+    """Find a session recorded on ``date``.
+
+    When ``prefer_concatenated`` is true, a combined session whose manifest
+    contains the requested acquisition date is preferred over the individual
+    source folders from that date. Without that option, the historical
+    date-in-folder behavior is retained, with combined sessions as a fallback.
+    """
     mouse_path = Path(root) / f"sub-{mouse}"
 
-    candidates = []
+    if not mouse_path.is_dir():
+        raise FileNotFoundError(f"Mouse directory not found: {mouse_path}")
+
+    dated_candidates = []
+    concatenated_candidates = []
 
     for folder in mouse_path.iterdir():
-        if folder.is_dir() and date in folder.name:
-            try:
-                # Extract timestamp after "date-"
-                ts_str = folder.name.split("date-")[-1]
-                ts = datetime.strptime(ts_str, "%Y%m%dT%H%M%S")
-                candidates.append((ts, folder))
-            except ValueError:
-                # Skip folders with unexpected formatting
-                continue
+        if not folder.is_dir() or not (folder / "behav").is_dir():
+            continue
+        ts = _session_folder_timestamp(folder)
+        if ts is None:
+            continue
+        if str(date) in folder.name:
+            dated_candidates.append((ts, folder))
+        if _concatenated_session_contains_date(folder, date):
+            concatenated_candidates.append((ts, folder))
+
+    if prefer_concatenated and concatenated_candidates:
+        candidates = concatenated_candidates
+        selection = "concatenated session"
+    elif dated_candidates:
+        candidates = dated_candidates
+        selection = "date-matched session"
+    else:
+        candidates = concatenated_candidates
+        selection = "concatenated session fallback"
 
     if not candidates:
         raise FileNotFoundError(f"No session folder found for {mouse} on {date}")
 
     # Pick the latest timestamp
     latest_folder = max(candidates, key=lambda x: x[0])[1]
-    print(f"Using latest folder: {latest_folder}")
+    print(f"Using {selection}: {latest_folder}")
 
     return latest_folder
 
