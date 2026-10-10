@@ -27,6 +27,7 @@ SESSION_NAME = re.compile(
 )
 CHUNK_STAMP = "1904-01-01T00-00-00"
 JOIN_GAP_SECONDS = 1e-6
+DEFAULT_LANDMARK_GAP = 9.0
 
 # These are exactly the raw streams loaded by session_functions/io.py.
 STREAM_PREFIXES = {
@@ -65,6 +66,56 @@ class SessionOffsets:
     seconds: float
     position: float
     buffer: float
+
+
+@dataclass
+class SessionSlice:
+    """Half-open timestamp interval retained from one source session."""
+
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class LogicalLandmark:
+    seconds: float
+    position: float
+    size: float
+
+    @property
+    def entry(self) -> float:
+        return self.position - self.size / 2
+
+    @property
+    def exit(self) -> float:
+        return self.position + self.size / 2
+
+
+@dataclass(frozen=True)
+class BoundarySplice:
+    source_index: int
+    next_source_index: int
+    landmarks_per_lap: int
+    complete_laps_retained: int
+    discarded_logical_landmarks: int
+    last_complete_landmark_exit: float
+    target_next_landmark_entry: float
+    next_source_first_landmark_entry: float
+    preserved_gap: float
+    gap_source: str
+    source_end_seconds: float | None
+    next_source_start_seconds: float
+
+
+@dataclass(frozen=True)
+class RetainedStats:
+    time_min: float
+    time_max: float
+    position_first: float
+    position_last: float
+    buffer_first: float
+    buffer_last: float
+    row_counts: dict[str, int]
 
 
 def _finite_float(value: str, *, description: str) -> float:
@@ -269,27 +320,329 @@ def _validate_compatibility(sessions: list[SourceSession]) -> None:
                 )
 
 
-def _calculate_offsets(sessions: list[SourceSession]) -> list[SessionOffsets]:
+def _is_retained(seconds: float, session_slice: SessionSlice) -> bool:
+    if session_slice.start_seconds is not None and seconds < session_slice.start_seconds:
+        return False
+    if session_slice.end_seconds is not None and seconds >= session_slice.end_seconds:
+        return False
+    return True
+
+
+def _trial_settings(session: SourceSession) -> dict[str, Any]:
+    settings = _read_settings(_settings_file(session.path, "session-settings"))
+    if not isinstance(settings, dict) or "trial" not in settings:
+        raise ConcatenationError(f"No trial settings found in {session.path}")
+    trial = settings["trial"]
+    if isinstance(trial, list):
+        if not trial or not isinstance(trial[0], dict) or "trial" not in trial[0]:
+            raise ConcatenationError(f"Unsupported trial settings in {session.path}")
+        trial = trial[0]["trial"]
+    if not isinstance(trial, dict):
+        raise ConcatenationError(f"Unsupported trial settings in {session.path}")
+    return trial
+
+
+def _logical_landmarks(
+    session: SourceSession, session_slice: SessionSlice | None = None
+) -> list[LogicalLandmark]:
+    if "current-landmark" not in session.schemas:
+        raise ConcatenationError(
+            f"Cannot splice laps without current-landmark data in {session.path}"
+        )
+    schema = session.schemas["current-landmark"]
+    required = {
+        "Seconds",
+        "Value.Value.Landmark.Size",
+        "Value.Value.Position",
+        "Value.Value.Visited",
+    }
+    missing = required - set(schema)
+    if missing:
+        raise ConcatenationError(
+            f"Missing current-landmark columns in {session.path}: {sorted(missing)}"
+        )
+    seconds_index = schema.index("Seconds")
+    size_index = schema.index("Value.Value.Landmark.Size")
+    position_index = schema.index("Value.Value.Position")
+    visited_index = schema.index("Value.Value.Visited")
+    seen_positions: set[float] = set()
+    landmarks: list[LogicalLandmark] = []
+
+    for path in _csv_files(session.path, "current-landmark"):
+        with path.open("r", newline="", encoding="utf-8-sig") as handle:
+            reader = csv.reader(handle)
+            try:
+                header = tuple(next(reader))
+            except StopIteration as exc:
+                raise ConcatenationError(f"CSV has no header: {path}") from exc
+            if header != schema:
+                raise ConcatenationError(f"Unexpected schema in {path}")
+            for row in reader:
+                if len(row) != len(schema):
+                    raise ConcatenationError(
+                        f"Expected {len(schema)} fields in {path}, found {len(row)}"
+                    )
+                if row[visited_index].strip().lower() != "false":
+                    continue
+                seconds = _finite_float(
+                    row[seconds_index], description=f"Seconds in {path}"
+                )
+                if session_slice is not None and not _is_retained(seconds, session_slice):
+                    continue
+                position = _finite_float(
+                    row[position_index], description=f"landmark position in {path}"
+                )
+                if position in seen_positions:
+                    continue
+                seen_positions.add(position)
+                landmarks.append(
+                    LogicalLandmark(
+                        seconds=seconds,
+                        position=position,
+                        size=_finite_float(
+                            row[size_index], description=f"landmark size in {path}"
+                        ),
+                    )
+                )
+    if not landmarks:
+        raise ConcatenationError(f"No logical landmarks found in {session.path}")
+    return landmarks
+
+
+def _position_samples(session: SourceSession) -> list[tuple[float, float]]:
+    schema = session.schemas["current-position"]
+    seconds_index = schema.index("Seconds")
+    position_index = schema.index("Value.Length")
+    samples: list[tuple[float, float]] = []
+    for path in _csv_files(session.path, "current-position"):
+        with path.open("r", newline="", encoding="utf-8-sig") as handle:
+            reader = csv.reader(handle)
+            try:
+                header = tuple(next(reader))
+            except StopIteration as exc:
+                raise ConcatenationError(f"CSV has no header: {path}") from exc
+            if header != schema:
+                raise ConcatenationError(f"Unexpected schema in {path}")
+            for row in reader:
+                samples.append(
+                    (
+                        _finite_float(row[seconds_index], description=f"Seconds in {path}"),
+                        _finite_float(
+                            row[position_index], description=f"Value.Length in {path}"
+                        ),
+                    )
+                )
+    return samples
+
+
+def _first_position_time(
+    samples: list[tuple[float, float]],
+    position: float,
+    *,
+    not_before: float | None = None,
+) -> float | None:
+    for seconds, value in samples:
+        if not_before is not None and seconds < not_before:
+            continue
+        if value >= position:
+            return seconds
+    return None
+
+
+def _configured_gap_or_fallback(
+    trial: dict[str, Any], fallback_gap: float
+) -> tuple[float, str]:
+    offsets = trial.get("offsets", [])
+    try:
+        unique_offsets = sorted({float(value) for value in offsets})
+    except (TypeError, ValueError) as exc:
+        raise ConcatenationError(f"Invalid trial offsets: {offsets!r}") from exc
+    if len(unique_offsets) == 1 and math.isfinite(unique_offsets[0]):
+        return unique_offsets[0], "settings"
+    return fallback_gap, "fallback"
+
+
+def _plan_session_slices(
+    sessions: list[SourceSession], fallback_gap: float
+) -> tuple[list[SessionSlice], list[BoundarySplice]]:
+    if not math.isfinite(fallback_gap) or fallback_gap < 0:
+        raise ConcatenationError("Fallback landmark gap must be finite and non-negative")
+
+    slices = [SessionSlice() for _ in sessions]
+    boundaries: list[BoundarySplice] = []
+
+    for index in range(len(sessions) - 1):
+        session = sessions[index]
+        next_session = sessions[index + 1]
+        trial = _trial_settings(session)
+        configured_landmarks = trial.get("landmarks")
+        if not isinstance(configured_landmarks, list) or not configured_landmarks:
+            raise ConcatenationError(f"No configured landmarks found in {session.path}")
+        landmarks_per_lap = len(configured_landmarks)
+
+        landmarks = _logical_landmarks(session, slices[index])
+        source_position_samples = _position_samples(session)
+        retained_positions = [
+            position
+            for seconds, position in source_position_samples
+            if _is_retained(seconds, slices[index])
+        ]
+        if not retained_positions:
+            raise ConcatenationError(f"No retained position data in {session.path}")
+        final_reached_position = retained_positions[-1]
+        complete_laps = len(landmarks) // landmarks_per_lap
+        while (
+            complete_laps > 0
+            and final_reached_position
+            < landmarks[complete_laps * landmarks_per_lap - 1].exit
+        ):
+            complete_laps -= 1
+        if complete_laps == 0:
+            raise ConcatenationError(
+                f"No complete lap found before the restart in {session.path}"
+            )
+        complete_landmark_count = complete_laps * landmarks_per_lap
+        last_complete = landmarks[complete_landmark_count - 1]
+        incomplete = landmarks[complete_landmark_count:]
+
+        if incomplete:
+            target_entry = incomplete[0].entry
+            gap = target_entry - last_complete.exit
+            gap_source = "recorded"
+        else:
+            gap, gap_source = _configured_gap_or_fallback(trial, fallback_gap)
+            target_entry = last_complete.exit + gap
+
+        if gap < 0:
+            raise ConcatenationError(
+                f"Negative inter-landmark gap ({gap}) at the end of {session.path}"
+            )
+
+        source_end = _first_position_time(
+            source_position_samples,
+            target_entry,
+            not_before=last_complete.seconds,
+        )
+        if source_end is not None:
+            slices[index].end_seconds = source_end
+
+        next_landmarks = _logical_landmarks(next_session)
+        next_entry = next_landmarks[0].entry
+        next_start = _first_position_time(
+            _position_samples(next_session),
+            next_entry,
+        )
+        if next_start is None:
+            raise ConcatenationError(
+                f"The first landmark entry was not reached in {next_session.path}"
+            )
+        slices[index + 1].start_seconds = next_start
+
+        boundaries.append(
+            BoundarySplice(
+                source_index=index,
+                next_source_index=index + 1,
+                landmarks_per_lap=landmarks_per_lap,
+                complete_laps_retained=complete_laps,
+                discarded_logical_landmarks=len(incomplete),
+                last_complete_landmark_exit=last_complete.exit,
+                target_next_landmark_entry=target_entry,
+                next_source_first_landmark_entry=next_entry,
+                preserved_gap=gap,
+                gap_source=gap_source,
+                source_end_seconds=source_end,
+                next_source_start_seconds=next_start,
+            )
+        )
+
+    return slices, boundaries
+
+
+def _retained_stats(
+    session: SourceSession, session_slice: SessionSlice
+) -> RetainedStats:
+    time_min: float | None = None
+    time_max: float | None = None
+    position_first: float | None = None
+    position_last: float | None = None
+    buffer_first: float | None = None
+    buffer_last: float | None = None
+    row_counts: dict[str, int] = {}
+
+    for stream in session.schemas:
+        count = 0
+        for path, fieldnames, row in _iter_dict_rows(_csv_files(session.path, stream)):
+            seconds = _finite_float(row["Seconds"], description=f"Seconds in {path}")
+            if not _is_retained(seconds, session_slice):
+                continue
+            time_min = seconds if time_min is None else min(time_min, seconds)
+            time_max = seconds if time_max is None else max(time_max, seconds)
+            if stream == "current-position":
+                position = _finite_float(
+                    row["Value.Length"], description=f"Value.Length in {path}"
+                )
+                if position_first is None:
+                    position_first = position
+                position_last = position
+            elif stream == "analog-data":
+                buffer_column = fieldnames[1]
+                buffer = _finite_float(
+                    row[buffer_column], description=f"{buffer_column} in {path}"
+                )
+                if buffer_first is None:
+                    buffer_first = buffer
+                buffer_last = buffer
+            count += 1
+        row_counts[stream] = count
+
+    values = (
+        time_min,
+        time_max,
+        position_first,
+        position_last,
+        buffer_first,
+        buffer_last,
+    )
+    if any(value is None for value in values):
+        raise ConcatenationError(f"Cropping removed required data from {session.path}")
+    return RetainedStats(
+        time_min=time_min,
+        time_max=time_max,
+        position_first=position_first,
+        position_last=position_last,
+        buffer_first=buffer_first,
+        buffer_last=buffer_last,
+        row_counts=row_counts,
+    )
+
+
+def _calculate_offsets(
+    sessions: list[SourceSession],
+    retained: list[RetainedStats],
+    boundaries: list[BoundarySplice],
+) -> list[SessionOffsets]:
     offsets: list[SessionOffsets] = []
     previous_time_end: float | None = None
-    previous_position_end: float | None = None
     previous_buffer_end: float | None = None
 
-    for session in sessions:
+    for index, (session, stats) in enumerate(zip(sessions, retained)):
         seconds_offset = 0.0
         if previous_time_end is not None:
-            seconds_offset = previous_time_end + JOIN_GAP_SECONDS - session.time_min
+            seconds_offset = previous_time_end + JOIN_GAP_SECONDS - stats.time_min
 
         position_offset = 0.0
-        if (
-            previous_position_end is not None
-            and session.position_first < previous_position_end
-        ):
-            position_offset = previous_position_end - session.position_first
+        if index > 0:
+            boundary = boundaries[index - 1]
+            previous_offset = offsets[index - 1].position
+            position_offset = (
+                boundary.target_next_landmark_entry
+                + previous_offset
+                - boundary.next_source_first_landmark_entry
+            )
 
         buffer_offset = 0.0
-        if previous_buffer_end is not None and session.buffer_first <= previous_buffer_end:
-            buffer_offset = previous_buffer_end + 1 - session.buffer_first
+        if previous_buffer_end is not None and stats.buffer_first <= previous_buffer_end:
+            buffer_offset = previous_buffer_end + 1 - stats.buffer_first
 
         offsets.append(
             SessionOffsets(
@@ -298,9 +651,8 @@ def _calculate_offsets(sessions: list[SourceSession]) -> list[SessionOffsets]:
                 buffer=buffer_offset,
             )
         )
-        previous_time_end = session.time_max + seconds_offset
-        previous_position_end = session.position_last + position_offset
-        previous_buffer_end = session.buffer_last + buffer_offset
+        previous_time_end = stats.time_max + seconds_offset
+        previous_buffer_end = stats.buffer_last + buffer_offset
 
     return offsets
 
@@ -313,6 +665,7 @@ def _merge_csv_stream(
     destination: Path,
     stream: str,
     sessions: list[SourceSession],
+    slices: list[SessionSlice],
     offsets: list[SessionOffsets],
 ) -> int:
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -321,7 +674,7 @@ def _merge_csv_stream(
     with destination.open("w", newline="", encoding="utf-8") as output:
         writer = csv.writer(output)
         writer.writerow(schema)
-        for session, session_offsets in zip(sessions, offsets):
+        for session, session_slice, session_offsets in zip(sessions, slices, offsets):
             for csv_path in _csv_files(session.path, stream):
                 with csv_path.open("r", newline="", encoding="utf-8-sig") as handle:
                     reader = csv.reader(handle)
@@ -359,12 +712,14 @@ def _merge_csv_stream(
                                 f"Expected {len(schema)} fields in {csv_path}, "
                                 f"found {len(row)}"
                             )
+                        raw_seconds = _finite_float(
+                            row[seconds_index],
+                            description=f"Seconds in {csv_path}",
+                        )
+                        if not _is_retained(raw_seconds, session_slice):
+                            continue
                         row[seconds_index] = _format_number(
-                            _finite_float(
-                                row[seconds_index],
-                                description=f"Seconds in {csv_path}",
-                            )
-                            + session_offsets.seconds
+                            raw_seconds + session_offsets.seconds
                         )
                         if value_index is not None and value_column is not None:
                             row[value_index] = _format_number(
@@ -379,15 +734,101 @@ def _merge_csv_stream(
     return rows_written
 
 
-def _merge_analog_binary(destination: Path, sessions: list[SourceSession]) -> int:
+def _analog_row_range(
+    session: SourceSession, session_slice: SessionSlice
+) -> tuple[int, int, int]:
+    total = 0
+    retained_indices: list[int] = []
+    for path, _, row in _iter_dict_rows(_csv_files(session.path, "analog-data")):
+        seconds = _finite_float(row["Seconds"], description=f"Seconds in {path}")
+        if _is_retained(seconds, session_slice):
+            retained_indices.append(total)
+        total += 1
+    if not retained_indices:
+        raise ConcatenationError(f"Cropping removed all analog buffers from {session.path}")
+    start = retained_indices[0]
+    end = retained_indices[-1] + 1
+    if retained_indices != list(range(start, end)):
+        raise ConcatenationError(f"Retained analog buffers are not contiguous in {session.path}")
+    return start, end, total
+
+
+def _copy_binary_range(
+    sources: list[Path], output, start_byte: int, end_byte: int
+) -> None:
+    cursor = 0
+    for source in sources:
+        size = source.stat().st_size
+        source_start = max(start_byte - cursor, 0)
+        source_end = min(end_byte - cursor, size)
+        if source_start < source_end:
+            with source.open("rb") as input_file:
+                input_file.seek(source_start)
+                remaining = source_end - source_start
+                while remaining:
+                    chunk = input_file.read(min(1024 * 1024, remaining))
+                    if not chunk:
+                        raise ConcatenationError(
+                            f"Unexpected end of analog binary file: {source}"
+                        )
+                    output.write(chunk)
+                    remaining -= len(chunk)
+        cursor += size
+
+
+def _merge_analog_binary(
+    destination: Path,
+    sessions: list[SourceSession],
+    slices: list[SessionSlice],
+) -> int:
     destination.parent.mkdir(parents=True, exist_ok=True)
     bytes_written = 0
     with destination.open("wb") as output:
-        for session in sessions:
-            for source in _binary_files(session.path):
-                with source.open("rb") as input_file:
-                    shutil.copyfileobj(input_file, output, length=1024 * 1024)
-                bytes_written += source.stat().st_size
+        for session, session_slice in zip(sessions, slices):
+            sources = _binary_files(session.path)
+            total_bytes = sum(source.stat().st_size for source in sources)
+            rig_settings = _read_settings(
+                _settings_file(session.path, "rig-settings")
+            )
+            try:
+                channel_count = len(rig_settings["analogInputChannels"])
+            except (KeyError, TypeError) as exc:
+                raise ConcatenationError(
+                    f"No analogInputChannels found in {session.path}"
+                ) from exc
+            bytes_per_frame = 8 * channel_count  # float64 value per channel
+            if total_bytes % bytes_per_frame:
+                raise ConcatenationError(
+                    f"Analog binary size is not divisible by its channel width in {session.path}"
+                )
+            start_row, end_row, total_rows = _analog_row_range(session, session_slice)
+            total_samples = total_bytes // bytes_per_frame
+            if total_samples % total_rows == 0:
+                binary_buffer_count = total_rows
+            elif total_rows > 1 and total_samples % (total_rows - 1) == 0:
+                binary_buffer_count = total_rows - 1
+            else:
+                raise ConcatenationError(
+                    "Analog samples do not match either the CSV buffer count or "
+                    f"one fewer trailing buffer in {session.path}"
+                )
+            samples_per_buffer = total_samples // binary_buffer_count
+            missing_trailing_buffers = total_rows - binary_buffer_count
+            if missing_trailing_buffers not in (0, 1):
+                raise ConcatenationError(
+                    "Analog CSV/binary buffer counts differ by more than one "
+                    f"trailing buffer in {session.path}: CSV={total_rows}, "
+                    f"binary={binary_buffer_count}"
+                )
+            bytes_per_buffer = samples_per_buffer * bytes_per_frame
+            start_byte = start_row * bytes_per_buffer
+            end_byte = min(end_row, binary_buffer_count) * bytes_per_buffer
+            if start_byte >= end_byte:
+                raise ConcatenationError(
+                    f"Cropping removed all analog binary samples from {session.path}"
+                )
+            _copy_binary_range(sources, output, start_byte, end_byte)
+            bytes_written += end_byte - start_byte
     return bytes_written
 
 
@@ -437,6 +878,7 @@ def concatenate_sessions(
     creation_time: datetime | None = None,
     overwrite: bool = False,
     validate_loaders: bool = True,
+    fallback_landmark_gap: float = DEFAULT_LANDMARK_GAP,
 ) -> Path:
     """Concatenate two or more restarted sessions and return the output path."""
     sessions = sorted(
@@ -444,7 +886,12 @@ def concatenate_sessions(
         key=lambda session: session.acquired_at,
     )
     _validate_compatibility(sessions)
-    offsets = _calculate_offsets(sessions)
+    slices, boundaries = _plan_session_slices(sessions, fallback_landmark_gap)
+    retained = [
+        _retained_stats(session, session_slice)
+        for session, session_slice in zip(sessions, slices)
+    ]
+    offsets = _calculate_offsets(sessions, retained, boundaries)
 
     latest = sessions[-1]
     created = creation_time or datetime.now().astimezone()
@@ -477,12 +924,13 @@ def concatenate_sessions(
                 continue
             destination = destination_behav / stream / f"{prefix}_{CHUNK_STAMP}.csv"
             merged_counts[stream] = _merge_csv_stream(
-                destination, stream, sessions, offsets
+                destination, stream, sessions, slices, offsets
             )
 
         analog_bytes = _merge_analog_binary(
             destination_behav / "analog-data" / f"analog-data_{CHUNK_STAMP}.bin",
             sessions,
+            slices,
         )
         _copy_settings(destination_behav, latest)
 
@@ -500,13 +948,45 @@ def concatenate_sessions(
                     "path": str(session.path),
                     "acquired_at": session.acquired_at.isoformat(),
                     "rows": session.row_counts,
+                    "retained_rows": stats.row_counts,
+                    "discarded_rows": {
+                        stream: session.row_counts[stream] - stats.row_counts.get(stream, 0)
+                        for stream in session.row_counts
+                    },
+                    "slice": {
+                        "start_seconds_inclusive": session_slice.start_seconds,
+                        "end_seconds_exclusive": session_slice.end_seconds,
+                    },
                     "offsets": {
                         "seconds": offset.seconds,
                         "position": offset.position,
                         "buffer": offset.buffer,
                     },
                 }
-                for session, offset in zip(sessions, offsets)
+                for session, session_slice, stats, offset in zip(
+                    sessions, slices, retained, offsets
+                )
+            ],
+            "splices": [
+                {
+                    "source": sessions[splice.source_index].path.name,
+                    "next_source": sessions[splice.next_source_index].path.name,
+                    "landmarks_per_lap": splice.landmarks_per_lap,
+                    "complete_laps_retained": splice.complete_laps_retained,
+                    "discarded_logical_landmarks": splice.discarded_logical_landmarks,
+                    "last_complete_landmark_exit": splice.last_complete_landmark_exit,
+                    "target_next_landmark_entry": splice.target_next_landmark_entry,
+                    "next_source_first_landmark_entry_before_shift": (
+                        splice.next_source_first_landmark_entry
+                    ),
+                    "preserved_gap": splice.preserved_gap,
+                    "gap_source": splice.gap_source,
+                    "source_end_seconds_exclusive": splice.source_end_seconds,
+                    "next_source_start_seconds_inclusive": (
+                        splice.next_source_start_seconds
+                    ),
+                }
+                for splice in boundaries
             ],
             "merged_rows": merged_counts,
             "analog_bytes": analog_bytes,
@@ -551,6 +1031,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip the final read-back through the existing session loaders",
     )
+    parser.add_argument(
+        "--fallback-landmark-gap",
+        type=float,
+        default=DEFAULT_LANDMARK_GAP,
+        help=(
+            "edge-to-edge gap used when the next landmark was not logged and "
+            "settings do not specify one unambiguous offset (default: 9)"
+        ),
+    )
     return parser
 
 
@@ -562,6 +1051,7 @@ def main() -> int:
             output_root=args.output_root,
             overwrite=args.overwrite,
             validate_loaders=not args.skip_loader_validation,
+            fallback_landmark_gap=args.fallback_landmark_gap,
         )
     except ConcatenationError as exc:
         raise SystemExit(f"error: {exc}") from exc
