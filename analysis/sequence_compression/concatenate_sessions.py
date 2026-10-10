@@ -403,11 +403,13 @@ def _validate_with_existing_loaders(
     output_session: Path, *, expected_analog_bytes: int
 ) -> dict[str, int]:
     # Local import keeps --help usable in minimal environments.
-    from analysis.sequence_compression.session_functions.io import (
-        load_analog_data,
-        load_data,
-        load_settings,
-    )
+    if __package__:
+        # Used when imported as analysis.sequence_compression.concatenate_sessions.
+        from .session_functions.io import load_analog_data, load_data, load_settings
+    else:
+        # Used when invoked directly:
+        # python analysis/sequence_compression/concatenate_sessions.py ...
+        from session_functions.io import load_analog_data, load_data, load_settings
 
     session_settings, rig_settings = load_settings(output_session)
     dataframe = load_data(output_session)
