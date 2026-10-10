@@ -1119,6 +1119,6 @@ def plot_lick_rate_dist_across_sessions(session_data):
         colorbar.set_label("Sessions", fontsize=14)
         colorbar.outline.set_visible(False)
 
-        plt.tight_layout()
+        # plt.tight_layout()
 
     return fig

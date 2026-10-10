@@ -75,23 +75,29 @@ def load_settings(base_path):
 
 def load_data(base_path):
     '''Load raw behaviour data logged by Bonsai'''
-    events_reader = Csv("behav/experiment-events/experiment-events_*", ["Seconds", "Value"])
-    events_data = aeon.load(Path(base_path), events_reader)
+    # Read from the session's top-level behav directory only.  Using base_path
+    # here makes aeon.load recurse into archival subdirectories (for example
+    # original_sessions in a concatenated session) and can silently select an
+    # identically named chunk from the wrong recording.
+    behav_path = Path(base_path) / "behav"
 
-    lick_reader = Csv("behav/licks/licks_*", ["Seconds", "Value"])
-    lick_data = aeon.load(Path(base_path), lick_reader)
+    events_reader = Csv("experiment-events/experiment-events_*", ["Seconds", "Value"])
+    events_data = aeon.load(behav_path, events_reader)
 
-    rewards_reader = Csv("behav/reward/reward_*", ["Seconds", "Value"])
-    rewards_data = aeon.load(Path(base_path), rewards_reader)
+    lick_reader = Csv("licks/licks_*", ["Seconds", "Value"])
+    lick_data = aeon.load(behav_path, lick_reader)
 
-    position_reader = Csv("behav/current-position/current-position_*", ["Seconds","Value.X","Value.Y","Value.Z","Value.Length", "Value.LengthFast", "Value.LengthSquared"])
-    position_data = aeon.load(Path(base_path), position_reader)
+    rewards_reader = Csv("reward/reward_*", ["Seconds", "Value"])
+    rewards_data = aeon.load(behav_path, rewards_reader)
 
-    treadmill_reader = Csv("behav/treadmill-speed/treadmill-speed_*", ["Seconds", "Value"])
-    treadmill_data = aeon.load(Path(base_path), treadmill_reader)
+    position_reader = Csv("current-position/current-position_*", ["Seconds","Value.X","Value.Y","Value.Z","Value.Length", "Value.LengthFast", "Value.LengthSquared"])
+    position_data = aeon.load(behav_path, position_reader)
 
-    buffer_reader = Csv("behav/analog-data/analog-data_*", ["Seconds", "Value"])
-    buffer_data = aeon.load(Path(base_path), buffer_reader)
+    treadmill_reader = Csv("treadmill-speed/treadmill-speed_*", ["Seconds", "Value"])
+    treadmill_data = aeon.load(behav_path, treadmill_reader)
+
+    buffer_reader = Csv("analog-data/analog-data_*", ["Seconds", "Value"])
+    buffer_data = aeon.load(behav_path, buffer_reader)
 
     # Fix buffer resets
     buffer_vals = buffer_data['Value'].values.copy()
@@ -109,10 +115,10 @@ def load_data(base_path):
 
     if os.path.exists(Path(base_path) / "behav/current-landmark/"):
         if 'cohort1' in str(base_path):
-            lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited","RewardDelivered"])
+            lm_reader = Csv("current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited","RewardDelivered"])
         elif 'cohort2' in str(base_path):
-            lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited","RewardDelivered","Gap","IgnoreInBoundaryCalculation"])
-        lm_data = aeon.load(Path(base_path), lm_reader)
+            lm_reader = Csv("current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited","RewardDelivered","Gap","IgnoreInBoundaryCalculation"])
+        lm_data = aeon.load(behav_path, lm_reader)
         # If RewardDelivered doesn't exist, it won't be in the dataframe
         if "RewardDelivered" not in lm_data.columns:
             lm_data["RewardDelivered"] = np.nan
@@ -177,8 +183,8 @@ def load_analog_data(base_path, ses_rig_settings):
     for c in ses_rig_settings['analogInputChannels']:
         channel_names.append(c['alias'])
     print(f"Analog channels found: {channel_names}")
-    analog_reader = AnalogData("behav/analog-data/*", channel_names, len(channel_names))
-    analog_data = aeon.load(Path(base_path), analog_reader)
+    analog_reader = AnalogData("analog-data/*", channel_names, len(channel_names))
+    analog_data = aeon.load(Path(base_path) / "behav", analog_reader)
     analog_data = analog_data.reset_index() # aeon load assumes our indices are valid harp timestamps which they are not in this case
     analog_data = analog_data.drop(columns='time')
 
@@ -551,4 +557,4 @@ def threshold_licks(sess):
 
 #     session['reward_idx'] = reward_idx
 
-#     return session 
+#     return session
