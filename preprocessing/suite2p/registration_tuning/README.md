@@ -599,6 +599,13 @@ step after the registration parameters and version have been accepted.
 
 ## Default Cellpose full-session pilot
 
+For the current single-session, non-grid workflow, use
+[`remaining_steps/`](remaining_steps/README.md). It lists unique sessions from
+an earlier registration-tuning manifest, registers exactly one selected
+session with the chosen parameters, runs default `cpsam` ROI detection, and
+writes a visual ROI review. The older launcher documented below remains
+available for reproducing the initial task-0 pilot.
+
 The default Cellpose pilot re-runs task 0 from the newest full-session manifest
 in a new, isolated output directory. Registration uses the dataset metadata
 (`fs=45`, `tau=0.4`, one plane, two channels, functional channel 1), with only
