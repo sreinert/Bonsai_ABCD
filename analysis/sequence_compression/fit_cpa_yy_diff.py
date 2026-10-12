@@ -101,9 +101,9 @@ if not os.path.exists(save_dir):
 
 # Define patches
 if session['stim_order'] == 'random':
-    ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, include_next=False, precede_XY=True)
+    ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, precede_XY=True)
 elif session['stim_order'] == 'pseudorandom':
-    ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, include_next=False, precede_XY=False)
+    ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx = alternation.get_XYY_patches(session, precede_XY=False)
 
 # Define bins based on min distance between landmarks
 frames_around = alternation.get_min_frames_between_lms(session)
