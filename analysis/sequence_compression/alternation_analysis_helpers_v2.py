@@ -602,7 +602,10 @@ def fit_linear_regression_XYlen_cpa(neurons, YY_data, session, condition='AB', d
                 
         # Plotting
         if plot: 
-            plot_cpa_results(results, neurons, YY_data, session, Y_data, XY_repeats, condition, data_type, bins, sort_heatmap, zscored, save_plot, plot_dir)
+            plot_cpa_results(results, neurons, YY_data, session, Y_data, XY_repeats, 
+                             condition=condition, data_type=data_type, bins=bins, 
+                             sort_heatmap=sort_heatmap, cluster_repeats=cluster_repeats, 
+                             zscored=zscored, save_plot=save_plot, plot_dir=plot_dir)
                 
         return results
     
@@ -621,8 +624,11 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
         for k, v in cpa_results.items()
     }
     
-    # Get patches of XY repeats if not provided
-    if XY_repeats is None:
+    # Get patches so that the heatmap labels can reflect whether repeat counts
+    # were actually clustered (3-4 and 5+), including when XY_repeats is passed
+    # in by fit_linear_regression_XYlen_cpa.
+    clustering_done = False
+    if XY_repeats is None or cluster_repeats:
         _, AB_patches, BA_patches, _, _, _ = get_repeating_XY_patches(session, min_length=2)
 
         # Find preceding XY length for each patch
@@ -631,7 +637,14 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
         elif condition == 'BA':
             patches = BA_patches
 
-        XY_repeats, _ = get_XY_repeats(patches, cluster=cluster_repeats)
+        if XY_repeats is None:
+            plot_XY_repeats, clustering_done = get_XY_repeats(patches, cluster=cluster_repeats)
+        else:
+            raw_XY_repeats = np.array([len(patch) / 2 for patch in patches]).astype(int)
+            clustering_done = cluster_repeats and 5 in Counter(raw_XY_repeats)
+
+    if XY_repeats is None:
+        XY_repeats = plot_XY_repeats
         XY_repeats = XY_repeats[YY_data['valid_patch_indices']]
     
     # Define Y data for CPA if not provided
@@ -729,7 +742,7 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
             block_starts = np.concatenate(([0], change_rows))
             block_ends   = np.concatenate((change_rows, [len(sorted_repeats)]))
             block_centers = (block_starts + block_ends) / 2 - 0.5
-            block_values  = [sorted_repeats[start] for start in block_starts]
+            block_values = [sorted_repeats[start] for start in block_starts]
 
         else:
             heatmap_data = Y_data[cell]
@@ -744,7 +757,12 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
                 # Indicate number of XY repeats  per block
                 right_ax = ax2.secondary_yaxis('right')
                 right_ax.set_yticks(block_centers)
-                right_ax.set_yticklabels(block_values, fontsize=6)
+                if clustering_done:
+                    clustered_labels = {1: '1', 2: '2', 3: '3-4', 4: '5+'}
+                    block_labels = [clustered_labels[int(value)] for value in block_values]
+                else:
+                    block_labels = block_values
+                right_ax.set_yticklabels(block_labels, fontsize=6)
                 right_ax.set_ylabel('XY repeats', fontsize=8)
 
             if condition == 'AB':
