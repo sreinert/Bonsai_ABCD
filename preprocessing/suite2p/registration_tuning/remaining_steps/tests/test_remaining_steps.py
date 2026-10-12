@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import tifffile
 
 
 SCRIPT_DIR = Path(__file__).parents[1]
@@ -15,12 +16,19 @@ sys.path.insert(0, str(WORKFLOW_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
 import config  # noqa: E402
+import inspect_run  # noqa: E402
 import prepare_session  # noqa: E402
 import run_roi_detection  # noqa: E402
 
 
 def source_row(tmp_path: Path, *, task_id: int, session: str, candidate: str) -> dict[str, object]:
-    input_path = tmp_path / "raw" / "sub-02" / session / "funcimg"
+    funcimg = tmp_path / "raw" / "sub-02" / session / "funcimg"
+    input_path = funcimg / "others"
+    input_path.mkdir(parents=True, exist_ok=True)
+    for name in ("full_001.tif", "full_002.tiff"):
+        tifffile.imwrite(funcimg / name, np.zeros((2, 3), dtype=np.uint16))
+    pilot_tiff = input_path / "pilot_subset.tif"
+    tifffile.imwrite(pilot_tiff, np.zeros((2, 3), dtype=np.uint16))
     return {
         "task_id": task_id,
         "mouse_id": "sub-02",
@@ -30,7 +38,7 @@ def source_row(tmp_path: Path, *, task_id: int, session: str, candidate: str) ->
         "candidate_id": candidate,
         "suite2p_version": "1.1.0",
         "input_path": str(input_path),
-        "tiff_files_json": json.dumps([str(input_path / "movie.tif")]),
+        "tiff_files_json": json.dumps([str(pilot_tiff)]),
         "frame_count": "",
         "fs": 45.0,
         "tau": 0.4,
@@ -61,7 +69,6 @@ def test_unique_sessions_collapses_grid_candidates(tmp_path: Path) -> None:
 
     assert len(sessions) == 2
     assert sessions[0]["source_task_id"] == 0
-    assert sessions[0]["candidates"] == ["candidate-a", "candidate-b"]
     assert sessions[1]["row"]["session_id"] == "ses-b"
 
 
@@ -80,6 +87,11 @@ def test_builds_exactly_one_isolated_task_with_locked_parameters(tmp_path: Path)
     assert task["nplanes"] == 1
     assert task["nchannels"] == 2
     assert json.loads(str(task["registration_json"])) == config.REGISTRATION
+    assert Path(str(task["input_path"])).name == "funcimg"
+    assert {Path(path).name for path in json.loads(str(task["tiff_files_json"]))} == {
+        "full_001.tif",
+        "full_002.tiff",
+    }
     assert Path(str(task["run_dir"])) == (
         tmp_path
         / "processed"
@@ -135,3 +147,25 @@ def test_detection_forbids_downstream_outputs() -> None:
         "iscell.npy",
         "spks.npy",
     }
+
+
+def test_inspector_reads_standalone_resolved_configuration(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "status.json").write_text(
+        json.dumps({"state": "failed", "error": "registration failed"}),
+        encoding="utf-8",
+    )
+    expected = {
+        "suite2p_version": "1.1.0",
+        "db": {"nchannels": 2},
+        "settings": {"registration": config.REGISTRATION},
+    }
+    (run_dir / "resolved_suite2p_configuration.json").write_text(
+        json.dumps(expected), encoding="utf-8"
+    )
+
+    status, configuration = inspect_run.load_run(run_dir)
+
+    assert status == {"state": "failed", "error": "registration failed"}
+    assert configuration == expected

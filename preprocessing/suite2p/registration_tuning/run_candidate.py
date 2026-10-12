@@ -311,6 +311,7 @@ def main() -> None:
     write_json_atomic(status_path, {"state": "running", **provenance})
 
     torch_module: Any | None = None
+    resolved_configuration_path = run_dir / "resolved_suite2p_configuration.json"
     try:
         import suite2p
 
@@ -340,6 +341,14 @@ def main() -> None:
 
         db, settings = build_suite2p_configuration(
             row, input_path, run_dir, tiff_files, args.device
+        )
+        write_json_atomic(
+            resolved_configuration_path,
+            {
+                "suite2p_version": installed_version,
+                "db": db,
+                "settings": settings,
+            },
         )
         if args.device == "cuda":
             torch.cuda.reset_peak_memory_stats()
@@ -425,6 +434,11 @@ def main() -> None:
                 "finished_unix": finished,
                 "elapsed_seconds": finished - started,
                 "resource_usage": collect_resource_usage(torch_module),
+                "resolved_suite2p_configuration": (
+                    str(resolved_configuration_path)
+                    if resolved_configuration_path.is_file()
+                    else None
+                ),
                 "error": repr(exc),
                 "traceback": traceback.format_exc(),
             },

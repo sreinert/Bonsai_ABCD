@@ -1,15 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "Usage: $0 SOURCE_MANIFEST SESSION_INDEX OUTPUT_ROOT" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "Usage: $0 SOURCE_MANIFEST SESSION_INDEX [OUTPUT_ROOT]" >&2
   echo "Run: python prepare_session.py --source-manifest SOURCE_MANIFEST --list" >&2
   exit 2
 fi
 
 source_manifest=$1
 session_index=$2
-output_root=$3
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 workflow_dir=$(cd "${script_dir}/.." && pwd)
 python_executable=${PYTHON_EXECUTABLE:-$(command -v python)}
@@ -19,6 +18,7 @@ if [[ ! -f "${source_manifest}" ]]; then
   exit 2
 fi
 source_manifest=$(cd "$(dirname "${source_manifest}")" && pwd)/$(basename "${source_manifest}")
+output_root=${3:-$(dirname "${source_manifest}")/remaining_steps}
 if [[ ! "${session_index}" =~ ^[0-9]+$ ]]; then
   echo "SESSION_INDEX must be a non-negative integer: ${session_index}" >&2
   exit 2
