@@ -16,6 +16,7 @@ from analysis.sequence_compression.session_functions.io import (
     load_analog_data,
     load_data,
     load_settings,
+    select_session_folders,
 )
 
 
@@ -345,3 +346,37 @@ def test_find_base_path_prefers_concatenated_over_restored_sources(
         find_base_path("08", "261009", root, prefer_concatenated=True)
         == combined
     )
+
+
+def test_select_session_folders_prefers_combined_session_once(
+    tmp_path: Path,
+) -> None:
+    mouse_root = tmp_path / "cohort2" / "sub-08"
+    first = mouse_root / "ses-full017_date-20261009T075421"
+    second = mouse_root / "ses-full017_date-20261009T082201"
+    combined = mouse_root / "ses-full017_date-20261010T090000"
+    for session_path in (first, second, combined):
+        (session_path / "behav").mkdir(parents=True)
+    (combined / "concatenation_manifest.json").write_text(
+        json.dumps(
+            {
+                "sources": [
+                    {
+                        "path": str(first),
+                        "acquired_at": "2026-10-09T07:54:21",
+                    },
+                    {
+                        "path": str(second),
+                        "acquired_at": "2026-10-09T08:22:01",
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    candidates = [first, second, combined]
+    assert select_session_folders(candidates) == [second]
+    assert select_session_folders(
+        candidates, prefer_concatenated=True
+    ) == [combined]

@@ -75,6 +75,73 @@ def _concatenated_session_contains_date(folder, date):
         )
     return False
 
+
+def _concatenated_session_source_dates(folder):
+    """Return YYYYMMDD acquisition dates represented by a combined session."""
+    dates = set()
+    manifest_path = Path(folder) / "concatenation_manifest.json"
+    if manifest_path.is_file():
+        try:
+            with manifest_path.open("r", encoding="utf-8") as file:
+                manifest = json.load(file)
+            for source in manifest.get("sources", []):
+                acquired_at = source.get("acquired_at")
+                if acquired_at:
+                    dates.add(DateTime.fromisoformat(acquired_at).strftime("%Y%m%d"))
+                    continue
+                source_name = Path(source.get("path", "")).name
+                source_timestamp = _session_folder_timestamp(Path(source_name))
+                if source_timestamp is not None:
+                    dates.add(source_timestamp.strftime("%Y%m%d"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            pass
+
+    if not dates:
+        originals = Path(folder) / "original_sessions"
+        if originals.is_dir():
+            for source in originals.iterdir():
+                timestamp = _session_folder_timestamp(source)
+                if source.is_dir() and timestamp is not None:
+                    dates.add(timestamp.strftime("%Y%m%d"))
+    return dates
+
+
+def select_session_folders(folders, prefer_concatenated=False):
+    """Select one session per acquisition date from candidate folders.
+
+    Concatenated folders are assigned to the acquisition dates in their
+    manifests rather than their later creation dates. When requested, they
+    replace their component source folders and are returned only once.
+    """
+    sessions_by_date = {}
+    for folder in map(Path, folders):
+        timestamp = _session_folder_timestamp(folder)
+        if timestamp is None or not (folder / "behav").is_dir():
+            continue
+        source_dates = _concatenated_session_source_dates(folder)
+        is_concatenated = bool(source_dates)
+        acquisition_dates = source_dates or {timestamp.strftime("%Y%m%d")}
+        for acquisition_date in acquisition_dates:
+            sessions_by_date.setdefault(acquisition_date, []).append(
+                (is_concatenated, timestamp, folder)
+            )
+
+    selected = []
+    seen = set()
+    for acquisition_date in sorted(sessions_by_date):
+        candidates = sessions_by_date[acquisition_date]
+        concatenated = [candidate for candidate in candidates if candidate[0]]
+        ordinary = [candidate for candidate in candidates if not candidate[0]]
+        if prefer_concatenated and concatenated:
+            candidates = concatenated
+        elif ordinary:
+            candidates = ordinary
+        folder = max(candidates, key=lambda candidate: candidate[1])[2]
+        if folder not in seen:
+            selected.append(folder)
+            seen.add(folder)
+    return selected
+
 def find_base_path(mouse, date, root, prefer_concatenated=False):
     """Find a session recorded on ``date``.
 
