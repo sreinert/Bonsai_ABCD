@@ -52,6 +52,19 @@ This creates a one-row manifest and submits exactly two jobs:
 
 There is no job array and no parameter grid.
 
+Both jobs exclude `gpu-350-02` by default because that node has repeatedly
+failed this workflow. To exclude additional known-bad nodes, pass a
+comma-separated Slurm node list:
+
+```bash
+EXCLUDE_NODES=gpu-350-02,gpu-OTHER-NODE \
+  bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_single_session.sh \
+  /absolute/path/to/tasks.csv SESSION_INDEX
+```
+
+The launcher prints the applied exclusion list. Setting `EXCLUDE_NODES` to an
+empty string explicitly disables the default exclusion.
+
 ## 3. Review the detected ROIs
 
 The submission command prints the exact report path:

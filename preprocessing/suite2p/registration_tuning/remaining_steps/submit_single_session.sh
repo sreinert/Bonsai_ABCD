@@ -12,6 +12,9 @@ session_index=$2
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 workflow_dir=$(cd "${script_dir}/.." && pwd)
 python_executable=${PYTHON_EXECUTABLE:-$(command -v python)}
+# gpu-350-02 has repeatedly failed these jobs. Override with a comma-separated
+# list, or set EXCLUDE_NODES to an empty string to disable exclusions.
+exclude_nodes=${EXCLUDE_NODES-gpu-350-02}
 
 if [[ ! -f "${source_manifest}" ]]; then
   echo "Source manifest not found: ${source_manifest}" >&2
@@ -59,7 +62,13 @@ if importlib.metadata.version("suite2p") != "1.1.0":
     )
 PY
 
+sbatch_options=()
+if [[ -n "${exclude_nodes}" ]]; then
+  sbatch_options+=(--exclude="${exclude_nodes}")
+fi
+
 registration_submission=$(sbatch --parsable \
+  "${sbatch_options[@]}" \
   --chdir="${manifest_dir}" \
   --output="${log_dir}/registration_%j.out" \
   --error="${log_dir}/registration_%j.err" \
@@ -68,6 +77,7 @@ registration_submission=$(sbatch --parsable \
 registration_job=${registration_submission%%;*}
 
 detection_submission=$(sbatch --parsable \
+  "${sbatch_options[@]}" \
   --dependency="afterok:${registration_job}" \
   --chdir="${manifest_dir}" \
   --output="${log_dir}/roi_detection_%j.out" \
@@ -80,4 +90,5 @@ echo "Manifest:         ${manifest}"
 echo "Selected output:  ${run_dir}"
 echo "Registration job: ${registration_job}"
 echo "ROI job:          ${detection_job} (afterok:${registration_job})"
+echo "Excluded nodes:   ${exclude_nodes:-<none>}"
 echo "Visual report:    ${run_dir}/roi_detection/cpsam/index.html"
