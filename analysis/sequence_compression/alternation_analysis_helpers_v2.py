@@ -54,17 +54,27 @@ def get_XYY_patches(session, precede_XY=False):
     return ABB_patches, BAA_patches, ABB_patches_idx, BAA_patches_idx
 
 def get_valid_patches(session, dF, example_cell, condition, bins):
-    '''Exclude patches if session ended before enough frames were collected for a landmark (the last one)'''
+    '''Exclude patches if session ended before enough frames were collected for a landmark (the last one).
+
+    ``condition`` may identify either the preceding sequence (AB/BA) or the
+    repeated landmark pair (BB/AA).
+    '''
 
     if session['stim_order'] == 'random':
         ABB_patches, BAA_patches, _, _ = get_XYY_patches(session, precede_XY=True)
     elif session['stim_order'] == 'pseudorandom':
         ABB_patches, BAA_patches, _, _ = get_XYY_patches(session, precede_XY=False)
+    else:
+        raise ValueError(f"Unknown stimulus order: {session['stim_order']!r}")
 
-    if condition == 'AB':
+    if condition in {'AB', 'BB'}:
         XYY_patches = ABB_patches
-    elif condition == 'BA':
+    elif condition in {'BA', 'AA'}:
         XYY_patches = BAA_patches
+    else:
+        raise ValueError(
+            f"Unknown condition {condition!r}; expected AB, BA, AA, or BB."
+        )
 
     events_YY = get_YY_events(session, XYY_patches)
 
