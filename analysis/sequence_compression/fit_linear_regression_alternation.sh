@@ -14,7 +14,19 @@
 set -euo pipefail
 
 module load mamba
-source activate bonsai_abcd 
+
+# Resolve the environment explicitly in the non-interactive SLURM shell.
+PYTHON_CMD=(mamba run --no-capture-output -n bonsai_abcd python)
+
+"${PYTHON_CMD[@]}" - <<'PY'
+import sys
+import yaml
+from aeon.io.reader import Csv, Reader
+
+print(f"Batch Python: {sys.executable}")
+print(f"PyYAML: {yaml.__file__}")
+print("Environment imports OK")
+PY
 
 cd /nfs/nhome/live/athinaa/desktop/Bonsai_ABCD/analysis/sequence_compression
 
@@ -47,7 +59,7 @@ for ENTRY in "${PAIRS[@]}"; do
         if [[ "$condition" == "Y2_ramp" ]]; then
             echo "Fitting linear regression against number of XY repeats for mouse=$mouse session=$session stage=$stage cohort=$cohort"
 
-            python fit_linear_regression_y2_ramp.py \
+            "${PYTHON_CMD[@]}" fit_linear_regression_y2_ramp.py \
                 --mouse "$mouse" \
                 --session "$session" \
                 --stage "$stage" \
@@ -56,7 +68,7 @@ for ENTRY in "${PAIRS[@]}"; do
         elif [[ "$condition" == "XY_order" ]]; then
             echo "Fitting linear regression against order of X/Y in XY sequences for mouse=$mouse session=$session stage=$stage cohort=$cohort"
 
-            python fit_linear_regression_xy_order.py \
+            "${PYTHON_CMD[@]}" fit_linear_regression_xy_order.py \
                 --mouse "$mouse" \
                 --session "$session" \
                 --stage "$stage" \
@@ -65,7 +77,7 @@ for ENTRY in "${PAIRS[@]}"; do
         elif [[ "$condition" == "YY_diff" ]]; then
             echo "Fitting CPA for mouse=$mouse session=$session stage=$stage cohort=$cohort"
 
-            python fit_cpa_yy_diff.py \
+            "${PYTHON_CMD[@]}" fit_cpa_yy_diff.py \
                 --mouse "$mouse" \
                 --session "$session" \
                 --stage "$stage" \
