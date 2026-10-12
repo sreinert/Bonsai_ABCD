@@ -11,14 +11,16 @@
 #SBATCH --mail-type ALL
 #SBATCH --mail-user athina.apostolelli.24@ucl.ac.uk
 
-# source ~/.bashrc
+set -euo pipefail
 
 module load mamba
 source activate bonsai_abcd 
 
-condition="XY_order"
+cd /nfs/nhome/live/athinaa/desktop/Bonsai_ABCD/analysis/sequence_compression
+
+# condition="XY_order"
 # condition="Y2_ramp"
-# condition="YY_diff"
+condition="YY_diff"
 
 PAIRS=(
     "mouse=TAA0000059 cohort=2 t3:t3 t4:t4"
