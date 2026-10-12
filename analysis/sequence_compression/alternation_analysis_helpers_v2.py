@@ -1140,9 +1140,9 @@ def plot_linear_regression_results(results, neurons, dF, session, y_data, x_data
             ax1.set_xticklabels(['1', '2', '3-4', '5+'])
 
         ax1.set_title(
-            f'slope = {results['slopes'][cell]:.3g}, '
-            f'r = {results['rvalues'][cell]:.3g}, '
-            f'p = {results['pvalues'][cell]:.3g}'
+            f"slope = {results['slopes'][cell]:.3g}, "
+            f"r = {results['rvalues'][cell]:.3g}, "
+            f"p = {results['pvalues'][cell]:.3g}"
         )
 
         # 2. Plot permutation slopes distribution
