@@ -257,12 +257,13 @@ PYTHON_EXECUTABLE=/absolute/path/to/python MAX_CONCURRENT=3 \
   "${TUNING_ROOT}/tasks.csv"
 ```
 
-Nodes with a confirmed hardware or Slurm launch problem can be excluded
-explicitly. The submit wrapper passes this value to `sbatch --exclude` and
-prints it before submission:
+All submission wrappers exclude `gpu-350-02` and `gpu-350-04` by default
+because those nodes have repeatedly failed jobs or Ceph access. The wrappers
+pass the list to `sbatch --exclude` and print it before submission. Override
+the default with a comma-separated list if needed:
 
 ```bash
-EXCLUDE_NODES=gpu-350-02 MAX_CONCURRENT=6 \
+EXCLUDE_NODES=gpu-350-02,gpu-350-04 MAX_CONCURRENT=6 \
   bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
   "${TUNING_ROOT}/tasks.csv"
 ```

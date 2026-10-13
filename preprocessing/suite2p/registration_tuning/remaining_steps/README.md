@@ -52,12 +52,13 @@ This creates a one-row manifest and submits exactly two jobs:
 
 There is no job array and no parameter grid.
 
-Both jobs exclude `gpu-350-02` by default because that node has repeatedly
-failed this workflow. To exclude additional known-bad nodes, pass a
+All registration and detection submissions exclude `gpu-350-02` and
+`gpu-350-04` by default because those nodes have repeatedly failed jobs or
+Ceph access. To exclude additional known-bad nodes, pass a
 comma-separated Slurm node list:
 
 ```bash
-EXCLUDE_NODES=gpu-350-02,gpu-OTHER-NODE \
+EXCLUDE_NODES=gpu-350-02,gpu-350-04,gpu-OTHER-NODE \
   bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_single_session.sh \
   /absolute/path/to/tasks.csv SESSION_INDEX
 ```
@@ -115,6 +116,23 @@ bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_detection_
   --model cpsam \
   --input-image meanImg
 ```
+
+`meanImg` above matches Suite2p's normal detection path: it is the mean of the
+temporally binned movie, cropped to the valid registered field. To instead use
+the full-session mean image saved by registration in `reg_outputs.npy` (cropped
+to the same valid field), select `registration_meanImg`:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_detection_experiment.sh \
+  /absolute/path/to/chosen-registration-cpsam \
+  cpsam-registration-meanimg \
+  --model cpsam \
+  --input-image registration_meanImg
+```
+
+This option reads the saved registration mean directly and skips temporal
+binning of `data.bin`. Its exact input is saved as both `cellpose_input.npy`
+and `registration_meanImg_crop.npy`.
 
 Or make Cellpose more permissive and change the assumed cell diameter:
 

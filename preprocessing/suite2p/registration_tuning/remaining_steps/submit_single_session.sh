@@ -12,9 +12,9 @@ session_index=$2
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 workflow_dir=$(cd "${script_dir}/.." && pwd)
 python_executable=${PYTHON_EXECUTABLE:-$(command -v python)}
-# gpu-350-02 has repeatedly failed these jobs. Override with a comma-separated
-# list, or set EXCLUDE_NODES to an empty string to disable exclusions.
-exclude_nodes=${EXCLUDE_NODES-gpu-350-02}
+# These nodes have repeatedly failed jobs or Ceph access. Override with a
+# comma-separated list, or set EXCLUDE_NODES to an empty string to disable.
+exclude_nodes=${EXCLUDE_NODES-gpu-350-02,gpu-350-04}
 
 if [[ ! -f "${source_manifest}" ]]; then
   echo "Source manifest not found: ${source_manifest}" >&2

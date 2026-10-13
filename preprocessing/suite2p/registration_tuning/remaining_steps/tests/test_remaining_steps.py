@@ -178,6 +178,10 @@ def test_detection_experiment_builds_each_supported_input() -> None:
     assert np.array_equal(max_weights, maximum)
 
 
+def test_registration_mean_image_is_an_explicit_input_choice() -> None:
+    assert "registration_meanImg" in run_detection_experiment.INPUT_IMAGE_CHOICES
+
+
 def test_detection_experiment_rejects_cyto3_under_cellpose4() -> None:
     class Models:
         MODEL_NAMES = ["cpsam", "cpsam_v2"]

@@ -27,7 +27,9 @@ last_task=$((task_count - 1))
 max_concurrent=${MAX_CONCURRENT:-6}
 array_spec=${TASK_RANGE:-0-${last_task}%${max_concurrent}}
 output_root=${manifest_dir}
-exclude_nodes=${EXCLUDE_NODES:-}
+# These nodes have repeatedly failed analysis jobs or Ceph access. An explicit
+# empty EXCLUDE_NODES value disables the default when they are repaired.
+exclude_nodes=${EXCLUDE_NODES-gpu-350-02,gpu-350-04}
 if [[ -n "${PYTHON_EXECUTABLE:-}" ]]; then
   python_executable=${PYTHON_EXECUTABLE}
 else

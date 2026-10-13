@@ -37,7 +37,12 @@ except ImportError:
     from run_roi_detection import FORBIDDEN_DOWNSTREAM_OUTPUTS, boundaries
 
 
-INPUT_IMAGE_CHOICES = ("max_proj / meanImg", "meanImg", "max_proj")
+INPUT_IMAGE_CHOICES = (
+    "max_proj / meanImg",
+    "meanImg",
+    "max_proj",
+    "registration_meanImg",
+)
 RESERVED_EVAL_PARAMS = {"diameter", "flow_threshold", "cellprob_threshold"}
 
 
@@ -375,15 +380,42 @@ def main() -> None:
         reg_outputs = np.load(plane_dir / "reg_outputs.npy", allow_pickle=True).item()
         detection_settings = suite2p.default_settings()["detection"]
         nbins = args.nbins or int(detection_settings["nbins"])
-        mean_img, max_proj, cache_status = prepare_images(
-            suite2p, plane_dir, db, reg_outputs, detection_settings, nbins
-        )
-        image, weights = build_cellpose_input(
-            mean_img, max_proj, args.input_image, diameter, args.highpass_spatial
-        )
+        if args.input_image == "registration_meanImg":
+            yrange = [int(value) for value in reg_outputs["yrange"]]
+            xrange = [int(value) for value in reg_outputs["xrange"]]
+            registration_mean = np.asarray(reg_outputs["meanImg"])
+            registration_mean_crop = registration_mean[
+                slice(*yrange), slice(*xrange)
+            ]
+            image, weights = build_cellpose_input(
+                registration_mean_crop,
+                registration_mean_crop,
+                "meanImg",
+                diameter,
+                args.highpass_spatial,
+            )
+            mean_img = registration_mean_crop
+            max_proj = None
+            cache_status = {
+                "used": False,
+                "reason": "registration_meanImg uses reg_outputs.npy directly",
+                "source": str(plane_dir / "reg_outputs.npy"),
+                "yrange": yrange,
+                "xrange": xrange,
+            }
+        else:
+            mean_img, max_proj, cache_status = prepare_images(
+                suite2p, plane_dir, db, reg_outputs, detection_settings, nbins
+            )
+            image, weights = build_cellpose_input(
+                mean_img, max_proj, args.input_image, diameter, args.highpass_spatial
+            )
         atomic_save(output_dir / "cellpose_input.npy", image)
-        atomic_save(output_dir / "meanImg_binned.npy", mean_img)
-        atomic_save(output_dir / "max_proj.npy", max_proj)
+        if args.input_image == "registration_meanImg":
+            atomic_save(output_dir / "registration_meanImg_crop.npy", mean_img)
+        else:
+            atomic_save(output_dir / "meanImg_binned.npy", mean_img)
+            atomic_save(output_dir / "max_proj.npy", max_proj)
         write_json_atomic(
             output_dir / "requested_settings.json",
             {**requested, "nbins": nbins, "suite2p_detection_defaults": detection_settings},
@@ -484,6 +516,11 @@ def main() -> None:
             "n_rois": int(len(stat)),
             "outputs": {
                 "cellpose_input": str(output_dir / "cellpose_input.npy"),
+                "registration_meanImg_crop": (
+                    str(output_dir / "registration_meanImg_crop.npy")
+                    if args.input_image == "registration_meanImg"
+                    else None
+                ),
                 "cellpose_model_output": str(output_dir / "cellpose_model_output.npy"),
                 "cellpose_masks_crop": str(output_dir / "cellpose_masks_crop.npy"),
                 "stat_before_suite2p_filters": str(output_dir / "stat_before_suite2p_filters.npy"),

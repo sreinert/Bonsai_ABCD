@@ -16,7 +16,7 @@ if [[ ! "${experiment_name}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
 fi
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 python_executable=${PYTHON_EXECUTABLE:-$(command -v python)}
-exclude_nodes=${EXCLUDE_NODES-gpu-350-02}
+exclude_nodes=${EXCLUDE_NODES-gpu-350-02,gpu-350-04}
 
 if [[ ! -d "${run_dir}" ]]; then
   echo "Registered run directory not found: ${run_dir}" >&2

@@ -4,6 +4,7 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "${script_dir}/../../.." && pwd)
 project_root=${PROJECT_ROOT:-AtAp_20260119_SequenceCompression}
+exclude_nodes=${EXCLUDE_NODES-gpu-350-02,gpu-350-04}
 
 if [[ -n "${PYTHON_EXECUTABLE:-}" ]]; then
   python_executable=${PYTHON_EXECUTABLE}
@@ -58,8 +59,14 @@ PY
 
 echo "Manifest: ${manifest}"
 echo "Logs: ${manifest_dir}/logs/s2p_full_<job>_<task>.{out,err}"
+echo "Excluded nodes: ${exclude_nodes:-<none>}"
 
-sbatch \
+sbatch_options=()
+if [[ -n "${exclude_nodes}" ]]; then
+  sbatch_options+=(--exclude="${exclude_nodes}")
+fi
+
+sbatch "${sbatch_options[@]}" \
   --array="${array_spec}" \
   --chdir="${manifest_dir}" \
   --output="${manifest_dir}/logs/s2p_full_%A_%a.out" \

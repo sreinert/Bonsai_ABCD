@@ -6,6 +6,7 @@ repo_root=$(cd "${script_dir}/../../.." && pwd)
 project_root=${PROJECT_ROOT:-AtAp_20260119_SequenceCompression}
 source_task_id=${SOURCE_TASK_ID:-0}
 python_executable=${PYTHON_EXECUTABLE:-$(command -v python)}
+exclude_nodes=${EXCLUDE_NODES-gpu-350-02,gpu-350-04}
 
 projects_root=${MRSIC_PROJECTS_ROOT:-}
 if [[ -z "${projects_root}" ]]; then
@@ -56,7 +57,13 @@ if importlib.metadata.version("suite2p") != "1.1.0":
     raise RuntimeError("The default Cellpose pilot requires suite2p==1.1.0")
 PY
 
+sbatch_options=()
+if [[ -n "${exclude_nodes}" ]]; then
+  sbatch_options+=(--exclude="${exclude_nodes}")
+fi
+
 registration_submission=$(sbatch --parsable \
+  "${sbatch_options[@]}" \
   --array=0 \
   --chdir="${manifest_dir}" \
   --output="${manifest_dir}/logs/default_cpsam_registration_%A_%a.out" \
@@ -66,6 +73,7 @@ registration_submission=$(sbatch --parsable \
 registration_job=${registration_submission%%;*}
 
 detection_submission=$(sbatch --parsable \
+  "${sbatch_options[@]}" \
   --dependency="afterok:${registration_job}" \
   --chdir="${manifest_dir}" \
   --output="${manifest_dir}/logs/default_cpsam_detection_%j.out" \
@@ -79,3 +87,4 @@ echo "Pilot manifest:  ${pilot_manifest}"
 echo "Pilot output:    ${run_dir}"
 echo "Registration job: ${registration_job}"
 echo "Detection job:    ${detection_job} (afterok:${registration_job})"
+echo "Excluded nodes:   ${exclude_nodes:-<none>}"
