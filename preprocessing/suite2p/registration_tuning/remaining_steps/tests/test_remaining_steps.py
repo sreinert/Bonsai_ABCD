@@ -182,6 +182,17 @@ def test_registration_mean_image_is_an_explicit_input_choice() -> None:
     assert "registration_meanImg" in run_detection_experiment.INPUT_IMAGE_CHOICES
 
 
+def test_robust_display_limits_clip_outliers_and_handle_constant_images() -> None:
+    image = np.concatenate([np.arange(100, dtype=float), np.asarray([10000.0])])
+    vmin, vmax = run_detection_experiment.robust_display_limits(image)
+    assert vmin >= 0
+    assert vmax < 10000
+    constant_min, constant_max = run_detection_experiment.robust_display_limits(
+        np.ones((3, 3))
+    )
+    assert constant_min < 1 < constant_max
+
+
 def test_detection_experiment_rejects_cyto3_under_cellpose4() -> None:
     class Models:
         MODEL_NAMES = ["cpsam", "cpsam_v2"]

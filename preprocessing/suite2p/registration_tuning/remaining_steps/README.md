@@ -134,6 +134,21 @@ This option reads the saved registration mean directly and skips temporal
 binning of `data.bin`. Its exact input is saved as both `cellpose_input.npy`
 and `registration_meanImg_crop.npy`.
 
+QC images use 1st–99th percentile contrast for display only. This makes the
+Cellpose input and registration mean easier to compare without changing any
+values supplied to detection. To update an experiment completed with an older
+version of the workflow, regenerate only its QC files:
+
+```bash
+python preprocessing/suite2p/registration_tuning/remaining_steps/refresh_detection_qc.py \
+  --experiment-dir \
+  /absolute/path/to/chosen-registration-cpsam/roi_detection/experiments/cpsam-registration-meanimg
+```
+
+This replaces only the generated `qc.png`, `cellpose_input.png`, `index.html`,
+and ROI summary arrays in that experiment directory. It does not run Cellpose,
+read raw TIFFs, or change registered binaries or detected masks.
+
 Or make Cellpose more permissive and change the assumed cell diameter:
 
 ```bash

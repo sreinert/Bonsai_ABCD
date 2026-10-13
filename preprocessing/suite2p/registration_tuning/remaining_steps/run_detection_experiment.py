@@ -190,6 +190,18 @@ def relabel_masks(masks: np.ndarray) -> np.ndarray:
     return relabelled.reshape(shape).astype(np.int32, copy=False)
 
 
+def robust_display_limits(image: np.ndarray) -> tuple[float, float]:
+    """Return finite 1st/99th-percentile limits for QC rendering only."""
+    finite = np.asarray(image)[np.isfinite(image)]
+    if finite.size == 0:
+        return 0.0, 1.0
+    vmin, vmax = (float(value) for value in np.percentile(finite, (1, 99)))
+    if vmax <= vmin:
+        padding = max(abs(vmin) * 0.01, 1.0)
+        return vmin - padding, vmax + padding
+    return vmin, vmax
+
+
 def save_qc(
     output_dir: Path,
     image: np.ndarray,
@@ -205,13 +217,17 @@ def save_qc(
     diameters = 2 * np.sqrt(areas / np.pi) if len(areas) else np.asarray([], dtype=float)
     atomic_save(output_dir / "roi_areas.npy", areas)
     atomic_save(output_dir / "roi_diameters.npy", diameters)
+    input_vmin, input_vmax = robust_display_limits(image)
+    mean_vmin, mean_vmax = robust_display_limits(registered_mean)
 
     figure, axes = plt.subplots(1, 3, figsize=(18, 6), constrained_layout=True)
-    axes[0].imshow(image, cmap="gray")
+    axes[0].imshow(image, cmap="gray", vmin=input_vmin, vmax=input_vmax)
     if crop_outline.any():
         axes[0].contour(crop_outline, levels=[0.5], colors="lime", linewidths=0.5)
     axes[0].set_title(f"Cellpose input: {title}\n{int(crop_masks.max())} raw masks")
-    axes[1].imshow(registered_mean, cmap="gray")
+    axes[1].imshow(
+        registered_mean, cmap="gray", vmin=mean_vmin, vmax=mean_vmax
+    )
     if full_outline.any():
         axes[1].contour(full_outline, levels=[0.5], colors="magenta", linewidths=0.5)
     axes[1].set_title("Registered mean image")
@@ -230,12 +246,16 @@ def save_qc(
     plt.close(figure)
 
     input_path = output_dir / "cellpose_input.png"
-    plt.imsave(input_path, image, cmap="gray")
+    plt.imsave(
+        input_path, image, cmap="gray", vmin=input_vmin, vmax=input_vmax
+    )
     html_path = output_dir / "index.html"
     html_path.write_text(
         "<!doctype html><meta charset='utf-8'><title>Cellpose experiment</title>"
         f"<h1>{title}</h1><p>Final ROI count: {len(stat)}</p>"
-        "<p>The report is retained even when the model finds zero ROIs.</p>"
+        "<p>The report is retained even when the model finds zero ROIs. "
+        "Image panels use 1st–99th percentile display contrast; detection arrays "
+        "are unchanged.</p>"
         "<img src='qc.png' style='max-width:100%;height:auto' alt='ROI QC'>",
         encoding="utf-8",
     )
