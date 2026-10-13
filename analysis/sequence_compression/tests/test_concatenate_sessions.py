@@ -348,6 +348,75 @@ def test_find_base_path_prefers_concatenated_over_restored_sources(
     )
 
 
+def test_concatenate_accepts_session_without_reward_file(tmp_path: Path) -> None:
+    source_root = tmp_path / "cohort2" / "source"
+    first = _make_session(source_root, "20260827T140000")
+    second = _make_session(source_root, "20260827T150000")
+    next((second / "behav" / "reward").glob("*.csv")).unlink()
+
+    output = concatenate_sessions(
+        [first, second],
+        output_root=tmp_path / "cohort2" / "combined",
+        creation_time=datetime(2026, 10, 13, 15, 30, 12),
+    )
+
+    reward_files = list((output / "behav" / "reward").glob("*.csv"))
+    assert len(reward_files) == 1
+    with reward_files[0].open(newline="", encoding="utf-8") as handle:
+        reward_rows = list(csv.reader(handle))
+    assert reward_rows[0] == ["Seconds", "Value"]
+    assert len(reward_rows) == 2
+    assert float(reward_rows[1][0]) == pytest.approx(0.4)
+    assert reward_rows[1][1] == "Water"
+
+    manifest = json.loads(
+        (output / "concatenation_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["sources"][1]["rows"]["reward"] == 0
+    assert manifest["merged_rows"]["reward"] == 1
+
+
+def test_concatenate_discards_intermediate_session_without_complete_lap(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "cohort2" / "source"
+    first = _make_session(source_root, "20261013T120651")
+    incomplete = _make_session(
+        source_root,
+        "20261013T123100",
+        landmark_centers=(1.0,),
+    )
+    third = _make_session(source_root, "20261013T123209")
+    next((incomplete / "behav" / "reward").glob("*.csv")).unlink()
+
+    output = concatenate_sessions(
+        [first, incomplete, third],
+        output_root=tmp_path / "cohort2" / "combined",
+        creation_time=datetime(2026, 10, 13, 15, 45, 0),
+    )
+
+    assert (output / "original_sessions" / incomplete.name).is_dir()
+    manifest = json.loads(
+        (output / "concatenation_manifest.json").read_text(encoding="utf-8")
+    )
+    incomplete_source = next(
+        source
+        for source in manifest["sources"]
+        if Path(source["path"]).name == incomplete.name
+    )
+    assert incomplete_source["excluded_from_merge"] is True
+    assert incomplete_source["exclusion_reason"] == "no_complete_lap"
+    assert all(
+        count == 0 for count in incomplete_source["retained_rows"].values()
+    )
+    assert manifest["excluded_sources"] == [
+        {"path": str(incomplete.resolve()), "reason": "no_complete_lap"}
+    ]
+    assert len(manifest["splices"]) == 1
+    assert manifest["splices"][0]["source"] == first.name
+    assert manifest["splices"][0]["next_source"] == third.name
+
+
 def test_select_session_folders_prefers_combined_session_once(
     tmp_path: Path,
 ) -> None:

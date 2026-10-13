@@ -39,7 +39,15 @@ STREAM_PREFIXES = {
     "reward": "reward",
     "treadmill-speed": "treadmill-speed",
 }
-REQUIRED_STREAMS = set(STREAM_PREFIXES) - {"current-landmark"}
+OPTIONAL_EMPTY_STREAM_SCHEMAS = {
+    # Bonsai may not create this event stream until the first reward occurs.
+    # A missing file therefore represents a valid stream with zero rows.
+    "reward": ("Seconds", "Value"),
+}
+REQUIRED_STREAMS = set(STREAM_PREFIXES) - {
+    "current-landmark",
+    *OPTIONAL_EMPTY_STREAM_SCHEMAS,
+}
 
 
 class ConcatenationError(RuntimeError):
@@ -184,27 +192,43 @@ def _inspect_session(path: Path) -> SourceSession:
         if not files:
             if stream in REQUIRED_STREAMS:
                 raise ConcatenationError(f"Missing {stream} CSV data in {path}")
+            if stream in OPTIONAL_EMPTY_STREAM_SCHEMAS:
+                schemas[stream] = OPTIONAL_EMPTY_STREAM_SCHEMAS[stream]
+                row_counts[stream] = 0
             continue
 
         schema: tuple[str, ...] | None = None
         count = 0
-        for csv_path, fieldnames, row in _iter_dict_rows(files):
-            current_schema = tuple(fieldnames)
-            if schema is None:
-                schema = current_schema
-            elif current_schema != schema:
-                raise ConcatenationError(
-                    f"CSV schema changes within {stream} in {path}: {csv_path}"
-                )
-            if "Seconds" not in fieldnames:
-                raise ConcatenationError(f"Missing 'Seconds' column in {csv_path}")
-            timestamp = _finite_float(
-                row["Seconds"], description=f"Seconds in {csv_path}"
-            )
-            time_min = timestamp if time_min is None else min(time_min, timestamp)
-            time_max = timestamp if time_max is None else max(time_max, timestamp)
-            count += 1
-        if schema is None or count == 0:
+        for csv_path in files:
+            with csv_path.open("r", newline="", encoding="utf-8-sig") as handle:
+                reader = csv.DictReader(handle)
+                if reader.fieldnames is None:
+                    raise ConcatenationError(f"CSV has no header: {csv_path}")
+                current_schema = tuple(reader.fieldnames)
+                if schema is None:
+                    schema = current_schema
+                elif current_schema != schema:
+                    raise ConcatenationError(
+                        f"CSV schema changes within {stream} in {path}: {csv_path}"
+                    )
+                if "Seconds" not in current_schema:
+                    raise ConcatenationError(
+                        f"Missing 'Seconds' column in {csv_path}"
+                    )
+                for row in reader:
+                    timestamp = _finite_float(
+                        row["Seconds"], description=f"Seconds in {csv_path}"
+                    )
+                    time_min = (
+                        timestamp if time_min is None else min(time_min, timestamp)
+                    )
+                    time_max = (
+                        timestamp if time_max is None else max(time_max, timestamp)
+                    )
+                    count += 1
+        if schema is None:
+            raise ConcatenationError(f"No CSV header found for {stream} in {path}")
+        if count == 0 and stream not in OPTIONAL_EMPTY_STREAM_SCHEMAS:
             raise ConcatenationError(f"No data rows found for {stream} in {path}")
         schemas[stream] = schema
         row_counts[stream] = count
@@ -291,8 +315,13 @@ def _first_difference(left: Any, right: Any, location: str = "value") -> str | N
     return None
 
 
-def _validate_compatibility(sessions: list[SourceSession]) -> None:
-    if len(sessions) < 2:
+def _validate_compatibility(
+    sessions: list[SourceSession],
+    *,
+    require_multiple: bool = True,
+    validate_schemas: bool = True,
+) -> None:
+    if require_multiple and len(sessions) < 2:
         raise ConcatenationError("Provide at least two session paths")
     if len({session.path for session in sessions}) != len(sessions):
         raise ConcatenationError("The same session path was supplied more than once")
@@ -302,7 +331,7 @@ def _validate_compatibility(sessions: list[SourceSession]) -> None:
 
     reference = sessions[0]
     for session in sessions[1:]:
-        if session.schemas != reference.schemas:
+        if validate_schemas and session.schemas != reference.schemas:
             raise ConcatenationError(
                 f"Behaviour stream schemas differ between {reference.path.name} "
                 f"and {session.path.name}"
@@ -462,6 +491,54 @@ def _configured_gap_or_fallback(
     return fallback_gap, "fallback"
 
 
+def _complete_lap_details(
+    session: SourceSession, session_slice: SessionSlice
+) -> tuple[
+    dict[str, Any],
+    list[LogicalLandmark],
+    list[tuple[float, float]],
+    list[float],
+    int,
+]:
+    """Return the data used to decide how many complete laps were reached."""
+    trial = _trial_settings(session)
+    configured_landmarks = trial.get("landmarks")
+    if not isinstance(configured_landmarks, list) or not configured_landmarks:
+        raise ConcatenationError(f"No configured landmarks found in {session.path}")
+    landmarks_per_lap = len(configured_landmarks)
+
+    if "current-landmark" in session.schemas:
+        landmarks = _logical_landmarks(session, session_slice)
+    else:
+        landmarks = []
+
+    source_position_samples = _position_samples(session)
+    retained_positions = [
+        position
+        for seconds, position in source_position_samples
+        if _is_retained(seconds, session_slice)
+    ]
+    if not retained_positions:
+        raise ConcatenationError(f"No retained position data in {session.path}")
+
+    complete_laps = len(landmarks) // landmarks_per_lap
+    final_reached_position = retained_positions[-1]
+    while (
+        complete_laps > 0
+        and final_reached_position
+        < landmarks[complete_laps * landmarks_per_lap - 1].exit
+    ):
+        complete_laps -= 1
+
+    return (
+        trial,
+        landmarks,
+        source_position_samples,
+        retained_positions,
+        complete_laps,
+    )
+
+
 def _plan_session_slices(
     sessions: list[SourceSession], fallback_gap: float
 ) -> tuple[list[SessionSlice], list[BoundarySplice]]:
@@ -474,29 +551,14 @@ def _plan_session_slices(
     for index in range(len(sessions) - 1):
         session = sessions[index]
         next_session = sessions[index + 1]
-        trial = _trial_settings(session)
-        configured_landmarks = trial.get("landmarks")
-        if not isinstance(configured_landmarks, list) or not configured_landmarks:
-            raise ConcatenationError(f"No configured landmarks found in {session.path}")
-        landmarks_per_lap = len(configured_landmarks)
-
-        landmarks = _logical_landmarks(session, slices[index])
-        source_position_samples = _position_samples(session)
-        retained_positions = [
-            position
-            for seconds, position in source_position_samples
-            if _is_retained(seconds, slices[index])
-        ]
-        if not retained_positions:
-            raise ConcatenationError(f"No retained position data in {session.path}")
-        final_reached_position = retained_positions[-1]
-        complete_laps = len(landmarks) // landmarks_per_lap
-        while (
-            complete_laps > 0
-            and final_reached_position
-            < landmarks[complete_laps * landmarks_per_lap - 1].exit
-        ):
-            complete_laps -= 1
+        (
+            trial,
+            landmarks,
+            source_position_samples,
+            _,
+            complete_laps,
+        ) = _complete_lap_details(session, slices[index])
+        landmarks_per_lap = len(trial["landmarks"])
         if complete_laps == 0:
             raise ConcatenationError(
                 f"No complete lap found before the restart in {session.path}"
@@ -881,11 +943,36 @@ def concatenate_sessions(
     fallback_landmark_gap: float = DEFAULT_LANDMARK_GAP,
 ) -> Path:
     """Concatenate two or more restarted sessions and return the output path."""
-    sessions = sorted(
+    all_sessions = sorted(
         (_inspect_session(Path(path)) for path in session_paths),
         key=lambda session: session.acquired_at,
     )
-    _validate_compatibility(sessions)
+    # Check identity and settings for every supplied recording. Stream-schema
+    # differences are allowed here because a lap-less recording may not have
+    # started all Bonsai streams before it was interrupted.
+    _validate_compatibility(all_sessions, validate_schemas=False)
+
+    complete_lap_counts = {
+        session.path: _complete_lap_details(session, SessionSlice())[-1]
+        for session in all_sessions
+    }
+    sessions = [
+        session
+        for session in all_sessions
+        if complete_lap_counts[session.path] > 0
+    ]
+    discarded_sessions = [
+        session
+        for session in all_sessions
+        if complete_lap_counts[session.path] == 0
+    ]
+    if not sessions:
+        raise ConcatenationError(
+            "None of the supplied sessions contains a complete lap"
+        )
+    # Only recordings that contribute rows need mutually compatible schemas.
+    _validate_compatibility(sessions, require_multiple=False)
+
     slices, boundaries = _plan_session_slices(sessions, fallback_landmark_gap)
     retained = [
         _retained_stats(session, session_slice)
@@ -914,7 +1001,7 @@ def concatenate_sessions(
     try:
         originals = staging / "original_sessions"
         originals.mkdir()
-        for session in sessions:
+        for session in all_sessions:
             shutil.copytree(session.path, originals / session.path.name)
 
         destination_behav = staging / "behav"
@@ -940,17 +1027,46 @@ def concatenate_sessions(
                 staging, expected_analog_bytes=analog_bytes
             )
 
-        manifest = {
-            "created_at": created.isoformat(),
-            "output_name": output_name,
-            "sources": [
+        retained_by_path = {
+            session.path: (session_slice, stats, offset)
+            for session, session_slice, stats, offset in zip(
+                sessions, slices, retained, offsets
+            )
+        }
+        source_manifest = []
+        for session in all_sessions:
+            retained_details = retained_by_path.get(session.path)
+            if retained_details is None:
+                source_manifest.append(
+                    {
+                        "path": str(session.path),
+                        "acquired_at": session.acquired_at.isoformat(),
+                        "rows": session.row_counts,
+                        "retained_rows": {
+                            stream: 0 for stream in session.row_counts
+                        },
+                        "discarded_rows": session.row_counts,
+                        "slice": {
+                            "start_seconds_inclusive": None,
+                            "end_seconds_exclusive": None,
+                        },
+                        "offsets": None,
+                        "excluded_from_merge": True,
+                        "exclusion_reason": "no_complete_lap",
+                    }
+                )
+                continue
+
+            session_slice, stats, offset = retained_details
+            source_manifest.append(
                 {
                     "path": str(session.path),
                     "acquired_at": session.acquired_at.isoformat(),
                     "rows": session.row_counts,
                     "retained_rows": stats.row_counts,
                     "discarded_rows": {
-                        stream: session.row_counts[stream] - stats.row_counts.get(stream, 0)
+                        stream: session.row_counts[stream]
+                        - stats.row_counts.get(stream, 0)
                         for stream in session.row_counts
                     },
                     "slice": {
@@ -962,10 +1078,21 @@ def concatenate_sessions(
                         "position": offset.position,
                         "buffer": offset.buffer,
                     },
+                    "excluded_from_merge": False,
+                    "exclusion_reason": None,
                 }
-                for session, session_slice, stats, offset in zip(
-                    sessions, slices, retained, offsets
-                )
+            )
+
+        manifest = {
+            "created_at": created.isoformat(),
+            "output_name": output_name,
+            "sources": source_manifest,
+            "excluded_sources": [
+                {
+                    "path": str(session.path),
+                    "reason": "no_complete_lap",
+                }
+                for session in discarded_sessions
             ],
             "splices": [
                 {
