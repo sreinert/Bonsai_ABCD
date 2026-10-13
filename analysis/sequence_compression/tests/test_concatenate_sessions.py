@@ -229,6 +229,48 @@ def test_rejects_incompatible_settings(tmp_path: Path) -> None:
         )
 
 
+def test_allows_safe_rig_setting_changes_between_restarts(tmp_path: Path) -> None:
+    source_root = tmp_path / "cohort2" / "source"
+    first = _make_session(source_root, "20260827T140000")
+    second = _make_session(source_root, "20260827T150000")
+
+    for session, draw_distance, lick_sensitivity in (
+        (first, 30.0, 0.25),
+        (second, 40.0, 0.5),
+    ):
+        rig_file = session / "behav" / "rig-settings" / "rig-settings.json"
+        rig = json.loads(rig_file.read_text(encoding="utf-8"))
+        rig["value"]["drawSetsWhenDistanceFromEndReached"] = draw_distance
+        rig["value"]["lickDetector"] = {"sensitivity": lick_sensitivity}
+        rig_file.write_text(json.dumps(rig), encoding="utf-8")
+
+    output = concatenate_sessions(
+        [first, second],
+        output_root=tmp_path / "cohort2" / "combined",
+        creation_time=datetime(2026, 10, 13, 17, 0, 0),
+    )
+    assert output.is_dir()
+
+
+def test_rejects_other_rig_setting_changes(tmp_path: Path) -> None:
+    source_root = tmp_path / "cohort2" / "source"
+    first = _make_session(source_root, "20260827T140000")
+    second = _make_session(source_root, "20260827T150000")
+
+    for session, sample_rate in ((first, 1000), (second, 2000)):
+        rig_file = session / "behav" / "rig-settings" / "rig-settings.json"
+        rig = json.loads(rig_file.read_text(encoding="utf-8"))
+        rig["value"]["sampleRate"] = sample_rate
+        rig_file.write_text(json.dumps(rig), encoding="utf-8")
+
+    with pytest.raises(ConcatenationError, match="rig-settings differ"):
+        concatenate_sessions(
+            [first, second],
+            output_root=tmp_path / "cohort2" / "combined",
+            creation_time=datetime(2026, 10, 13, 17, 0, 0),
+        )
+
+
 def test_complete_first_session_uses_fallback_gap(tmp_path: Path) -> None:
     source_root = tmp_path / "cohort2" / "source"
     first = _make_session(

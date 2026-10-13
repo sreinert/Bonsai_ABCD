@@ -296,19 +296,52 @@ def _read_settings(path: Path) -> Any:
     return document.get("value") if isinstance(document, dict) else document
 
 
-def _first_difference(left: Any, right: Any, location: str = "value") -> str | None:
+def _ignored_rig_setting(location: str) -> bool:
+    """Return whether a rig-setting path is safe to vary between restarts."""
+    normalized_path = re.sub(r"[^a-z0-9]", "", location.lower())
+    leaf = re.sub(r"[^a-z0-9]", "", location.rsplit(".", 1)[-1].lower())
+    if leaf == "drawsetswhendistancefromendreached":
+        return True
+    return "lick" in normalized_path and any(
+        term in normalized_path for term in ("sensitivity", "threshold")
+    )
+
+
+def _first_difference(
+    left: Any,
+    right: Any,
+    location: str = "value",
+    ignored_path=None,
+) -> str | None:
+    if ignored_path is not None and ignored_path(location):
+        return None
     if type(left) is not type(right):
         return f"{location}: {type(left).__name__} != {type(right).__name__}"
     if isinstance(left, dict):
-        if left.keys() != right.keys():
-            missing_left = sorted(right.keys() - left.keys())
-            missing_right = sorted(left.keys() - right.keys())
+        left_keys = {
+            key
+            for key in left
+            if ignored_path is None or not ignored_path(f"{location}.{key}")
+        }
+        right_keys = {
+            key
+            for key in right
+            if ignored_path is None or not ignored_path(f"{location}.{key}")
+        }
+        if left_keys != right_keys:
+            missing_left = sorted(right_keys - left_keys)
+            missing_right = sorted(left_keys - right_keys)
             return (
                 f"{location}: differing keys "
                 f"(only first={missing_right}, only second={missing_left})"
             )
-        for key in left:
-            difference = _first_difference(left[key], right[key], f"{location}.{key}")
+        for key in left_keys:
+            difference = _first_difference(
+                left[key],
+                right[key],
+                f"{location}.{key}",
+                ignored_path,
+            )
             if difference:
                 return difference
         return None
@@ -317,7 +350,10 @@ def _first_difference(left: Any, right: Any, location: str = "value") -> str | N
             return f"{location}: list lengths {len(left)} != {len(right)}"
         for index, (left_item, right_item) in enumerate(zip(left, right)):
             difference = _first_difference(
-                left_item, right_item, f"{location}[{index}]"
+                left_item,
+                right_item,
+                f"{location}[{index}]",
+                ignored_path,
             )
             if difference:
                 return difference
@@ -351,8 +387,13 @@ def _validate_compatibility(
         for directory in ("session-settings", "rig-settings"):
             first_file = _settings_file(reference.path, directory)
             next_file = _settings_file(session.path, directory)
+            ignored_path = (
+                _ignored_rig_setting if directory == "rig-settings" else None
+            )
             difference = _first_difference(
-                _read_settings(first_file), _read_settings(next_file)
+                _read_settings(first_file),
+                _read_settings(next_file),
+                ignored_path=ignored_path,
             )
             if difference:
                 raise ConcatenationError(
