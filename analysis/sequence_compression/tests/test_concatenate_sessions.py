@@ -417,6 +417,34 @@ def test_concatenate_discards_intermediate_session_without_complete_lap(
     assert manifest["splices"][0]["next_source"] == third.name
 
 
+def test_concatenate_ignores_macos_appledouble_sidecar_files(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "cohort2" / "source"
+    first = _make_session(source_root, "20261013T120651")
+    second = _make_session(source_root, "20261013T121237")
+
+    for session in (first, second):
+        (session / "behav" / "reward" / "._reward.csv").write_bytes(
+            b"\x00\x05\x16\x07\x00\x02\x00\x00\xb0"
+        )
+        (session / "behav" / "analog-data" / "._analog-data.bin").write_bytes(
+            b"AppleDouble metadata"
+        )
+        (session / "behav" / "session-settings" / "._settings.json").write_bytes(
+            b"AppleDouble metadata"
+        )
+
+    output = concatenate_sessions(
+        [first, second],
+        output_root=tmp_path / "cohort2" / "combined",
+        creation_time=datetime(2026, 10, 13, 16, 30, 0),
+    )
+
+    assert output.is_dir()
+    assert not list((output / "behav").rglob("._*"))
+
+
 def test_select_session_folders_prefers_combined_session_once(
     tmp_path: Path,
 ) -> None:

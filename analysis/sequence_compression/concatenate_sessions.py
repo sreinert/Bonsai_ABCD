@@ -137,11 +137,19 @@ def _finite_float(value: str, *, description: str) -> float:
 
 
 def _csv_files(session: Path, stream: str) -> list[Path]:
-    return sorted((session / "behav" / stream).glob("*.csv"))
+    return sorted(
+        path
+        for path in (session / "behav" / stream).glob("*.csv")
+        if not path.name.startswith("._")
+    )
 
 
 def _binary_files(session: Path) -> list[Path]:
-    return sorted((session / "behav" / "analog-data").glob("*.bin"))
+    return sorted(
+        path
+        for path in (session / "behav" / "analog-data").glob("*.bin")
+        if not path.name.startswith("._")
+    )
 
 
 def _iter_dict_rows(paths: Iterable[Path]):
@@ -266,7 +274,11 @@ def _inspect_session(path: Path) -> SourceSession:
 
 def _settings_file(session: Path, directory: str) -> Path:
     folder = session / "behav" / directory
-    candidates = sorted(folder.glob("*.json")) or sorted(folder.glob("*.csv"))
+    candidates = sorted(
+        path for path in folder.glob("*.json") if not path.name.startswith("._")
+    ) or sorted(
+        path for path in folder.glob("*.csv") if not path.name.startswith("._")
+    )
     if len(candidates) != 1:
         raise ConcatenationError(
             f"Expected exactly one JSON-compatible settings file in {folder}; "
