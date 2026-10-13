@@ -20,6 +20,7 @@ import inspect_run  # noqa: E402
 import prepare_session  # noqa: E402
 import run_detection_experiment  # noqa: E402
 import run_roi_detection  # noqa: E402
+import run_trace_extraction  # noqa: E402
 
 
 def source_row(tmp_path: Path, *, task_id: int, session: str, candidate: str) -> dict[str, object]:
@@ -148,6 +149,84 @@ def test_detection_forbids_downstream_outputs() -> None:
         "iscell.npy",
         "spks.npy",
     }
+
+
+def test_trace_configuration_is_reproducible_and_skips_registration() -> None:
+    settings = {
+        "fs": 10.0,
+        "tau": 1.0,
+        "torch_device": "cpu",
+        "run": {
+            "do_registration": 2,
+            "do_detection": False,
+            "do_deconvolution": False,
+        },
+        "classification": {
+            "classifier_path": "/tmp/user.npy",
+            "use_builtin_classifier": False,
+            "preclassify": 0.5,
+        },
+    }
+    configured = run_trace_extraction.configure_settings(settings, "cuda")
+    assert configured["fs"] == config.FS
+    assert configured["tau"] == config.TAU
+    assert configured["torch_device"] == "cuda"
+    assert configured["run"] == {
+        "do_registration": 0,
+        "do_detection": False,
+        "do_deconvolution": True,
+    }
+    assert configured["classification"] == {
+        "classifier_path": None,
+        "use_builtin_classifier": True,
+        "preclassify": 0.0,
+    }
+
+
+def test_trace_loader_requires_completed_reviewed_detection(tmp_path: Path) -> None:
+    detection_dir = tmp_path / "roi_detection" / "cpsam"
+    detection_dir.mkdir(parents=True)
+    stat = np.asarray(
+        [{
+            "ypix": np.array([1, 1]),
+            "xpix": np.array([1, 2]),
+            "lam": np.ones(2),
+            "overlap": np.zeros(2, dtype=bool),
+        }],
+        dtype=object,
+    )
+    np.save(detection_dir / "stat.npy", stat)
+    (detection_dir / "status.json").write_text(
+        json.dumps({"state": "complete", "n_rois": 1}), encoding="utf-8"
+    )
+
+    loaded, status = run_trace_extraction.load_reviewed_detection(detection_dir)
+
+    assert len(loaded) == 1
+    assert status["state"] == "complete"
+
+
+def test_trace_output_validation_rejects_wrong_frame_count() -> None:
+    stat = np.asarray([{}], dtype=object)
+    trace = np.ones((1, 4))
+    with pytest.raises(RuntimeError, match="expected.*5"):
+        run_trace_extraction.validate_outputs(
+            stat, trace, trace, trace, trace, trace, np.ones((1, 2)), 5
+        )
+
+
+def test_trace_binary_size_validation(tmp_path: Path) -> None:
+    paths = [tmp_path / "data.bin", tmp_path / "data_chan2.bin"]
+    for path in paths:
+        path.write_bytes(bytes(3 * 4 * 5 * 2))
+    assert run_trace_extraction.validate_registered_binary_sizes(
+        {"Ly": 3, "Lx": 4, "nframes": 5}, paths
+    ) == 120
+    paths[1].write_bytes(b"too short")
+    with pytest.raises(RuntimeError, match="expected 120"):
+        run_trace_extraction.validate_registered_binary_sizes(
+            {"Ly": 3, "Lx": 4, "nframes": 5}, paths
+        )
 
 
 def test_detection_experiment_parses_cellpose_parameters() -> None:

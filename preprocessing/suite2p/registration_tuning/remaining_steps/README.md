@@ -206,3 +206,42 @@ A valid experiment that detects nothing completes with
 `"outcome": "zero_rois"` and still saves its input image, empty masks, settings,
 and QC report. It does not produce `F.npy`, `Fneu.npy`, `iscell.npy`, or
 `spks.npy`.
+
+## 4. Extract traces from the reviewed CPSAM ROIs
+
+Once the default CPSAM report has been reviewed, submit trace extraction for
+that already-registered run:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_trace_extraction.sh \
+  /absolute/path/to/chosen-registration-cpsam
+```
+
+The job reads `roi_detection/cpsam/stat.npy`, `data.bin`, and
+`data_chan2.bin`. It does not rerun registration or ROI detection and opens
+both registered binaries read-only. Results are written to the separate
+directory:
+
+```text
+<run_dir>/trace_extraction/cpsam
+```
+
+That directory contains the standard Suite2p `F.npy`, `Fneu.npy`,
+`F_chan2.npy`, `Fneu_chan2.npy`, `stat.npy`, `iscell.npy`, `spks.npy`, and
+`ops.npy` outputs. The built-in Suite2p classifier is selected explicitly so
+results do not depend on a user-specific classifier in the cluster home
+directory. `status.json` and `provenance.json` record the exact detection
+input hash, settings, software versions, ROI/cell/frame counts, timings, and
+registered-binary metadata before and after extraction.
+
+The extraction job refuses to overwrite either an earlier trace result or
+standard trace files in the registered `suite2p/plane0` directory. To use a
+different reviewed detection experiment, pass its directory as the second
+argument. An optional third argument selects another isolated output folder:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_trace_extraction.sh \
+  /absolute/path/to/chosen-registration-cpsam \
+  /absolute/path/to/chosen-registration-cpsam/roi_detection/experiments/NAME \
+  /absolute/path/to/chosen-registration-cpsam/trace_extraction/NAME
+```
