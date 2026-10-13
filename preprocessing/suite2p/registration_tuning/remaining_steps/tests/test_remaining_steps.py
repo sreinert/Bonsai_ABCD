@@ -18,6 +18,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 import config  # noqa: E402
 import inspect_run  # noqa: E402
 import prepare_session  # noqa: E402
+import run_detection_experiment  # noqa: E402
 import run_roi_detection  # noqa: E402
 
 
@@ -147,6 +148,58 @@ def test_detection_forbids_downstream_outputs() -> None:
         "iscell.npy",
         "spks.npy",
     }
+
+
+def test_detection_experiment_parses_cellpose_parameters() -> None:
+    assert run_detection_experiment.parse_cellpose_params(
+        ["min_size=5", "normalize=false", "tile_overlap=0.2"]
+    ) == {"min_size": 5, "normalize": False, "tile_overlap": 0.2}
+    with pytest.raises(ValueError, match="dedicated"):
+        run_detection_experiment.parse_cellpose_params(["diameter=10"])
+
+
+def test_detection_experiment_builds_each_supported_input() -> None:
+    mean = np.full((3, 4), 2.0)
+    maximum = np.full((3, 4), 4.0)
+    ratio, ratio_weights = run_detection_experiment.build_cellpose_input(
+        mean, maximum, "max_proj / meanImg", [12.0, 12.0], 0
+    )
+    mean_input, mean_weights = run_detection_experiment.build_cellpose_input(
+        mean, maximum, "meanImg", [12.0, 12.0], 0
+    )
+    max_input, max_weights = run_detection_experiment.build_cellpose_input(
+        mean, maximum, "max_proj", [12.0, 12.0], 0
+    )
+    assert np.allclose(ratio, np.log(2))
+    assert np.array_equal(ratio_weights, maximum)
+    assert np.array_equal(mean_input, mean)
+    assert np.isfinite(mean_weights).all()
+    assert np.array_equal(max_input, maximum)
+    assert np.array_equal(max_weights, maximum)
+
+
+def test_detection_experiment_rejects_cyto3_under_cellpose4() -> None:
+    class Models:
+        MODEL_NAMES = ["cpsam", "cpsam_v2"]
+
+    with pytest.raises(RuntimeError, match="requires Cellpose 3"):
+        run_detection_experiment.validate_model("4.2.1.1", "cyto3", Models)
+    assert run_detection_experiment.validate_model("4.2.1.1", "cpsam", Models) == "cpsam"
+
+
+def test_detection_experiment_zero_roi_qc_is_saved(tmp_path: Path) -> None:
+    outputs = run_detection_experiment.save_qc(
+        tmp_path,
+        np.zeros((4, 4)),
+        np.zeros((6, 6)),
+        np.zeros((4, 4), dtype=np.int32),
+        np.zeros((6, 6), dtype=np.int32),
+        np.asarray([], dtype=object),
+        "zero ROI test",
+    )
+    assert Path(outputs["qc"]).is_file()
+    assert Path(outputs["html"]).is_file()
+    assert np.load(tmp_path / "roi_areas.npy").size == 0
 
 
 def test_inspector_reads_standalone_resolved_configuration(tmp_path: Path) -> None:

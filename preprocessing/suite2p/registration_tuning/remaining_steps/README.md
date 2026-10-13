@@ -97,3 +97,79 @@ python preprocessing/suite2p/registration_tuning/remaining_steps/inspect_run.py 
 
 The same information remains available in `provenance.json`. Slurm stderr and
 stdout are stored under `<output-root>/.workflow_manifests/logs`.
+
+## Repeat detection without registering again
+
+After registration has succeeded, use `submit_detection_experiment.sh` for
+each named detection attempt. This submits one detection job only. It reads the
+existing `data.bin`; it neither submits registration nor changes the registered
+binaries. Every experiment must have a new name because prior results are never
+overwritten.
+
+For example, rerun Cellpose-SAM on the binned mean image:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_detection_experiment.sh \
+  /absolute/path/to/chosen-registration-cpsam \
+  cpsam-meanimg \
+  --model cpsam \
+  --input-image meanImg
+```
+
+Or make Cellpose more permissive and change the assumed cell diameter:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_detection_experiment.sh \
+  /absolute/path/to/chosen-registration-cpsam \
+  cpsam-meanimg-d10-prob-minus1 \
+  --model cpsam \
+  --input-image meanImg \
+  --diameter-y 10 --diameter-x 10 \
+  --cellprob-threshold -1
+```
+
+Additional `CellposeModel.eval` settings can be supplied with repeatable
+`--cellpose-param NAME=JSON_VALUE` options, for example
+`--cellpose-param min_size=5`. The exact settings and model file/hash are saved
+in the experiment directory.
+
+The old Suite2p `anatomical_only=2` setting corresponds here to Cellpose
+detection with `--input-image meanImg`. `connected` is a parameter of
+Suite2p's functional sourcery detector and has no effect on Cellpose, so this
+launcher deliberately does not pretend to apply it.
+
+Cellpose 4.2.1.1 cannot run the legacy `cyto3` network. Use a separate
+environment with Cellpose 3.1.1.2 so the existing registration environment is
+not changed. One way to make it is:
+
+```bash
+conda create --clone suite2p-reg-1.1.0 -n suite2p-cellpose3
+conda activate suite2p-cellpose3
+python -m pip install 'cellpose==3.1.1.2'
+python -c 'import importlib.metadata as m; print(m.version("suite2p"), m.version("cellpose"))'
+```
+
+Then submit with that environment's Python executable:
+
+```bash
+PYTHON_EXECUTABLE="$CONDA_PREFIX/bin/python" \
+  bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_detection_experiment.sh \
+  /absolute/path/to/chosen-registration-cpsam \
+  cyto3-meanimg \
+  --model cyto3 \
+  --input-image meanImg
+```
+
+The runner checks the installed model list and stops instead of allowing
+Cellpose to silently substitute another model. Expensive binned mean/max
+images are cached under `roi_detection/prepared_images` and reused across
+experiments with the same binning settings. Each attempt writes a report to:
+
+```text
+<run_dir>/roi_detection/experiments/<experiment-name>/index.html
+```
+
+A valid experiment that detects nothing completes with
+`"outcome": "zero_rois"` and still saves its input image, empty masks, settings,
+and QC report. It does not produce `F.npy`, `Fneu.npy`, `iscell.npy`, or
+`spks.npy`.
