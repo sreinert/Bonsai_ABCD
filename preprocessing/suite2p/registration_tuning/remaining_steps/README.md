@@ -33,6 +33,20 @@ This removes only
 files and all raw data remain untouched. The removed Suite2p directory is not
 recoverable from this command.
 
+If registration completed but a later stage failed, preserve the registered
+movies and resume at CPSAM detection:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_full_session_pipeline.sh \
+  --resume sub-02 ses-full002_date-20260818T134310
+```
+
+Resume validates the registration status, raw-TIFF metadata, registered mean
+image, bad-frame mask, and both registered binary sizes before submission. On
+the newly allocated node it removes only incomplete detection, trace, and
+combined-QC products, retaining registration outputs, registration QC, and old
+Slurm logs. `--resume` and `--overwrite` cannot be combined.
+
 For a raw input under:
 
 ```text

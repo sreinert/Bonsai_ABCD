@@ -2,11 +2,15 @@
 set -euo pipefail
 
 overwrite=false
+resume=false
 positional=()
 for argument in "$@"; do
   case "${argument}" in
     --overwrite)
       overwrite=true
+      ;;
+    --resume)
+      resume=true
       ;;
     --*)
       echo "Unknown option: ${argument}" >&2
@@ -19,7 +23,11 @@ for argument in "$@"; do
 done
 
 if [[ ${#positional[@]} -ne 2 ]]; then
-  echo "Usage: $0 [--overwrite] MOUSE_ID FULL_RAW_SESSION_ID" >&2
+  echo "Usage: $0 [--overwrite|--resume] MOUSE_ID FULL_RAW_SESSION_ID" >&2
+  exit 2
+fi
+if [[ "${overwrite}" == true && "${resume}" == true ]]; then
+  echo "--overwrite and --resume are mutually exclusive" >&2
   exit 2
 fi
 
@@ -55,6 +63,9 @@ prepare_options=()
 if [[ "${overwrite}" == true ]]; then
   prepare_options+=(--overwrite)
 fi
+if [[ "${resume}" == true ]]; then
+  prepare_options+=(--resume)
+fi
 
 "${python_executable}" "${script_dir}/prepare_full_session_pipeline.py" \
   "${mouse_id}" "${session_id}" \
@@ -75,6 +86,7 @@ plane_dir=$(json_field plane_dir)
 qc_dir=$(json_field qc_dir)
 workflow_dir=$(json_field workflow_dir)
 report=$(json_field report)
+start_stage=$(json_field start_stage)
 
 if [[ "${already_complete}" == "True" ]]; then
   echo "Suite2p pipeline is already complete."
@@ -98,13 +110,13 @@ submission=$(sbatch --parsable \
   --output="${log_dir}/full_pipeline_%j.out" \
   --error="${log_dir}/full_pipeline_%j.err" \
   "${script_dir}/run_full_session_pipeline.sbatch" \
-  "${manifest}" "${run_dir}" "${script_dir}" "${python_executable}")
+  "${manifest}" "${run_dir}" "${script_dir}" "${python_executable}" "${start_stage}")
 job_id=${submission%%;*}
 
 "${python_executable}" - \
   "${workflow_dir}/submission.json" "${workflow_dir}/status.json" \
   "${mouse_id}" "${session_id}" "${run_dir}" "${mail_user}" "${exclude_nodes}" \
-  "${job_id}" <<'PY'
+  "${job_id}" "${start_stage}" <<'PY'
 import json
 import os
 import sys
@@ -113,7 +125,7 @@ from pathlib import Path
 
 (
     submission_path, status_path, mouse_id, session_id, run_dir, mail_user,
-    exclude_nodes, job_id,
+    exclude_nodes, job_id, start_stage,
 ) = sys.argv[1:]
 payload = {
     "state": "submitted",
@@ -132,7 +144,12 @@ payload = {
         "cpus": 4,
         "memory_gb": 64,
         "hours": 24,
-        "stages": ["registration", "detection", "trace_extraction", "qc"],
+        "start_stage": start_stage,
+        "stages": (
+            ["detection", "trace_extraction", "qc"]
+            if start_stage == "detection"
+            else ["registration", "detection", "trace_extraction", "qc"]
+        ),
     },
 }
 for filename in (submission_path, status_path):
@@ -144,8 +161,13 @@ PY
 
 echo "Mouse/session:    ${mouse_id} / ${session_id}"
 echo "Overwrite:        ${overwrite}"
+echo "Resume:           ${resume} (start stage: ${start_stage})"
 echo "Suite2p output:   ${plane_dir}"
-echo "Pipeline job:     ${job_id} (registration -> detection -> traces -> QC)"
+if [[ "${start_stage}" == detection ]]; then
+  echo "Pipeline job:     ${job_id} (reuse registration -> detection -> traces -> QC)"
+else
+  echo "Pipeline job:     ${job_id} (registration -> detection -> traces -> QC)"
+fi
 echo "Excluded GPUs:    ${exclude_nodes:-<none>}"
 echo "Email:            ${mail_user} (BEGIN,END,FAIL)"
 echo "Logs:             ${log_dir}"

@@ -10,8 +10,8 @@
 
 set -euo pipefail
 
-if [[ $# -ne 4 ]]; then
-  echo "Usage: $0 MANIFEST RUN_DIR SCRIPT_DIR PYTHON_EXECUTABLE" >&2
+if [[ $# -ne 5 ]]; then
+  echo "Usage: $0 MANIFEST RUN_DIR SCRIPT_DIR PYTHON_EXECUTABLE START_STAGE" >&2
   exit 2
 fi
 
@@ -19,6 +19,7 @@ manifest=$1
 run_dir=$2
 script_dir=$3
 python_executable=$4
+start_stage=$5
 export PYTHONNOUSERSITE=1
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
@@ -30,4 +31,5 @@ mkdir -p "${MPLCONFIGDIR}"
   --manifest "${manifest}" \
   --run-dir "${run_dir}" \
   --script-dir "${script_dir}" \
-  --python-executable "${python_executable}"
+  --python-executable "${python_executable}" \
+  --start-stage "${start_stage}"

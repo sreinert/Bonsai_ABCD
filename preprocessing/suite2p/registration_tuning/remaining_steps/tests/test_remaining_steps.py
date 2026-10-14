@@ -22,6 +22,7 @@ import run_detection_experiment  # noqa: E402
 import generate_trace_qc  # noqa: E402
 import generate_full_session_qc  # noqa: E402
 import prepare_full_session_pipeline  # noqa: E402
+import run_full_session_pipeline  # noqa: E402
 import run_roi_detection  # noqa: E402
 import run_trace_extraction  # noqa: E402
 
@@ -322,6 +323,154 @@ def test_full_pipeline_overwrite_removes_only_suite2p(tmp_path: Path) -> None:
     assert paths["overwrote_existing"] is True
 
 
+def make_resumable_registration(
+    tmp_path: Path, mouse: str, session: str
+) -> tuple[Path, Path]:
+    funcimg = tmp_path / "rawdata/cohort2" / mouse / session / "funcimg"
+    funcimg.mkdir(parents=True)
+    tiff = funcimg / "full.tif"
+    tifffile.imwrite(tiff, np.zeros((2, 3), dtype=np.uint16))
+    suite2p_dir = tmp_path / "processed/cohort2" / mouse / "full002" / "suite2p"
+    plane_dir = suite2p_dir / "plane0"
+    workflow_dir = suite2p_dir / ".workflow"
+    plane_dir.mkdir(parents=True)
+    workflow_dir.mkdir(parents=True)
+    db = {"Ly": 3, "Lx": 4, "nframes": 5}
+    np.save(plane_dir / "db.npy", db)
+    np.save(
+        plane_dir / "reg_outputs.npy",
+        {
+            "meanImg": np.ones((3, 4)),
+            "badframes": np.zeros(5, dtype=bool),
+            "yrange": [0, 3],
+            "xrange": [0, 4],
+        },
+    )
+    np.save(plane_dir / "ops.npy", {"registration": "complete"})
+    for name in ("data.bin", "data_chan2.bin"):
+        (plane_dir / name).write_bytes(bytes(3 * 4 * 5 * 2))
+    snapshot = prepare_full_session_pipeline.file_snapshot([tiff.resolve()])
+    (workflow_dir / "registration_status.json").write_text(
+        json.dumps({"state": "complete", "source_snapshot_after": snapshot}),
+        encoding="utf-8",
+    )
+    return suite2p_dir, tiff
+
+
+def test_full_pipeline_resume_validates_and_preserves_registration(tmp_path: Path) -> None:
+    mouse = "sub-02"
+    session = "ses-full002_date-20260818T134310"
+    suite2p_dir, _ = make_resumable_registration(tmp_path, mouse, session)
+    plane_dir = suite2p_dir / "plane0"
+    detection_dir = suite2p_dir / "qc" / "detection"
+    detection_dir.mkdir(parents=True)
+    (detection_dir / "status.json").write_text('{"state":"failed"}', encoding="utf-8")
+    np.save(plane_dir / "stat.npy", np.asarray([], dtype=object))
+
+    _, paths = prepare_full_session_pipeline.build_pipeline(
+        tmp_path, mouse, session, resume=True
+    )
+
+    assert paths["resume"] is True
+    assert paths["start_stage"] == "detection"
+    # Preparation validates only; cleanup happens after the new Slurm job starts.
+    assert (plane_dir / "data.bin").is_file()
+    assert (plane_dir / "stat.npy").is_file()
+
+    removed = prepare_full_session_pipeline.clean_downstream_outputs(suite2p_dir)
+    assert str(plane_dir / "stat.npy") in removed
+    assert not detection_dir.exists()
+    assert (plane_dir / "data.bin").is_file()
+    assert (plane_dir / "data_chan2.bin").is_file()
+    assert (plane_dir / "db.npy").is_file()
+    assert (plane_dir / "reg_outputs.npy").is_file()
+    assert (plane_dir / "ops.npy").is_file()
+    assert (suite2p_dir / ".workflow/registration_status.json").is_file()
+
+
+def test_full_pipeline_resume_rejects_invalid_registration(tmp_path: Path) -> None:
+    mouse = "sub-02"
+    session = "ses-full002_date-20260818T134310"
+    suite2p_dir, _ = make_resumable_registration(tmp_path, mouse, session)
+    (suite2p_dir / "plane0/data.bin").write_bytes(b"short")
+
+    with pytest.raises(RuntimeError, match="expected 120"):
+        prepare_full_session_pipeline.build_pipeline(
+            tmp_path, mouse, session, resume=True
+        )
+
+
+def test_full_pipeline_resume_requires_existing_registration(tmp_path: Path) -> None:
+    mouse = "sub-02"
+    session = "ses-full002_date-20260818T134310"
+    funcimg = tmp_path / "rawdata/cohort2" / mouse / session / "funcimg"
+    funcimg.mkdir(parents=True)
+    tifffile.imwrite(funcimg / "full.tif", np.zeros((2, 3), dtype=np.uint16))
+
+    with pytest.raises(FileNotFoundError, match="no existing Suite2p registration"):
+        prepare_full_session_pipeline.build_pipeline(
+            tmp_path, mouse, session, resume=True
+        )
+
+
+def test_full_pipeline_resume_and_overwrite_are_mutually_exclusive(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        prepare_full_session_pipeline.build_pipeline(
+            tmp_path, "sub-02", "session", resume=True, overwrite=True
+        )
+
+
+def test_full_pipeline_runner_resume_skips_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mouse = "sub-02"
+    session = "ses-full002_date-20260818T134310"
+    suite2p_dir, _ = make_resumable_registration(tmp_path, mouse, session)
+    row, paths = prepare_full_session_pipeline.build_pipeline(
+        tmp_path, mouse, session, resume=True
+    )
+    manifest = suite2p_dir / ".workflow/manifest.csv"
+    prepare_full_session_pipeline.write_csv(manifest, [row])
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], check: bool) -> None:
+        assert check
+        commands.append(command)
+
+    monkeypatch.setattr(run_full_session_pipeline.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "run_full_session_pipeline.py",
+            "--manifest",
+            str(manifest),
+            "--run-dir",
+            str(paths["run_dir"]),
+            "--script-dir",
+            str(SCRIPT_DIR),
+            "--python-executable",
+            sys.executable,
+            "--start-stage",
+            "detection",
+        ],
+    )
+
+    run_full_session_pipeline.main()
+
+    invoked_scripts = [Path(command[1]).name for command in commands]
+    assert invoked_scripts == [
+        "run_roi_detection.py",
+        "run_trace_extraction.py",
+        "generate_full_session_qc.py",
+    ]
+    status = json.loads(
+        (suite2p_dir / ".workflow/status.json").read_text(encoding="utf-8")
+    )
+    assert status["stages"]["registration"]["state"] == "reused"
+    assert status["start_stage"] == "detection"
+
+
 def test_full_pipeline_launcher_submits_one_job() -> None:
     launcher = SCRIPT_DIR / "submit_full_session_pipeline.sh"
     text = launcher.read_text(encoding="utf-8")
@@ -329,6 +478,8 @@ def test_full_pipeline_launcher_submits_one_job() -> None:
     assert "gpu-350-02,gpu-350-04" in text
     assert "gpu-580" not in text
     assert "--mail-type=BEGIN,END,FAIL" in text
+    assert "--resume" in text
+    assert '"${start_stage}"' in text
 
 
 def test_combined_report_writes_html_png_and_metrics(

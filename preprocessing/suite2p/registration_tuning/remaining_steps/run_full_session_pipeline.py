@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import socket
 import subprocess
@@ -17,7 +18,11 @@ from typing import Any
 WORKFLOW_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(WORKFLOW_DIR))
 
-from common import write_json_atomic  # noqa: E402
+from common import read_csv, write_json_atomic  # noqa: E402
+from remaining_steps.prepare_full_session_pipeline import (  # noqa: E402
+    clean_downstream_outputs,
+    validate_registration_for_resume,
+)
 
 
 def run_stage(name: str, command: list[str], state: dict[str, Any], status_path: Path) -> None:
@@ -51,6 +56,9 @@ def main() -> None:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--script-dir", type=Path, required=True)
     parser.add_argument("--python-executable", type=Path, required=True)
+    parser.add_argument(
+        "--start-stage", choices=("registration", "detection"), default="registration"
+    )
     args = parser.parse_args()
 
     run_dir = args.run_dir.resolve()
@@ -69,6 +77,7 @@ def main() -> None:
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
         "run_dir": str(run_dir),
         "stages": {},
+        "start_stage": args.start_stage,
     }
     write_json_atomic(status_path, state)
 
@@ -83,22 +92,41 @@ def main() -> None:
         "cuda",
     ]
     try:
-        try:
-            run_stage("registration", registration_command, state, status_path)
-        finally:
-            subprocess.run(
-                [
-                    python_executable,
-                    str(script_dir / "organize_registration_outputs.py"),
-                    "--run-dir",
-                    str(run_dir),
-                    "--workflow-dir",
-                    str(workflow_dir),
-                    "--qc-dir",
-                    str(qc_dir / "registration"),
-                ],
-                check=True,
-            )
+        if args.start_stage == "registration":
+            try:
+                run_stage("registration", registration_command, state, status_path)
+            finally:
+                subprocess.run(
+                    [
+                        python_executable,
+                        str(script_dir / "organize_registration_outputs.py"),
+                        "--run-dir",
+                        str(run_dir),
+                        "--workflow-dir",
+                        str(workflow_dir),
+                        "--qc-dir",
+                        str(qc_dir / "registration"),
+                    ],
+                    check=True,
+                )
+        else:
+            rows = read_csv(args.manifest.resolve())
+            if len(rows) != 1:
+                raise ValueError(
+                    f"Resume manifest must contain exactly one row: {args.manifest}"
+                )
+            tiffs = [
+                Path(value).resolve()
+                for value in json.loads(rows[0]["tiff_files_json"])
+            ]
+            validation = validate_registration_for_resume(suite2p_dir, tiffs)
+            removed = clean_downstream_outputs(suite2p_dir)
+            state["stages"]["registration"] = {
+                "state": "reused",
+                "registration_status": validation["registration_status"],
+            }
+            state["resume_cleanup"] = removed
+            write_json_atomic(status_path, state)
 
         run_stage(
             "detection",
