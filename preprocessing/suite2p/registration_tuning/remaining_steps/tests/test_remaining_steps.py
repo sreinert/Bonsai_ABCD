@@ -259,6 +259,7 @@ def test_trace_qc_normalizes_by_baseline() -> None:
 
     assert np.allclose(base, 2.0)
     assert np.allclose(dff, [[0.0, 1.0, 2.0]])
+    assert np.allclose(signal - base, [[0.0, 2.0, 4.0]])
     assert not clipped.any()
 
 

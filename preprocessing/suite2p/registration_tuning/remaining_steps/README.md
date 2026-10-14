@@ -294,15 +294,16 @@ python preprocessing/suite2p/registration_tuning/remaining_steps/generate_trace_
   /absolute/path/to/chosen-registration-cpsam/trace_extraction/cpsam-meanimg
 ```
 
-The command writes `qc/index.html`, three PNG figures, per-ROI metrics as CSV,
+The command writes `qc/index.html`, five PNG figures, per-ROI metrics as CSV,
 and the exact calculation settings as JSON. It refuses to overwrite an
 existing QC directory.
 
 Green and red traces use `F - neucoeff * Fneu`. The G/R calculation matches
 `cellTV/cellTV_functions_cohort3.py`: only red is median-filtered over 0.25 s,
 and the denominator is floored at its per-ROI fifth percentile (with an
-absolute floor of `1e-3`). Unlike the older helper, which labels Suite2p's
-baseline-subtracted `preprocess` result as dF/F, the report plots normalized
-`(signal - baseline) / abs(baseline)` for green, red, and G/R. The report also
-shows how often the red denominator floor was used so unreliable ratios can be
-identified.
+absolute floor of `1e-3`). The report shows both the exact CellTV-style
+baseline-subtracted output (`signal - baseline`) and normalized
+`(signal - baseline) / abs(baseline)` for green, red, and G/R. This makes clear
+that the current CellTV helper labels a baseline-subtracted ΔF result as dF/F.
+The report also shows how often the red denominator floor was used so
+unreliable ratios can be identified.
