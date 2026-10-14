@@ -3,6 +3,7 @@ set -euo pipefail
 
 overwrite=false
 resume=false
+current_node=false
 positional=()
 for argument in "$@"; do
   case "${argument}" in
@@ -11,6 +12,9 @@ for argument in "$@"; do
       ;;
     --resume)
       resume=true
+      ;;
+    --current-node)
+      current_node=true
       ;;
     --*)
       echo "Unknown option: ${argument}" >&2
@@ -23,7 +27,7 @@ for argument in "$@"; do
 done
 
 if [[ ${#positional[@]} -ne 2 ]]; then
-  echo "Usage: $0 [--overwrite|--resume] MOUSE_ID FULL_RAW_SESSION_ID" >&2
+  echo "Usage: $0 [--overwrite|--resume] [--current-node] MOUSE_ID FULL_RAW_SESSION_ID" >&2
   exit 2
 fi
 if [[ "${overwrite}" == true && "${resume}" == true ]]; then
@@ -39,7 +43,7 @@ project_root=${PROJECT_ROOT:-AtAp_20260119_SequenceCompression}
 exclude_nodes=${EXCLUDE_NODES-gpu-350-02,gpu-350-04}
 mail_user=${SLURM_MAIL_USER:-athina.apostolelli.24@ucl.ac.uk}
 
-if ! command -v sbatch >/dev/null 2>&1; then
+if [[ "${current_node}" == false ]] && ! command -v sbatch >/dev/null 2>&1; then
   echo "sbatch is required; run this launcher on a Slurm login or submission host." >&2
   exit 2
 fi
@@ -54,6 +58,24 @@ for package in ("suite2p", "cellpose", "torch", "numpy", "scipy", "matplotlib"):
 if importlib.metadata.version("suite2p") != "1.1.0":
     raise RuntimeError(f"Pipeline requires suite2p==1.1.0 using {sys.executable}")
 PY
+
+if [[ "${current_node}" == true ]]; then
+  current_hostname=$(hostname -s)
+  IFS=',' read -r -a excluded_hostnames <<< "${exclude_nodes}"
+  for excluded_hostname in "${excluded_hostnames[@]}"; do
+    if [[ -n "${excluded_hostname}" && "${current_hostname}" == "${excluded_hostname}" ]]; then
+      echo "Refusing current-node analysis on excluded host ${current_hostname}." >&2
+      exit 2
+    fi
+  done
+  "${python_executable}" - <<'PY'
+import torch
+
+if not torch.cuda.is_available():
+    raise RuntimeError("--current-node requires a CUDA GPU visible to PyTorch")
+print(f"Current-node GPU: {torch.cuda.get_device_name(0)}")
+PY
+fi
 
 temporary_dir=$(mktemp -d)
 paths_json=${temporary_dir}/paths.json
@@ -99,24 +121,36 @@ manifest=$(json_field manifest)
 log_dir=${workflow_dir}/logs
 mkdir -p "${log_dir}" "${qc_dir}/registration" "${workflow_dir}/trace_extraction"
 
-sbatch_options=(--mail-user="${mail_user}" --mail-type=BEGIN,END,FAIL)
-if [[ -n "${exclude_nodes}" ]]; then
-  sbatch_options+=(--exclude="${exclude_nodes}")
+execution_mode=slurm
+job_id=""
+stdout_log=""
+stderr_log=""
+if [[ "${current_node}" == true ]]; then
+  execution_mode=current_node
+  run_stamp=$(date -u +%Y%m%dT%H%M%SZ)
+  stdout_log=${log_dir}/full_pipeline_current_node_${run_stamp}.log
+  stderr_log=${stdout_log}
+else
+  sbatch_options=(--mail-user="${mail_user}" --mail-type=BEGIN,END,FAIL)
+  if [[ -n "${exclude_nodes}" ]]; then
+    sbatch_options+=(--exclude="${exclude_nodes}")
+  fi
+  submission=$(sbatch --parsable \
+    "${sbatch_options[@]}" \
+    --chdir="${workflow_dir}" \
+    --output="${log_dir}/full_pipeline_%j.out" \
+    --error="${log_dir}/full_pipeline_%j.err" \
+    "${script_dir}/run_full_session_pipeline.sbatch" \
+    "${manifest}" "${run_dir}" "${script_dir}" "${python_executable}" "${start_stage}")
+  job_id=${submission%%;*}
+  stdout_log=${log_dir}/full_pipeline_${job_id}.out
+  stderr_log=${log_dir}/full_pipeline_${job_id}.err
 fi
-
-submission=$(sbatch --parsable \
-  "${sbatch_options[@]}" \
-  --chdir="${workflow_dir}" \
-  --output="${log_dir}/full_pipeline_%j.out" \
-  --error="${log_dir}/full_pipeline_%j.err" \
-  "${script_dir}/run_full_session_pipeline.sbatch" \
-  "${manifest}" "${run_dir}" "${script_dir}" "${python_executable}" "${start_stage}")
-job_id=${submission%%;*}
 
 "${python_executable}" - \
   "${workflow_dir}/submission.json" "${workflow_dir}/status.json" \
   "${mouse_id}" "${session_id}" "${run_dir}" "${mail_user}" "${exclude_nodes}" \
-  "${job_id}" "${start_stage}" <<'PY'
+  "${job_id}" "${start_stage}" "${execution_mode}" "${stdout_log}" "${stderr_log}" <<'PY'
 import json
 import os
 import sys
@@ -125,25 +159,28 @@ from pathlib import Path
 
 (
     submission_path, status_path, mouse_id, session_id, run_dir, mail_user,
-    exclude_nodes, job_id, start_stage,
+    exclude_nodes, job_id, start_stage, execution_mode, stdout_log, stderr_log,
 ) = sys.argv[1:]
 payload = {
-    "state": "submitted",
+    "state": "submitted" if execution_mode == "slurm" else "starting_on_current_node",
     "submitted_unix": time.time(),
     "submission_hostname": os.uname().nodename,
     "mouse_id": mouse_id,
     "session_id": session_id,
     "run_dir": run_dir,
-    "mail_user": mail_user,
-    "mail_types": ["BEGIN", "END", "FAIL"],
+    "execution_mode": execution_mode,
+    "mail_user": mail_user if execution_mode == "slurm" else None,
+    "mail_types": ["BEGIN", "END", "FAIL"] if execution_mode == "slurm" else [],
     "excluded_gpu_nodes": [value for value in exclude_nodes.split(",") if value],
+    "stdout_log": stdout_log,
+    "stderr_log": stderr_log,
     "job": {
-        "job_id": job_id,
-        "partition": "gpu",
-        "gpus": 1,
-        "cpus": 4,
-        "memory_gb": 64,
-        "hours": 24,
+        "job_id": job_id or None,
+        "partition": "gpu" if execution_mode == "slurm" else None,
+        "gpus": 1 if execution_mode == "slurm" else None,
+        "cpus": 4 if execution_mode == "slurm" else None,
+        "memory_gb": 64 if execution_mode == "slurm" else None,
+        "hours": 24 if execution_mode == "slurm" else None,
         "start_stage": start_stage,
         "stages": (
             ["detection", "trace_extraction", "qc"]
@@ -162,13 +199,29 @@ PY
 echo "Mouse/session:    ${mouse_id} / ${session_id}"
 echo "Overwrite:        ${overwrite}"
 echo "Resume:           ${resume} (start stage: ${start_stage})"
+echo "Execution mode:   ${execution_mode}"
 echo "Suite2p output:   ${plane_dir}"
-if [[ "${start_stage}" == detection ]]; then
+if [[ "${execution_mode}" == current_node ]]; then
+  echo "Current host:     $(hostname -s)"
+elif [[ "${start_stage}" == detection ]]; then
   echo "Pipeline job:     ${job_id} (reuse registration -> detection -> traces -> QC)"
 else
   echo "Pipeline job:     ${job_id} (registration -> detection -> traces -> QC)"
 fi
 echo "Excluded GPUs:    ${exclude_nodes:-<none>}"
-echo "Email:            ${mail_user} (BEGIN,END,FAIL)"
-echo "Logs:             ${log_dir}"
+if [[ "${execution_mode}" == slurm ]]; then
+  echo "Email:            ${mail_user} (BEGIN,END,FAIL)"
+else
+  echo "Email:            disabled (no Slurm job)"
+fi
+echo "Stdout log:       ${stdout_log}"
+echo "Stderr log:       ${stderr_log}"
 echo "Final report:     ${report}"
+
+if [[ "${execution_mode}" == current_node ]]; then
+  echo "Running pipeline in the foreground on the current node..."
+  bash "${script_dir}/run_full_session_pipeline.sbatch" \
+    "${manifest}" "${run_dir}" "${script_dir}" "${python_executable}" "${start_stage}" \
+    2>&1 | tee "${stdout_log}"
+  echo "Pipeline complete. Final report: ${report}"
+fi

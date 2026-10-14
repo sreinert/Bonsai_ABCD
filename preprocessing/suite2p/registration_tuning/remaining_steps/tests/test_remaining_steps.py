@@ -479,6 +479,9 @@ def test_full_pipeline_launcher_submits_one_job() -> None:
     assert "gpu-580" not in text
     assert "--mail-type=BEGIN,END,FAIL" in text
     assert "--resume" in text
+    assert "--current-node" in text
+    assert "torch.cuda.is_available()" in text
+    assert "Refusing current-node analysis on excluded host" in text
     assert '"${start_stage}"' in text
 
 

@@ -75,6 +75,9 @@ def main() -> None:
         "started_unix": started,
         "hostname": socket.gethostname(),
         "slurm_job_id": os.environ.get("SLURM_JOB_ID"),
+        "execution_mode": (
+            "slurm" if os.environ.get("SLURM_JOB_ID") else "current_node"
+        ),
         "run_dir": str(run_dir),
         "stages": {},
         "start_stage": args.start_stage,

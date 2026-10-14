@@ -21,8 +21,8 @@ script_dir=$3
 python_executable=$4
 start_stage=$5
 export PYTHONNOUSERSITE=1
-export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
-export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-1}"
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
+export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 scratch_root=${SLURM_TMPDIR:-${TMPDIR:-/tmp}}
 export MPLCONFIGDIR="${scratch_root}/matplotlib-full-session-${SLURM_JOB_ID:-$$}"
 mkdir -p "${MPLCONFIGDIR}"

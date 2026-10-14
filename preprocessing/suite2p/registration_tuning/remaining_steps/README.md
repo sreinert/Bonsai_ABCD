@@ -16,6 +16,20 @@ shell does not run analysis on its current host. Slurm sends `BEGIN`, `END`,
 and `FAIL` mail to `athina.apostolelli.24@ucl.ac.uk`; set
 `SLURM_MAIL_USER` to override the address.
 
+To use an already allocated GPU node instead of requesting a new Slurm node,
+add `--current-node`:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_full_session_pipeline.sh \
+  --current-node sub-02 ses-full002_date-20260818T134310
+```
+
+Current-node mode runs in the foreground with the active Python environment
+and visible CUDA GPU. It writes a combined log under `suite2p/.workflow/logs`
+but cannot send Slurm BEGIN/END/FAIL email. It refuses to run on an excluded
+hostname. Without `--current-node`, the launcher retains its normal behavior
+and submits a fresh Slurm job.
+
 The default GPU exclusion is exactly `gpu-350-02,gpu-350-04`. Set
 `EXCLUDE_NODES` to override it. `PROJECT_ROOT`, `MRSIC_PROJECTS_ROOT`, and
 `PYTHON_EXECUTABLE` retain their existing meanings.
@@ -39,6 +53,13 @@ movies and resume at CPSAM detection:
 ```bash
 bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_full_session_pipeline.sh \
   --resume sub-02 ses-full002_date-20260818T134310
+```
+
+To resume detection on the current allocation, combine the independent flags:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_full_session_pipeline.sh \
+  --resume --current-node sub-02 ses-full002_date-20260818T134310
 ```
 
 Resume validates the registration status, raw-TIFF metadata, registered mean
