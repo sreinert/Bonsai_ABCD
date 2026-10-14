@@ -245,3 +245,64 @@ bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_trace_extr
   /absolute/path/to/chosen-registration-cpsam/roi_detection/experiments/NAME \
   /absolute/path/to/chosen-registration-cpsam/trace_extraction/NAME
 ```
+
+## 5. Generate a two-channel trace QC report
+
+After trace extraction completes, submit the report to the HPC CPU partition:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_trace_qc.sh \
+  /absolute/path/to/chosen-registration-cpsam/trace_extraction/cpsam-meanimg
+```
+
+The launcher checks that trace extraction has state `complete`, verifies both
+channels, checks the Python environment, and prints the Slurm job ID and log
+paths. The CPU job requests four cores, 16 GB RAM, and two hours. It does not
+modify the extracted arrays. When it finishes, open:
+
+```text
+<trace-dir>/qc/index.html
+```
+
+As with the other launchers, set `PYTHON_EXECUTABLE` if the active shell is not
+already using the intended environment:
+
+```bash
+PYTHON_EXECUTABLE=/path/to/environment/bin/python \
+  bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_trace_qc.sh \
+  /absolute/path/to/chosen-registration-cpsam/trace_extraction/cpsam-meanimg
+```
+
+Options after the trace directory are passed to the report generator. For
+example, select eight cells and write a new report name:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_trace_qc.sh \
+  /absolute/path/to/chosen-registration-cpsam/trace_extraction/cpsam-meanimg \
+  --n-cells 8 \
+  --output-dir \
+  /absolute/path/to/chosen-registration-cpsam/trace_extraction/cpsam-meanimg/qc-eight-cells
+```
+
+The output directory must be new because the generator refuses to overwrite a
+previous report. To run the same calculation interactively instead of through
+Slurm:
+
+```bash
+python preprocessing/suite2p/registration_tuning/remaining_steps/generate_trace_qc.py \
+  --trace-dir \
+  /absolute/path/to/chosen-registration-cpsam/trace_extraction/cpsam-meanimg
+```
+
+The command writes `qc/index.html`, three PNG figures, per-ROI metrics as CSV,
+and the exact calculation settings as JSON. It refuses to overwrite an
+existing QC directory.
+
+Green and red traces use `F - neucoeff * Fneu`. The G/R calculation matches
+`cellTV/cellTV_functions_cohort3.py`: only red is median-filtered over 0.25 s,
+and the denominator is floored at its per-ROI fifth percentile (with an
+absolute floor of `1e-3`). Unlike the older helper, which labels Suite2p's
+baseline-subtracted `preprocess` result as dF/F, the report plots normalized
+`(signal - baseline) / abs(baseline)` for green, red, and G/R. The report also
+shows how often the red denominator floor was used so unreliable ratios can be
+identified.

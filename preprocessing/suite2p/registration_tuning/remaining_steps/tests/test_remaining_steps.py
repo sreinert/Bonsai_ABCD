@@ -19,6 +19,7 @@ import config  # noqa: E402
 import inspect_run  # noqa: E402
 import prepare_session  # noqa: E402
 import run_detection_experiment  # noqa: E402
+import generate_trace_qc  # noqa: E402
 import run_roi_detection  # noqa: E402
 import run_trace_extraction  # noqa: E402
 
@@ -227,6 +228,46 @@ def test_trace_binary_size_validation(tmp_path: Path) -> None:
         run_trace_extraction.validate_registered_binary_sizes(
             {"Ly": 3, "Lx": 4, "nframes": 5}, paths
         )
+
+
+def test_trace_qc_channel_calculation_matches_green_red_method() -> None:
+    ops = {"fs": 8.0}
+    F = np.asarray([[10.0, 12.0, 14.0, 16.0, 18.0]])
+    Fneu = np.ones_like(F)
+    F2 = np.asarray([[4.0, 5.0, 6.0, 7.0, 8.0]])
+    Fneu2 = np.zeros_like(F2)
+
+    result = generate_trace_qc.channel_signals(F, Fneu, F2, Fneu2, ops, 0.7)
+
+    expected_green = F - 0.7 * Fneu
+    expected_red = np.asarray([[4.0, 5.0, 6.0, 7.0, 7.0]])  # medfilt width 3
+    expected_floor = max(np.percentile(expected_red, 5), 1e-3)
+    assert np.allclose(result["green"], expected_green)
+    assert np.allclose(result["red_smoothed"], expected_red)
+    assert np.allclose(result["ratio"], expected_green / np.maximum(expected_red, expected_floor))
+
+
+def test_trace_qc_normalizes_by_baseline() -> None:
+    signal = np.asarray([[2.0, 4.0, 6.0]], dtype=np.float32)
+    ops = {
+        "fs": 1.0,
+        "baseline": "constant_prctile",
+        "prctile_baseline": 0.0,
+    }
+
+    dff, base, clipped = generate_trace_qc.normalized_dff(signal, ops)
+
+    assert np.allclose(base, 2.0)
+    assert np.allclose(dff, [[0.0, 1.0, 2.0]])
+    assert not clipped.any()
+
+
+def test_trace_qc_cell_selection_is_deterministic() -> None:
+    iscell = np.asarray([[1, 0.8], [1, 0.9], [0, 0.99], [1, 0.9]])
+    dff = np.asarray(
+        [[0, 1, 0], [0, 1, 0], [0, 9, 0], [0, 2, 0]], dtype=float
+    )
+    assert np.array_equal(generate_trace_qc.select_rois(iscell, dff, 2), [3, 1])
 
 
 def test_detection_experiment_parses_cellpose_parameters() -> None:
