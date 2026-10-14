@@ -135,6 +135,12 @@ def test_detection_defaults_and_visual_mask_helpers() -> None:
     assert configured["fs"] == config.FS
     assert configured["tau"] == config.TAU
     assert configured["detection"]["algorithm"] == "cellpose"
+    assert configured["detection"]["cellpose_settings"] == {
+        "cellpose_model": "cpsam",
+        "img": "meanImg",
+        "flow_threshold": 0.4,
+        "cellprob_threshold": 0.0,
+    }
 
     stat = np.asarray(
         [{"ypix": np.array([1, 1, 2]), "xpix": np.array([1, 2, 1])}],

@@ -90,11 +90,16 @@ def model_provenance() -> dict[str, Any]:
 
 
 def configure_default_cellpose(settings: dict[str, Any], device: str) -> dict[str, Any]:
-    """Set only recording metadata, device, and the requested detection algorithm."""
+    """Apply the validated CPSAM-on-mean-image detection configuration."""
     settings["fs"] = FS
     settings["tau"] = TAU
     settings["torch_device"] = device
     settings["detection"]["algorithm"] = DETECTION["algorithm"]
+    cellpose_settings = settings["detection"]["cellpose_settings"]
+    cellpose_settings["cellpose_model"] = DETECTION["effective_model"]
+    cellpose_settings["img"] = DETECTION["input_image"]
+    cellpose_settings["flow_threshold"] = DETECTION["flow_threshold"]
+    cellpose_settings["cellprob_threshold"] = DETECTION["cellprob_threshold"]
     return settings
 
 

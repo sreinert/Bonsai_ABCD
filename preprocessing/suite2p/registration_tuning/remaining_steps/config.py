@@ -27,7 +27,9 @@ REGISTRATION = {
 DETECTION = {
     "algorithm": "cellpose",
     "effective_model": "cpsam",
-    "input_image": "max_proj / meanImg",
+    # This is the detection input validated in the earlier cpsam-meanimg
+    # experiment.  Do not inherit Suite2p's "max_proj / meanImg" default.
+    "input_image": "meanImg",
     "diameter": [12.0, 12.0],
     "flow_threshold": 0.4,
     "cellprob_threshold": 0.0,

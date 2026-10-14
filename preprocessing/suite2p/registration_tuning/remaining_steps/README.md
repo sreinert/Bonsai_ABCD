@@ -10,7 +10,7 @@ bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_full_sessi
 ```
 
 The launcher submits one 24-hour GPU job. That newly allocated job runs full
-registration, default CPSAM ROI detection, two-channel trace extraction,
+registration, CPSAM ROI detection on Suite2p's temporally binned `meanImg`, two-channel trace extraction,
 classification, deconvolution, and combined QC sequentially. The submission
 shell does not run analysis on its current host. Slurm sends `BEGIN`, `END`,
 and `FAIL` mail to `athina.apostolelli.24@ucl.ac.uk`; set
