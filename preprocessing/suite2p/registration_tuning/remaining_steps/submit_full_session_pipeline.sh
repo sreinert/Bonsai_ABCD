@@ -1,13 +1,30 @@
 #!/bin/bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-  echo "Usage: $0 MOUSE_ID FULL_RAW_SESSION_ID" >&2
+overwrite=false
+positional=()
+for argument in "$@"; do
+  case "${argument}" in
+    --overwrite)
+      overwrite=true
+      ;;
+    --*)
+      echo "Unknown option: ${argument}" >&2
+      exit 2
+      ;;
+    *)
+      positional+=("${argument}")
+      ;;
+  esac
+done
+
+if [[ ${#positional[@]} -ne 2 ]]; then
+  echo "Usage: $0 [--overwrite] MOUSE_ID FULL_RAW_SESSION_ID" >&2
   exit 2
 fi
 
-mouse_id=$1
-session_id=$2
+mouse_id=${positional[0]}
+session_id=${positional[1]}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 python_executable=${PYTHON_EXECUTABLE:-$(command -v python)}
 project_root=${PROJECT_ROOT:-AtAp_20260119_SequenceCompression}
@@ -34,10 +51,16 @@ temporary_dir=$(mktemp -d)
 paths_json=${temporary_dir}/paths.json
 trap 'rm -rf "${temporary_dir}"' EXIT
 
+prepare_options=()
+if [[ "${overwrite}" == true ]]; then
+  prepare_options+=(--overwrite)
+fi
+
 "${python_executable}" "${script_dir}/prepare_full_session_pipeline.py" \
   "${mouse_id}" "${session_id}" \
   --project-root "${project_root}" \
-  --paths-json "${paths_json}"
+  --paths-json "${paths_json}" \
+  "${prepare_options[@]}"
 
 json_field() {
   "${python_executable}" -c \
@@ -120,6 +143,7 @@ for filename in (submission_path, status_path):
 PY
 
 echo "Mouse/session:    ${mouse_id} / ${session_id}"
+echo "Overwrite:        ${overwrite}"
 echo "Suite2p output:   ${plane_dir}"
 echo "Pipeline job:     ${job_id} (registration -> detection -> traces -> QC)"
 echo "Excluded GPUs:    ${exclude_nodes:-<none>}"

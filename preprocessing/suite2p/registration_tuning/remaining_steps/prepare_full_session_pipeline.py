@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,11 @@ REQUIRED_FINAL_OUTPUTS = (
 
 
 def build_pipeline(
-    project_root: Path, mouse_id: str, session_id: str
+    project_root: Path,
+    mouse_id: str,
+    session_id: str,
+    *,
+    overwrite: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     project = resolve_data_root(project_root)
     for label, value in (("mouse ID", mouse_id), ("session ID", session_id)):
@@ -61,21 +66,34 @@ def build_pipeline(
         validate_tiff_header(path)
 
     processed_id = processed_session_id(session_id)
-    run_dir = (project / "processed" / "cohort2" / mouse_id / processed_id).resolve()
+    processed_root = (project / "processed" / "cohort2").resolve()
+    run_dir = (processed_root / mouse_id / processed_id).resolve()
     suite2p_dir = run_dir / "suite2p"
     plane_dir = suite2p_dir / "plane0"
     qc_dir = suite2p_dir / "qc"
     workflow_dir = suite2p_dir / ".workflow"
     if paths_overlap(run_dir, funcimg):
         raise ValueError(f"Output {run_dir} overlaps raw input {funcimg}")
+    if not is_relative_to(suite2p_dir, processed_root) or suite2p_dir.name != "suite2p":
+        raise ValueError(f"Unsafe Suite2p output directory: {suite2p_dir}")
 
     complete = (qc_dir / "index.html").is_file() and all(
         (plane_dir / name).is_file() for name in REQUIRED_FINAL_OUTPUTS
     )
-    if suite2p_dir.exists() and any(suite2p_dir.iterdir()) and not complete:
+    existing_output = suite2p_dir.exists() and any(suite2p_dir.iterdir())
+    if existing_output and overwrite:
+        if suite2p_dir.is_symlink():
+            raise ValueError(f"Refusing to overwrite symlinked output: {suite2p_dir}")
+        print(
+            f"--overwrite: removing existing Suite2p output only: {suite2p_dir}",
+            file=sys.stderr,
+        )
+        shutil.rmtree(suite2p_dir)
+        complete = False
+    elif existing_output and not complete:
         raise FileExistsError(
             "Partial or inconsistent Suite2p output already exists; inspect it "
-            f"before rerunning: {suite2p_dir}"
+            f"before rerunning or pass --overwrite: {suite2p_dir}"
         )
 
     row = {
@@ -108,6 +126,7 @@ def build_pipeline(
         "workflow_dir": str(workflow_dir),
         "report": str(qc_dir / "index.html"),
         "tiff_count": len(tiffs),
+        "overwrote_existing": bool(existing_output and overwrite),
     }
     return row, paths
 
@@ -123,9 +142,19 @@ def main() -> None:
     )
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--paths-json", type=Path)
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Remove only the selected processed session's existing suite2p directory.",
+    )
     args = parser.parse_args()
 
-    row, paths = build_pipeline(args.project_root, args.mouse_id, args.session_id)
+    row, paths = build_pipeline(
+        args.project_root,
+        args.mouse_id,
+        args.session_id,
+        overwrite=args.overwrite,
+    )
     if paths["already_complete"]:
         if args.paths_json:
             args.paths_json.write_text(json.dumps(paths, indent=2) + "\n", encoding="utf-8")

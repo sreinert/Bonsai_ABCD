@@ -20,6 +20,19 @@ The default GPU exclusion is exactly `gpu-350-02,gpu-350-04`. Set
 `EXCLUDE_NODES` to override it. `PROJECT_ROOT`, `MRSIC_PROJECTS_ROOT`, and
 `PYTHON_EXECUTABLE` retain their existing meanings.
 
+Existing partial or completed Suite2p output is protected by default. To
+deliberately replace it, pass `--overwrite` before or after the two IDs:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_full_session_pipeline.sh \
+  --overwrite sub-02 ses-full002_date-20260818T134310
+```
+
+This removes only
+`processed/cohort2/<mouse>/<short-session-id>/suite2p`; other processed-session
+files and all raw data remain untouched. The removed Suite2p directory is not
+recoverable from this command.
+
 For a raw input under:
 
 ```text

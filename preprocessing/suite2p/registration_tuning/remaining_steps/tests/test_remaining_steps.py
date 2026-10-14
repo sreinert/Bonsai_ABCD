@@ -291,6 +291,31 @@ def test_full_pipeline_uses_standard_plane0_layout(tmp_path: Path) -> None:
         prepare_full_session_pipeline.build_pipeline(tmp_path, "../sub-02", session)
 
 
+def test_full_pipeline_overwrite_removes_only_suite2p(tmp_path: Path) -> None:
+    mouse = "sub-02"
+    session = "ses-full002_date-20260818T134310"
+    funcimg = tmp_path / "rawdata/cohort2" / mouse / session / "funcimg"
+    funcimg.mkdir(parents=True)
+    tifffile.imwrite(funcimg / "full.tif", np.zeros((2, 3), dtype=np.uint16))
+    run_dir = tmp_path / "processed/cohort2/sub-02/full002"
+    suite2p_dir = run_dir / "suite2p"
+    suite2p_dir.mkdir(parents=True)
+    (suite2p_dir / "partial.txt").write_text("partial", encoding="utf-8")
+    sibling = run_dir / "behaviour.csv"
+    sibling.write_text("keep", encoding="utf-8")
+
+    with pytest.raises(FileExistsError, match="pass --overwrite"):
+        prepare_full_session_pipeline.build_pipeline(tmp_path, mouse, session)
+
+    _, paths = prepare_full_session_pipeline.build_pipeline(
+        tmp_path, mouse, session, overwrite=True
+    )
+
+    assert not suite2p_dir.exists()
+    assert sibling.read_text(encoding="utf-8") == "keep"
+    assert paths["overwrote_existing"] is True
+
+
 def test_full_pipeline_launcher_submits_one_job() -> None:
     launcher = SCRIPT_DIR / "submit_full_session_pipeline.sh"
     text = launcher.read_text(encoding="utf-8")
