@@ -179,6 +179,16 @@ def save_qc(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="QC/provenance directory (default: RUN_DIR/roi_detection/cpsam).",
+    )
+    parser.add_argument(
+        "--stat-output",
+        type=Path,
+        help="Where to write stat.npy (default: OUTPUT_DIR/stat.npy).",
+    )
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     args = parser.parse_args()
 
@@ -200,10 +210,22 @@ def main() -> None:
             raise FileExistsError(
                 f"Detection-only pilot requires a clean registration output; found {plane_dir / name}"
             )
-    output_dir = run_dir / "roi_detection" / "cpsam"
+    output_dir = (
+        args.output_dir.resolve()
+        if args.output_dir
+        else run_dir / "roi_detection" / "cpsam"
+    )
+    stat_output = (
+        args.stat_output.resolve()
+        if args.stat_output
+        else output_dir / "stat.npy"
+    )
     if output_dir.exists() and any(output_dir.iterdir()):
         raise FileExistsError(f"Refusing to overwrite Cellpose pilot output: {output_dir}")
+    if stat_output.exists():
+        raise FileExistsError(f"Refusing to overwrite detected ROIs: {stat_output}")
     output_dir.mkdir(parents=True)
+    stat_output.parent.mkdir(parents=True, exist_ok=True)
     status_path = output_dir / "status.json"
     started = time.time()
     write_json_atomic(status_path, {"state": "running", "started_unix": started})
@@ -261,7 +283,7 @@ def main() -> None:
         masks = masks_from_stat(stat, int(db["Ly"]), int(db["Lx"]))
         cellpose_input = np.asarray(detect_outputs["Vcorr"])
         mean_image = np.asarray(reg_outputs["meanImg"])
-        atomic_save(output_dir / "stat.npy", stat)
+        atomic_save(stat_output, stat)
         atomic_save(output_dir / "roi_masks.npy", masks)
         atomic_save(output_dir / "detect_outputs.npy", detect_outputs)
         atomic_save(output_dir / "cellpose_input.npy", cellpose_input)
@@ -326,7 +348,7 @@ def main() -> None:
                 "maximum": float(diameters.max()),
             },
             "outputs": {
-                "stat": str(output_dir / "stat.npy"),
+                "stat": str(stat_output),
                 "masks": str(output_dir / "roi_masks.npy"),
                 "cellpose_input": str(output_dir / "cellpose_input.npy"),
                 "cellpose_input_png": str(output_dir / "cellpose_input.png"),

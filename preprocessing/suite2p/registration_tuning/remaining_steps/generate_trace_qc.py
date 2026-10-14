@@ -29,11 +29,18 @@ COLORS = {"green": "#16853b", "red": "#d43f3a", "ratio": "#272727"}
 
 def baseline(signal: np.ndarray, ops: dict[str, Any]) -> np.ndarray:
     """Return Suite2p's baseline without subtracting it from the signal."""
-    method = str(ops.get("baseline", "maximin"))
-    sigma = float(ops.get("sig_baseline", 10.0))
+    dcnv = ops.get("dcnv_preprocess", {})
+    if not isinstance(dcnv, dict):
+        dcnv = {}
+    method = str(ops.get("baseline", dcnv.get("baseline", "maximin")))
+    sigma = float(ops.get("sig_baseline", dcnv.get("sig_baseline", 10.0)))
     fs = float(ops["fs"])
-    window = max(1, int(float(ops.get("win_baseline", 60.0)) * fs))
-    percentile = float(ops.get("prctile_baseline", 8.0))
+    window = max(
+        1, int(float(ops.get("win_baseline", dcnv.get("win_baseline", 60.0))) * fs)
+    )
+    percentile = float(
+        ops.get("prctile_baseline", dcnv.get("prctile_baseline", 8.0))
+    )
 
     if method == "maximin":
         result = gaussian_filter(signal, sigma=(0.0, sigma))
@@ -404,7 +411,17 @@ def main() -> None:
     shapes = {array.shape for array in (F, Fneu, F2, Fneu2)}
     if len(shapes) != 1 or F.ndim != 2 or F.shape[0] != len(iscell) or len(stat) != len(iscell):
         raise ValueError("Trace, classification, and ROI array shapes are inconsistent")
-    neucoeff = float(args.neucoeff if args.neucoeff is not None else ops.get("neucoeff", 0.7))
+    extraction = ops.get("extraction", {})
+    if not isinstance(extraction, dict):
+        extraction = {}
+    neucoeff = float(
+        args.neucoeff
+        if args.neucoeff is not None
+        else ops.get("neucoeff", extraction.get("neuropil_coefficient", 0.7))
+    )
+    dcnv = ops.get("dcnv_preprocess", {})
+    if not isinstance(dcnv, dict):
+        dcnv = {}
 
     signals = channel_signals(F, Fneu, F2, Fneu2, ops, neucoeff)
     celltv_delta: dict[str, np.ndarray] = {}
@@ -457,10 +474,10 @@ def main() -> None:
             "n_frames": int(F.shape[1]),
             "fs": float(ops["fs"]),
             "neucoeff": neucoeff,
-            "baseline": str(ops.get("baseline", "maximin")),
-            "win_baseline": float(ops.get("win_baseline", 60.0)),
-            "sig_baseline": float(ops.get("sig_baseline", 10.0)),
-            "prctile_baseline": float(ops.get("prctile_baseline", 8.0)),
+            "baseline": str(ops.get("baseline", dcnv.get("baseline", "maximin"))),
+            "win_baseline": float(ops.get("win_baseline", dcnv.get("win_baseline", 60.0))),
+            "sig_baseline": float(ops.get("sig_baseline", dcnv.get("sig_baseline", 10.0))),
+            "prctile_baseline": float(ops.get("prctile_baseline", dcnv.get("prctile_baseline", 8.0))),
             "red_kernel_frames": int(signals["red_median_kernel_frames"]),
             "red_ratio_floor_percentile": 5.0,
             "red_ratio_absolute_floor": 1e-3,

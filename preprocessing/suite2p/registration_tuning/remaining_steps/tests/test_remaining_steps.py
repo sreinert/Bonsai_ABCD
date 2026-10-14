@@ -20,6 +20,8 @@ import inspect_run  # noqa: E402
 import prepare_session  # noqa: E402
 import run_detection_experiment  # noqa: E402
 import generate_trace_qc  # noqa: E402
+import generate_full_session_qc  # noqa: E402
+import prepare_full_session_pipeline  # noqa: E402
 import run_roi_detection  # noqa: E402
 import run_trace_extraction  # noqa: E402
 
@@ -207,6 +209,176 @@ def test_trace_loader_requires_completed_reviewed_detection(tmp_path: Path) -> N
     assert status["state"] == "complete"
 
 
+def test_trace_loader_accepts_plane_stat_path(tmp_path: Path) -> None:
+    detection_dir = tmp_path / "suite2p/qc/detection"
+    plane_dir = tmp_path / "suite2p/plane0"
+    detection_dir.mkdir(parents=True)
+    plane_dir.mkdir(parents=True)
+    stat = np.asarray(
+        [{
+            "ypix": np.array([1, 1]),
+            "xpix": np.array([1, 2]),
+            "lam": np.ones(2),
+            "overlap": np.zeros(2, dtype=bool),
+        }],
+        dtype=object,
+    )
+    np.save(plane_dir / "stat.npy", stat)
+    (detection_dir / "status.json").write_text(
+        json.dumps({"state": "complete", "n_rois": 1}), encoding="utf-8"
+    )
+
+    loaded, _ = run_trace_extraction.load_reviewed_detection(
+        detection_dir, plane_dir / "stat.npy"
+    )
+
+    assert len(loaded) == 1
+
+
+def test_trace_bundle_promotion_rolls_back_replaced_plane_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    plane_dir = tmp_path / "suite2p/plane0"
+    plane_dir.mkdir(parents=True)
+    old_stat = np.asarray([{"old": True}], dtype=object)
+    old_ops = {"registration": "old"}
+    np.save(plane_dir / "stat.npy", old_stat)
+    np.save(plane_dir / "ops.npy", old_ops)
+    real_replace = run_trace_extraction.os.replace
+
+    def fail_during_promotion(source: str | Path, destination: str | Path) -> None:
+        destination = Path(destination)
+        if destination == plane_dir / "Fneu.npy":
+            raise OSError("simulated promotion failure")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(run_trace_extraction.os, "replace", fail_during_promotion)
+    with pytest.raises(OSError, match="simulated"):
+        run_trace_extraction.promote_output_bundle(
+            plane_dir,
+            {
+                "stat.npy": np.asarray([{"new": True}], dtype=object),
+                "ops.npy": {"registration": "new"},
+                "F.npy": np.ones((1, 2)),
+                "Fneu.npy": np.ones((1, 2)),
+            },
+        )
+
+    assert np.load(plane_dir / "stat.npy", allow_pickle=True)[0]["old"]
+    assert np.load(plane_dir / "ops.npy", allow_pickle=True).item() == old_ops
+    assert not (plane_dir / "F.npy").exists()
+
+
+def test_full_pipeline_uses_standard_plane0_layout(tmp_path: Path) -> None:
+    mouse = "sub-02"
+    session = "ses-abab-random-001_date-20260824T120630"
+    funcimg = tmp_path / "rawdata/cohort2" / mouse / session / "funcimg"
+    funcimg.mkdir(parents=True)
+    tifffile.imwrite(funcimg / "full.tif", np.zeros((2, 3), dtype=np.uint16))
+    (funcimg / "._full.tif").write_bytes(b"metadata")
+
+    row, paths = prepare_full_session_pipeline.build_pipeline(
+        tmp_path, mouse, session
+    )
+
+    expected_run = tmp_path / "processed/cohort2/sub-02/abab-random-001"
+    assert Path(str(row["run_dir"])) == expected_run
+    assert Path(str(paths["plane_dir"])) == expected_run / "suite2p/plane0"
+    assert Path(str(paths["qc_dir"])) == expected_run / "suite2p/qc"
+    assert json.loads(str(row["tiff_files_json"])) == [str((funcimg / "full.tif").resolve())]
+
+    with pytest.raises(ValueError, match="one directory name"):
+        prepare_full_session_pipeline.build_pipeline(tmp_path, "../sub-02", session)
+
+
+def test_full_pipeline_launcher_submits_one_job() -> None:
+    launcher = SCRIPT_DIR / "submit_full_session_pipeline.sh"
+    text = launcher.read_text(encoding="utf-8")
+    assert text.count("sbatch --parsable") == 1
+    assert "gpu-350-02,gpu-350-04" in text
+    assert "gpu-580" not in text
+    assert "--mail-type=BEGIN,END,FAIL" in text
+
+
+def test_combined_report_writes_html_png_and_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = tmp_path / "processed/session"
+    suite2p_dir = run_dir / "suite2p"
+    plane_dir = suite2p_dir / "plane0"
+    qc_dir = suite2p_dir / "qc"
+    detection_dir = qc_dir / "detection"
+    workflow_dir = suite2p_dir / ".workflow"
+    trace_metadata = workflow_dir / "trace_extraction"
+    for path in (plane_dir, detection_dir, trace_metadata):
+        path.mkdir(parents=True, exist_ok=True)
+    complete = {"state": "complete", "elapsed_seconds": 1.0}
+    for path in (
+        workflow_dir / "registration_status.json",
+        detection_dir / "status.json",
+        trace_metadata / "status.json",
+    ):
+        path.write_text(json.dumps(complete), encoding="utf-8")
+
+    ops = {
+        "Ly": 4,
+        "Lx": 5,
+        "fs": 45.0,
+        "meanImg": np.arange(20, dtype=float).reshape(4, 5),
+        "refImg": np.arange(20, dtype=float).reshape(4, 5),
+        "corrXY": np.linspace(0.5, 0.9, 10),
+        "yoff": np.linspace(-1, 1, 10),
+        "xoff": np.linspace(1, -1, 10),
+        "badframes": np.zeros(10, dtype=bool),
+        "yoff1": np.zeros((10, 1)),
+        "xoff1": np.zeros((10, 1)),
+        "regDX": np.zeros((2, 4)),
+        "registration": {"maxregshift": 0.1},
+    }
+    np.save(plane_dir / "ops.npy", ops)
+    np.save(plane_dir / "iscell.npy", np.asarray([[1, 0.9], [0, 0.2]]))
+    np.save(detection_dir / "roi_masks.npy", np.zeros((4, 5), dtype=np.int32))
+    np.save(detection_dir / "roi_areas.npy", np.asarray([10.0, 12.0]))
+    np.save(detection_dir / "roi_diameters.npy", np.asarray([3.5, 3.9]))
+
+    def fake_trace_qc(command: list[str], check: bool) -> None:
+        assert check
+        output_dir = Path(command[command.index("--output-dir") + 1])
+        output_dir.mkdir(parents=True)
+        (output_dir / "trace_metrics.csv").write_text(
+            "roi,iscell,green_red_correlation,ratio_red_floor_fraction,green_dff_robust_sigma\n"
+            "0,1,0.5,0.1,0.2\n1,0,0.1,0.3,0.4\n",
+            encoding="utf-8",
+        )
+        (output_dir / "calculation.json").write_text("{}", encoding="utf-8")
+        for name in (
+            "summary.png",
+            "selected_cells_celltv.png",
+            "selected_cells_dff.png",
+        ):
+            (output_dir / name).write_bytes(b"test")
+
+    monkeypatch.setattr(generate_full_session_qc.subprocess, "run", fake_trace_qc)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "generate_full_session_qc.py",
+            "--run-dir",
+            str(run_dir),
+            "--script-dir",
+            str(SCRIPT_DIR),
+        ],
+    )
+
+    generate_full_session_qc.main()
+
+    assert (qc_dir / "index.html").is_file()
+    assert (qc_dir / "summary.png").is_file()
+    assert (qc_dir / "session_metrics.csv").is_file()
+    assert (qc_dir / "calculation.json").is_file()
+
+
 def test_trace_output_validation_rejects_wrong_frame_count() -> None:
     stat = np.asarray([{}], dtype=object)
     trace = np.ones((1, 4))
@@ -261,6 +433,24 @@ def test_trace_qc_normalizes_by_baseline() -> None:
     assert np.allclose(dff, [[0.0, 1.0, 2.0]])
     assert np.allclose(signal - base, [[0.0, 2.0, 4.0]])
     assert not clipped.any()
+
+
+def test_trace_qc_reads_nested_suite2p_1_1_settings() -> None:
+    signal = np.asarray([[2.0, 4.0, 6.0]], dtype=np.float32)
+    ops = {
+        "fs": 1.0,
+        "dcnv_preprocess": {
+            "baseline": "constant_prctile",
+            "prctile_baseline": 0.0,
+            "win_baseline": 60.0,
+            "sig_baseline": 10.0,
+        },
+    }
+
+    dff, base, _ = generate_trace_qc.normalized_dff(signal, ops)
+
+    assert np.allclose(base, 2.0)
+    assert np.allclose(dff, [[0.0, 1.0, 2.0]])
 
 
 def test_trace_qc_cell_selection_is_deterministic() -> None:

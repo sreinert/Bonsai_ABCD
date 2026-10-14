@@ -10,6 +10,7 @@ import os
 import platform
 import socket
 import sys
+import tempfile
 import time
 import traceback
 from pathlib import Path
@@ -90,9 +91,11 @@ def configure_settings(settings: dict[str, Any], device: str) -> dict[str, Any]:
     return settings
 
 
-def load_reviewed_detection(detection_dir: Path) -> tuple[np.ndarray, dict[str, Any]]:
+def load_reviewed_detection(
+    detection_dir: Path, stat_path: Path | None = None
+) -> tuple[np.ndarray, dict[str, Any]]:
     status_path = detection_dir / "status.json"
-    stat_path = detection_dir / "stat.npy"
+    stat_path = stat_path or detection_dir / "stat.npy"
     for required in (status_path, stat_path):
         if not required.is_file():
             raise FileNotFoundError(f"Required detection output is missing: {required}")
@@ -113,6 +116,45 @@ def load_reviewed_detection(detection_dir: Path) -> tuple[np.ndarray, dict[str, 
             f"Detection status records {recorded_count} ROIs but stat.npy has {len(stat)}"
         )
     return stat, status
+
+
+def promote_output_bundle(output_dir: Path, arrays: dict[str, Any]) -> None:
+    """Stage, validate, and promote one complete Suite2p output bundle."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    temporary = Path(
+        tempfile.mkdtemp(prefix=".trace-output-", dir=output_dir.parent)
+    )
+    staged = temporary / "staged"
+    backups = temporary / "backups"
+    staged.mkdir()
+    backups.mkdir()
+    promoted: list[Path] = []
+    replaced: list[tuple[Path, Path]] = []
+    try:
+        for name, value in arrays.items():
+            atomic_save(staged / name, value)
+        for name in arrays:
+            target = output_dir / name
+            if target.exists():
+                if name not in {"stat.npy", "ops.npy"}:
+                    raise FileExistsError(f"Refusing to overwrite trace output: {target}")
+                backup = backups / name
+                os.replace(target, backup)
+                replaced.append((target, backup))
+            os.replace(staged / name, target)
+            promoted.append(target)
+    except BaseException:
+        for target in reversed(promoted):
+            if target.exists():
+                target.unlink()
+        for target, backup in reversed(replaced):
+            if backup.exists():
+                os.replace(backup, target)
+        raise
+    finally:
+        import shutil
+
+        shutil.rmtree(temporary, ignore_errors=True)
 
 
 def validate_stat(stat: np.ndarray) -> None:
@@ -183,9 +225,24 @@ def main() -> None:
         help="Reviewed detection directory (default: RUN_DIR/roi_detection/cpsam).",
     )
     parser.add_argument(
+        "--stat-path",
+        type=Path,
+        help="Detected stat.npy when it is stored outside DETECTION_DIR.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         help="Isolated output directory (default: RUN_DIR/trace_extraction/cpsam).",
+    )
+    parser.add_argument(
+        "--metadata-dir",
+        type=Path,
+        help="Status/provenance directory (default: OUTPUT_DIR).",
+    )
+    parser.add_argument(
+        "--allow-output-dir-nonempty",
+        action="store_true",
+        help="Allow writing validated outputs into an existing Suite2p plane directory.",
     )
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     args = parser.parse_args()
@@ -214,7 +271,15 @@ def main() -> None:
         if args.output_dir
         else run_dir / "trace_extraction" / "cpsam"
     )
-    if output_dir.exists() and any(output_dir.iterdir()):
+    metadata_dir = (
+        args.metadata_dir.resolve() if args.metadata_dir else output_dir
+    )
+    stat_path = args.stat_path.resolve() if args.stat_path else None
+    if (
+        not args.allow_output_dir_nonempty
+        and output_dir.exists()
+        and any(output_dir.iterdir())
+    ):
         raise FileExistsError(f"Refusing to overwrite trace output: {output_dir}")
     for name in PLANE_OUTPUTS:
         if (plane_dir / name).exists():
@@ -231,7 +296,8 @@ def main() -> None:
         if not required.is_file():
             raise FileNotFoundError(f"Required registered input is missing: {required}")
 
-    stat, detection_status = load_reviewed_detection(detection_dir)
+    stat, detection_status = load_reviewed_detection(detection_dir, stat_path)
+    resolved_stat_path = stat_path or detection_dir / "stat.npy"
     db = np.load(db_path, allow_pickle=True).item()
     reg_outputs = np.load(reg_outputs_path, allow_pickle=True).item()
     detect_outputs_path = detection_dir / "detect_outputs.npy"
@@ -247,7 +313,8 @@ def main() -> None:
     binaries_before = binary_snapshot(binaries)
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    status_path = output_dir / "status.json"
+    metadata_dir.mkdir(parents=True, exist_ok=True)
+    status_path = metadata_dir / "status.json"
     started = time.time()
     write_json_atomic(status_path, {"state": "running", "started_unix": started})
 
@@ -326,16 +393,25 @@ def main() -> None:
             "total_trace_job": time.time() - started,
         }
         ops = {**db, **settings, **reg_outputs, **detect_outputs}
+        ops["db"] = db
+        ops["settings"] = settings
+        ops["reg_outputs"] = reg_outputs
+        ops["detect_outputs"] = detect_outputs
         ops["plane_times"] = plane_times
 
-        atomic_save(output_dir / "F.npy", F)
-        atomic_save(output_dir / "Fneu.npy", Fneu)
-        atomic_save(output_dir / "F_chan2.npy", F_chan2)
-        atomic_save(output_dir / "Fneu_chan2.npy", Fneu_chan2)
-        atomic_save(output_dir / "spks.npy", spks)
-        atomic_save(output_dir / "iscell.npy", iscell)
-        atomic_save(output_dir / "stat.npy", stat)
-        atomic_save(output_dir / "ops.npy", ops)
+        promote_output_bundle(
+            output_dir,
+            {
+                "F.npy": F,
+                "Fneu.npy": Fneu,
+                "F_chan2.npy": F_chan2,
+                "Fneu_chan2.npy": Fneu_chan2,
+                "spks.npy": spks,
+                "iscell.npy": iscell,
+                "stat.npy": stat,
+                "ops.npy": ops,
+            },
+        )
 
         finished = time.time()
         provenance = {
@@ -355,7 +431,7 @@ def main() -> None:
             "run_dir": str(run_dir),
             "plane_dir": str(plane_dir),
             "detection_dir": str(detection_dir),
-            "detection_stat_sha256": file_sha256(detection_dir / "stat.npy"),
+            "detection_stat_sha256": file_sha256(resolved_stat_path),
             "detection_state": detection_status.get("state"),
             "output_dir": str(output_dir),
             "n_rois": int(len(stat)),
@@ -382,7 +458,7 @@ def main() -> None:
                 )
             },
         }
-        write_json_atomic(output_dir / "provenance.json", provenance)
+        write_json_atomic(metadata_dir / "provenance.json", provenance)
         write_json_atomic(status_path, provenance)
         print(
             f"Trace extraction completed: {len(stat)} ROIs, "

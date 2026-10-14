@@ -1,3 +1,44 @@
+# Full-session pipeline: one command, one Slurm job
+
+The complete production workflow is submitted with only a mouse ID and the
+exact raw session directory name:
+
+```bash
+bash preprocessing/suite2p/registration_tuning/remaining_steps/submit_full_session_pipeline.sh \
+  sub-XX \
+  ses-NAME_date-YYYYMMDDTHHMMSS
+```
+
+The launcher submits one 24-hour GPU job. That newly allocated job runs full
+registration, default CPSAM ROI detection, two-channel trace extraction,
+classification, deconvolution, and combined QC sequentially. The submission
+shell does not run analysis on its current host. Slurm sends `BEGIN`, `END`,
+and `FAIL` mail to `athina.apostolelli.24@ucl.ac.uk`; set
+`SLURM_MAIL_USER` to override the address.
+
+The default GPU exclusion is exactly `gpu-350-02,gpu-350-04`. Set
+`EXCLUDE_NODES` to override it. `PROJECT_ROOT`, `MRSIC_PROJECTS_ROOT`, and
+`PYTHON_EXECUTABLE` retain their existing meanings.
+
+For a raw input under:
+
+```text
+<project>/rawdata/cohort2/<mouse>/<full-session-id>/funcimg
+```
+
+all standard Suite2p products are written directly to:
+
+```text
+<project>/processed/cohort2/<mouse>/<short-session-id>/suite2p/plane0
+```
+
+This includes `stat.npy`, `iscell.npy`, `spks.npy`, `F.npy`, `Fneu.npy`, both
+channel-2 trace arrays, `ops.npy`, and the retained registered binaries. QC
+HTML, PNGs, and supporting QC metrics are kept under `suite2p/qc`; manifests,
+status, provenance, and Slurm logs are kept under `suite2p/.workflow`. The
+pipeline refuses partial or inconsistent existing Suite2p output and treats a
+fully completed run as a no-op.
+
 # Single-session registration and ROI detection
 
 This directory is the non-grid workflow for testing the steps after
