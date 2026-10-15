@@ -7,7 +7,7 @@ ERA_PALETTES = dict(
     Red2 = dict(colors=("#4D5F63", "#370702", "#48402B", "#C89e82", "#914622", "#C1CFC4"), order=(1,3,5,6,2,4)   ),
     NineteenEightyNine = dict(colors=("#C34533", "#A55D38", "#CFA176", "#CACCC7", "#8CACC4", "#7AA1BD", "#5A88AE"), order=(1,5,3,6,4,7,2)   ),
     Showgirl1 = dict(colors=("#613A1B", "#642921", "#D07C40", "#6B7237", "#448363"), order=(5, 1, 3, 4, 2)   ),
-    Showgirl2 = dict(colors=("#B74c2D", "#DC673E", "#CCB178", "#C1DCBF", "#7BB594", "#448363"), order=(1, 5, 3, 4, 6, 2)   ),
+    Showgirl2 = dict(colors=("#B74C2D", "#DC673E", "#CCB178", "#EAEDC4", "#C1DCBF", "#7BB594", "#448363"), order=(1, 7, 3, 5, 2, 6, 5)   ),
     SpeakNow1 = dict(colors=("#E2CFD8", "#C2A2B4", "#945791", "#7F407E", "#6B2D6D", "#421B4C", "#1C1120"), order=(2, 6, 1, 7, 4, 5, 3)   ),
     SpeakNow2 = dict(colors=("#F9DAC1", "#C27045", "#7E391D", "#29130F", "#050303"), order=(3, 1, 4, 5, 2)   ),
     TorturedPoet = dict(colors=("#EDECE8", "#E1DED7", "#B7B0A6", "#7F776D", "#443D35", "#342d26", "#2c251f"), order=(3,6,4,1,5,7,2)   ),
@@ -15,11 +15,11 @@ ERA_PALETTES = dict(
     Evermore1 = dict(colors=("#D9BFAB", "#C3A38A", "#928171", "#514741", "#1D171B", "#51292A", "#451A11", "#71311D", "#AD5D3B"), order=(5,2,9,7,4,8,1,6,3)   ),
     Evermore2 = dict(colors=("#1D171B", "#451A11", "#71311D", "#AD5D3B", "#DD936E", "#D9BFAB"), order=(4,3,6,1,5,2)   ),
     Reputation = dict(colors=("#FEFEFE", "#BFBFBF", "#5D5D5D", "#2B2B2B", "#050505"), order=(5,3,1,2,4)   ),
-    Lover1 = dict(colors=("#BF567F", "#FCB3C3", "#FEEFC6", "#815F51", "#4478ac"), order=(1, 5, 3, 4, 2)   ),
-    Lover2 = dict(colors=("#BF567F", "#FAAFD3", "#D9A8E8", "#6CB4DC", "#4478ac"), order=(1, 5, 3, 4, 2)   ),
+    Lover1 = dict(colors=("#BF567F", "#FCB3C3", "#FAE4A6", "#815F51", "#4478ac"), order=(1,5,3,4,2)   ),
+    Lover2 = dict(colors=("#BF567F", "#FAAFD3", "#D9A8E8", "#6CB4DC", "#4478ac"), order=(1,5,3,4,2)   ),
     TaylorSwift = dict(colors=("#142b1A", "#486833", "#689739", "#30C97E", "#29ADDE", "#2297B8", "#23677E"), order=(3,7,5,1,4,2,6)   ),
     Midnight1 = dict(colors=("#02091c", "#1B2541", "#354167", "#50658a", "#64829d", "#829eb1", "#a9b3c0"), order=(7,2,6,4,1,5,3)   ),
-    Midnight2 = dict(colors=("#411D30", "#5F2732", "#9A383C", "#BC7E6A", "#CBCBCD", "#7191A9"), order=(3,5,1,6,4,2)   ),
+    Midnight2 = dict(colors=("#411D30", "#5F2732", "#9A383C", "#BC7E6A", "#CBCBCD", "#7191A9", "#3D5F82", "#2B4159", "#202D3C"), order=(2,8,4,6,1,9,3,7,5)   ),
 
   )
 
@@ -122,5 +122,3 @@ def export(name, format="hex"):
             }
 
         return export
-
-
