@@ -1,0 +1,18 @@
+# SaReMaRa_20260629_GoalProgress -- one session per line: <mouse> <session tag>
+# Submit with the project root overridden (build_nwb_array.sh defaults to the holography cohort):
+#   BASE=/ceph/mrsic_flogel/public/projects/SaReMaRa_20260629_GoalProgress \
+#     sbatch --array=1-$(grep -cv '^\s*\(#\|$\)' sessions_goalprogress_sub-002.txt)%4 build_nwb_array.sh sessions_goalprogress_sub-002.txt
+#
+# Rebuild of sub-002 t0-t7 after the 2026-10-11 fixes (analog clock fit, barcode phantom decode,
+# atomic merge). behaviour_data.npz/.csv + valid_frames.npz were deleted for every session below;
+# existing NWBs are reused (their barcode fits are unchanged by the decode fix). seq1-001 (t4) had
+# no outputs at all and gets a full build. t8-t12 aren't listed: no suite2p output yet.
+# Tags are matched as substrings of the session folder names (raw t10-t12 use "t_10" etc.).
+sub-002 1LM001
+sub-002 1LM002
+sub-002 1LM003
+sub-002 1LM009
+sub-002 seq1-001
+sub-002 seq1-002
+sub-002 seq1-003
+sub-002 seq1-004

@@ -1,0 +1,61 @@
+# uv environment for nwb_barcoding (replaces the `2p_preprocess_extraction` conda env,
+# mainly so the pipeline can run on the HPC -- see hpc/README.md).
+#
+# Versions are pinned to what was installed in the working conda env (pip freeze,
+# Oct 2026), so uv reproduces the setup that produced the existing outputs. Only the
+# packages the pipeline (and the Aimbot_barcoding modules it imports) actually uses are
+# listed; jupyterlab/nodejs/neurosift/snakemake/dask from preprocess_alignment.yml are left out.
+#
+# Aimbot_barcoding itself is NOT a dependency here: it is imported from the sibling
+# folder by _aimbot_path.py, exactly as with conda.
+#
+#   uv lock  --project nwb_barcoding     # after changing anything below
+#   uv sync  --project nwb_barcoding     # build/update the venv from uv.lock
+#   uv run   --project nwb_barcoding python -m nwb_barcoding.build_session_nwb ...
+
+[project]
+name = "nwb-barcoding"
+version = "0.1.0"
+requires-python = "==3.12.*"
+dependencies = [
+    "pynwb==3.0.0",
+    "neuroconv==0.7.2",
+    "hdmf==3.14.6",
+    "hdmf-zarr==0.11.3",
+    "spikeinterface==0.103.1",  # imported by Aimbot's vdaqdatainterface; pinned for neuroconv bug #1304
+    "ndx-events",               # fork, see [tool.uv.sources]
+    "roiextractors",            # fork, see [tool.uv.sources]
+    "suite2p-NIU==0.1.1",       # only suite2p.extraction.dcnv is used (compute_dff.py)
+    "torch==2.13.0",            # not used directly; listed so the CPU-only source below applies
+    "torchvision",
+    "swc-aeon==0.1.0",
+    "defopt==7.0.0",
+    "natsort==8.4.0",
+    "numpy==1.26.4",
+    "scipy==1.17.1",
+    "pandas==2.3.3",
+    "h5py==3.16.0",
+    "pyyaml==6.0.3",
+    "matplotlib==3.11.1",
+    "scikit-image==0.25.2",
+    "scanimage-tiff-reader==1.4.1.4",
+    "tifffile==2026.3.3",
+]
+
+[tool.uv]
+package = false  # just an environment, nothing to build/install
+
+[tool.uv.sources]
+# Forks with bug fixes Aimbot_barcoding relies on; pinned to the commits in the conda env.
+ndx-events = { git = "https://github.com/sumiya-kuroda/ndx-events", rev = "c42310feaba70264ec8a10976cedf2b2dbd1a972" }
+roiextractors = { git = "https://github.com/sumiya-kuroda/roiextractors.git", rev = "2894411f530aed00acdf1059f9e45462824fa547" }
+# suite2p-NIU pulls in torch (via cellpose). The pipeline never uses it, so on Linux take
+# the CPU-only wheels instead of the multi-GB CUDA build. (uv only applies sources to
+# direct dependencies, hence torch/torchvision in the list above.)
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
