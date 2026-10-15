@@ -17,9 +17,15 @@ import matplotlib.patches as patches
 import scipy.cluster.hierarchy as sch
 import pandas as pd
 import parse_bonsai_functions
+from matplotlib.colors import LinearSegmentedColormap
+from cycler import cycler
+import era_brewer
 #suppress the warnings
 import warnings
 warnings.filterwarnings("ignore", category=RuntimeWarning)
+
+image_map = era_brewer.era_brew('SpeakNow1',n=5,brew_type="continuous")
+custom_cmap = LinearSegmentedColormap.from_list("custom_gradient", image_map)
 
 ## Loading functions 
 
@@ -171,12 +177,25 @@ def get_dff(funcimg_data, frame_ix, chan=1):
     all_f = f[:, frame_ix['valid_frames']]
     all_fneu = fneu[:, frame_ix['valid_frames']]
     all_cells_f_corr = all_f - all_fneu*0.7
-    dF = dcnv.preprocess(all_cells_f_corr, ops['baseline'], ops['win_baseline'], 
-                                    ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
+    #new suite2p relabeled variables... grmbl.. 
+    try:
+        baseline = ops['baseline']
+        win_baseline = ops['win_baseline']
+        sig_baseline = ops['sig_baseline']
+        prctile_baseline = ops['prctile_baseline']
+    except KeyError:
+        baseline = ops['dcnv_preprocess']['baseline']
+        win_baseline = ops['dcnv_preprocess']['win_baseline']
+        sig_baseline = ops['dcnv_preprocess']['sig_baseline']
+        prctile_baseline = ops['dcnv_preprocess']['prctile_baseline']
+    
+
+    dF = dcnv.preprocess(all_cells_f_corr, baseline, win_baseline, 
+                                    sig_baseline, ops['fs'], prctile_baseline)
     
     print(f"Calculated dF/F with the following parameters: "
-        f"baseline={ops['baseline']}, win_baseline={ops['win_baseline']}, "
-        f"sig_baseline={ops['sig_baseline']}, fs={ops['fs']},perctile_baseline={ops['prctile_baseline']}")
+        f"baseline={baseline}, win_baseline={win_baseline}, "
+        f"sig_baseline={sig_baseline}, fs={ops['fs']}, perctile_baseline={prctile_baseline}")
 
     return dF
 
@@ -213,9 +232,21 @@ def get_dff_GR(funcimg_data, frame_ix):
     f_ratio = f_corr / np.maximum(f_corr2, f_corr2_floor)
     # f_ratio = f_corr / f_corr2
 
+    #new suite2p relabeled variables... grmbl.. 
+    try:
+        baseline = ops['baseline']
+        win_baseline = ops['win_baseline']
+        sig_baseline = ops['sig_baseline']
+        prctile_baseline = ops['prctile_baseline']
+    except KeyError:
+        baseline = ops['dcnv_preprocess']['baseline']
+        win_baseline = ops['dcnv_preprocess']['win_baseline']
+        sig_baseline = ops['dcnv_preprocess']['sig_baseline']
+        prctile_baseline = ops['dcnv_preprocess']['prctile_baseline']
+
     # Compute dG/R
-    dF_GR = dcnv.preprocess(f_ratio, ops['baseline'], ops['win_baseline'], 
-                                    ops['sig_baseline'], ops['fs'], ops['prctile_baseline'])
+    dF_GR = dcnv.preprocess(f_ratio, baseline, win_baseline, 
+                                    sig_baseline, ops['fs'], prctile_baseline)
     
     return dF_GR
 
@@ -695,18 +726,12 @@ def extract_position_tuning(dF, cell, session, bins=200, plot=False):
     lick_rate = extract_lick_rate(dF, cell, session)
 
     lm = np.copy(session['landmarks'])
-    lm = lm[10:20] - session['tunnel_length'] + 4 #use the second set of landmarks for estimating their position in the corridor and add an offset of 4..
-    try:
-        goal_a = session['goal_idx'][0]
-        goal_b = session['goal_idx'][1]
-        goal_c = session['goal_idx'][2]
-        goal_d = session['goal_idx'][3]
-    except:
-        goal_a = session['goal_ids'][0]
-        goal_b = session['goal_ids'][1]
-        goal_c = session['goal_ids'][2]
-        goal_d = session['goal_ids'][3]
+    lm = lm[:session['num_landmarks']] - session['landmarks'][0][0]
 
+    try:
+        goals = session['goal_idx']
+    except:
+        goals = session['goal_ids']
 
     bins_pos = bins
     bin_edges = np.linspace(0, session['tunnel_length'], bins_pos+1)
@@ -716,10 +741,10 @@ def extract_position_tuning(dF, cell, session, bins=200, plot=False):
 
     for i in range(session['num_laps']):
         lap_idx = np.where(session['lap_idx'] == i)[0]
+        start_pos = session['position'][lap_idx][0]
         fr_per_lap = dF_cell[lap_idx]
         lr_per_lap = lick_rate[lap_idx]
-        pos_discount = i*session['tunnel_length']
-        bin_ix = np.digitize(session['position'][lap_idx]+4-pos_discount, bin_edges)
+        bin_ix = np.digitize(session['position'][lap_idx]-start_pos, bin_edges)
         for j in range(bins_pos):
             fr_per_bin[i,j] = np.mean(fr_per_lap[bin_ix == j])
             lr_per_bin[i,j] = np.mean(lr_per_lap[bin_ix == j])
@@ -758,43 +783,40 @@ def extract_position_tuning(dF, cell, session, bins=200, plot=False):
         #get y limits
         y_min, y_max = plt.ylim()
         for i in range(len(lm)):
-            ax.add_patch(patches.Rectangle((lm[i][0],0),lm[i][1]-lm[i][0],y_max,color='grey',alpha=0.3))
+            ax.add_patch(patches.Rectangle((lm[i][0],0),lm[i][1]-lm[i][0],y_max,color='grey',alpha=0.2))
         ax2 = ax.twinx()
-        ax2.plot(bin_edges[:-1], av_lr_per_bin, label='Lick Rate', color='orange')
-        ax2.fill_between(bin_edges[:-1], av_lr_per_bin-sem_lr_per_bin, av_lr_per_bin+sem_lr_per_bin, color='orange', alpha=0.2)
+        ax2.plot(bin_edges[:-1], av_lr_per_bin, label='Lick Rate', color='black')
+        ax2.fill_between(bin_edges[:-1], av_lr_per_bin-sem_lr_per_bin, av_lr_per_bin+sem_lr_per_bin, color='black', alpha=0.2)
         plt.title(f'Cell {cell} - Position Aligned')
         plt.xlabel('Position (cm)')
         plt.subplot(1, 3, 3)
         ax = plt.gca()
+        
         if session['laps_needed'] > 1:
-            plt.plot(bin_edges[:-1], state1_av, label='State 1', color='blue')
-            plt.fill_between(bin_edges[:-1], state1_av-state1_sem, state1_av+state1_sem, color='blue', alpha=0.2)
-            plt.plot(bin_edges[:-1], state2_av, label='State 2', color='orange')
-            plt.fill_between(bin_edges[:-1], state2_av-state2_sem, state2_av+state2_sem, color='orange', alpha=0.2)
+            plt.plot(bin_edges[:-1], state1_av, label='State 1', color='red')
+            plt.fill_between(bin_edges[:-1], state1_av-state1_sem, state1_av+state1_sem, color='red', alpha=0.2)
+            plt.plot(bin_edges[:-1], state2_av, label='State 2', color='green')
+            plt.fill_between(bin_edges[:-1], state2_av-state2_sem, state2_av+state2_sem, color='green', alpha=0.2)
             y_min, y_max = plt.ylim()
+            
             if session['laps_needed'] == 3:
-                plt.plot(bin_edges[:-1], state3_av, label='State 3', color='green')
-                plt.fill_between(bin_edges[:-1], state3_av-state3_sem, state3_av+state3_sem, color='green', alpha=0.2)
+                plt.plot(bin_edges[:-1], state3_av, label='State 3', color='orange')
+                plt.fill_between(bin_edges[:-1], state3_av-state3_sem, state3_av+state3_sem, color='orange', alpha=0.2)
                 y_min, y_max = plt.ylim()
-                ax.add_patch(patches.Rectangle((lm[goal_a][0],0),lm[goal_a][1]-lm[goal_a][0],y_max,color='blue',alpha=0.3))
-                ax.add_patch(patches.Rectangle((lm[goal_b][0],0),lm[goal_b][1]-lm[goal_b][0],y_max,color='blue',alpha=0.3))
-                ax.add_patch(patches.Rectangle((lm[goal_c][0],0),lm[goal_c][1]-lm[goal_c][0],y_max,color='orange',alpha=0.3))
-                ax.add_patch(patches.Rectangle((lm[goal_d][0],0),lm[goal_d][1]-lm[goal_d][0],y_max,color='green',alpha=0.3))
-            else:
-                ax.add_patch(patches.Rectangle((lm[goal_a][0],0),lm[goal_a][1]-lm[goal_a][0],y_max,color='blue',alpha=0.3))
-                ax.add_patch(patches.Rectangle((lm[goal_b][0],0),lm[goal_b][1]-lm[goal_b][0],y_max,color='blue',alpha=0.3))
-                ax.add_patch(patches.Rectangle((lm[goal_c][0],0),lm[goal_c][1]-lm[goal_c][0],y_max,color='orange',alpha=0.3))
-                ax.add_patch(patches.Rectangle((lm[goal_d][0],0),lm[goal_d][1]-lm[goal_d][0],y_max,color='orange',alpha=0.3))
+            for i in range(len(lm)):
+                if i not in goals:
+                    ax.add_patch(patches.Rectangle((lm[i][0],0),lm[i][1]-lm[i][0],y_max,color='grey',alpha=0.2))
+            for i, goal in enumerate(goals): #use i to create a color gradient for each goal
+                color = custom_cmap(i / len(goals))
+                ax.add_patch(patches.Rectangle((lm[goal][0],0),lm[goal][1]-lm[goal][0],y_max,color=color,alpha=0.6))
         else:
-            plt.plot(bin_edges[:-1], av_fr_per_bin, label='Average', color='blue')
-            plt.fill_between(bin_edges[:-1], av_fr_per_bin-sem_fr_per_bin, av_fr_per_bin+sem_fr_per_bin, color='blue', alpha=0.2)
+            plt.plot(bin_edges[:-1], av_fr_per_bin, label='Average', color='red')
+            plt.fill_between(bin_edges[:-1], av_fr_per_bin-sem_fr_per_bin, av_fr_per_bin+sem_fr_per_bin, color='red', alpha=0.2)
             y_min, y_max = plt.ylim()
-            ax.add_patch(patches.Rectangle((lm[goal_a][0],0),lm[goal_a][1]-lm[goal_a][0],y_max,color='blue',alpha=0.3))
-            ax.add_patch(patches.Rectangle((lm[goal_b][0],0),lm[goal_b][1]-lm[goal_b][0],y_max,color='blue',alpha=0.3))
-            ax.add_patch(patches.Rectangle((lm[goal_c][0],0),lm[goal_c][1]-lm[goal_c][0],y_max,color='blue',alpha=0.3))
-            ax.add_patch(patches.Rectangle((lm[goal_d][0],0),lm[goal_d][1]-lm[goal_d][0],y_max,color='blue',alpha=0.3))
-        for i in range(len(lm)):
-                ax.add_patch(patches.Rectangle((lm[i][0],0),lm[i][1]-lm[i][0],y_max,color='grey',alpha=0.3))
+            for i, goal in enumerate(goals): #use i to create a color gradient for each goal
+                color = custom_cmap(i / len(goals))
+                ax.add_patch(patches.Rectangle((lm[goal][0],0),lm[goal][1]-lm[goal][0],y_max,color=color,alpha=0.6))
+        
         plt.title(f'Cell {cell} - Position Aligned by State')
         plt.xlabel('Position (cm)')
     return fr_per_bin, bin_edges
@@ -937,6 +959,11 @@ def extract_modd_tuning(dF, cell, session, frame_rate=45, window_size=[-1, 2], p
                 plt.title('Goal D')
     return landmark_frames, all_lm_frames, modd_source
 
+# def extract_lm_tuning_from_idx(dF, cell, session, stage, frame_rate=45, window_size=[-1, 2], plot=False):
+# in the newer (GP cohort) sessions, the lm_idx is already the relevant frame, so we can just use that instead of finding the first frame where the position is greater than or equal to the landmark position for each lap.
+
+
+
 def extract_lm_tuning(dF, cell, session, stage, frame_rate=45, window_size=[-1, 2], plot=False):
     """Extract the tuning of the cell's activity to landmarks.
     This function finds the first frame where the position is greater than or equal to the landmark position for each lap.
@@ -978,15 +1005,10 @@ def extract_lm_tuning(dF, cell, session, stage, frame_rate=45, window_size=[-1, 
     window_frames = len(window)
 
     try:
-        goal_a = session['goal_idx'][0]
-        goal_b = session['goal_idx'][1]
-        goal_c = session['goal_idx'][2]
-        goal_d = session['goal_idx'][3]
+        goals = session['goal_idx']
     except:
-        goal_a = session['goal_ids'][0]
-        goal_b = session['goal_ids'][1]
-        goal_c = session['goal_ids'][2]
-        goal_d = session['goal_ids'][3]
+        goals = session['goal_ids']
+    
     unique_lms = len(np.unique(session['all_lms'])) # works for single and multiple laps
     # unique_lms = len(np.unique(session['lm_idx']))-1
 
@@ -1042,14 +1064,8 @@ def extract_lm_tuning(dF, cell, session, stage, frame_rate=45, window_size=[-1, 
                              landmark_frames[i, :] + sem_frames[i, :], color='black', alpha=0.2)
             plt.axvline(np.where(window == 0)[0][0], color='grey', linestyle='--', label='Landmark Time')
             plt.ylim(y_absmin, y_absmax)
-            if i == goal_a:
-                plt.title('Goal A')
-            elif i == goal_b:
-                plt.title('Goal B')
-            elif i == goal_c:
-                plt.title('Goal C')
-            elif i == goal_d:
-                plt.title('Goal D')
+            if i in goals:
+                plt.title(f'Goal Landmark {i+1}')
     return landmark_frames, lm_entries
 
 def extract_lick_tuning(dF, cell, session, frame_rate=45, window_size=[-1,2], plot=False):
@@ -1206,8 +1222,14 @@ def extract_goal_progress(dF,cell,session,frame_rate = 45,bins=90,plot=False,shu
         binned_A = binned_phase_firing[np.where(goal_rew_vec==3)[0],:]
         min_state = np.min([binned_A.shape[0],binned_B.shape[0],binned_C.shape[0],binned_D.shape[0]], axis=0)
         binned_all = np.concatenate(( binned_B[:min_state,:], binned_C[:min_state,:], binned_D[:min_state,:],binned_A[:min_state,:]), axis=1)
+    elif ngoals == 3:
+        binned_B = binned_phase_firing[np.where(goal_rew_vec==0)[0],:]
+        binned_C = binned_phase_firing[np.where(goal_rew_vec==1)[0],:]
+        binned_A = binned_phase_firing[np.where(goal_rew_vec==2)[0],:]
+        min_state = np.min([binned_B.shape[0],binned_C.shape[0],binned_A.shape[0]], axis=0)
+        binned_all = np.concatenate(( binned_B[:min_state,:], binned_C[:min_state,:], binned_A[:min_state,:]), axis=1)
     else:
-        print("Only 4 goals are supported for this goal progress extraction for now. Check extract_arb_progress for other specs.")
+        print("Only 3 or 4 goals are supported for this goal progress extraction for now. Check extract_arb_progress for other specs.")
     avg_bin = np.nanmean(binned_all, axis=0)
     std_bin = np.nanstd(binned_all, axis=0)
     sem_bin = std_bin / np.sqrt(binned_all.shape[0])
@@ -1217,7 +1239,7 @@ def extract_goal_progress(dF,cell,session,frame_rate = 45,bins=90,plot=False,shu
         ax1 = fig.add_subplot(121, projection='polar')
         ax1.set_theta_zero_location('N')
         ax1.set_theta_direction(-1)
-        angles = np.linspace(0, 2 * np.pi, bins*4, endpoint=False)
+        angles = np.linspace(0, 2 * np.pi, bins*ngoals, endpoint=False)
         # add the first angle to close the circle
         angles = np.concatenate((angles, [angles[0]]))
         avg_bin = np.concatenate((avg_bin, [avg_bin[0]]))
@@ -1225,8 +1247,8 @@ def extract_goal_progress(dF,cell,session,frame_rate = 45,bins=90,plot=False,shu
         ax1.plot(angles, avg_bin, color='blue', linewidth=2)
         ax1.fill_between(angles, avg_bin - sem_bin, avg_bin + sem_bin, color='blue', alpha=0.2)
         #label the cardinal directions
-        ax1.set_xticks(np.linspace(0, 2 * np.pi, 4, endpoint=False))
-        ax1.set_xticklabels(['A', 'B', 'C', 'D'])
+        ax1.set_xticks(np.linspace(0, 2 * np.pi, ngoals, endpoint=False))
+        ax1.set_xticklabels(['A', 'B', 'C', 'D'][:ngoals])
         ax1.set_title(f'Cell {cell} - Average Firing Rate (Polar)')
         ax2 = fig.add_subplot(122)
         cax = ax2.imshow(binned_all, aspect='auto', cmap='viridis', interpolation='none')
@@ -1235,7 +1257,7 @@ def extract_goal_progress(dF,cell,session,frame_rate = 45,bins=90,plot=False,shu
         plt.tight_layout()
     return binned_all, reward_ix
 
-def extract_goal_progress_unsorted(dF,cell,session,frame_rate = 45,bins=90,plot=False,shuffle=False):
+def extract_goal_progress_unsorted(dF,cell,session,frame_rate = 45,bins=90,shuffle=False):
     """
     Extract the goal progress for a specific cell.
     """
@@ -1264,19 +1286,85 @@ def extract_goal_progress_unsorted(dF,cell,session,frame_rate = 45,bins=90,plot=
     avg_bin = np.nanmean(binned_phase_firing, axis=0)
     std_bin = np.nanstd(binned_phase_firing, axis=0)
     sem_bin = std_bin / np.sqrt(binned_phase_firing.shape[0])
-
-    if plot:
-        fig = plt.figure(figsize=(10, 5))
-        ax1 = fig.add_subplot(111, projection='polar')
-        ax1.set_theta_zero_location('N')
-        ax1.set_theta_direction(-1)
-        angles = np.linspace(0, 2 * np.pi, bins*4, endpoint=False)
-        # add the first angle to close the circle
-        angles = np.concatenate((angles, [angles[0]]))
-        avg_bin = np.concatenate((avg_bin, [avg_bin[0]]))
-        sem_bin = np.concatenate((sem_bin, [sem_bin[0]]))
         
     return binned_phase_firing,avg_bin, reward_ix
+
+def extract_gp_correct_transitions_unsorted(dF,cell,session,frame_rate = 45,bins=90,shuffle=False):
+    """
+    Extract the goal progress only for correct transitions between goals for a session.
+    """
+    transitions_arr = np.asarray(session['correct_transitions'])
+    start_ix = transitions_arr[:, 2].astype(int)
+    end_ix = transitions_arr[:, 3].astype(int)
+    binned_phase_firing = np.zeros((len(start_ix)-1, bins))
+    dF_cell = extract_cell_trace(dF, cell, plot=False, session=session)
+
+    for i in range(len(start_ix)-1):
+        phase_frames = np.arange(start_ix[i], end_ix[i])
+        bin_edges = np.linspace(start_ix[i], end_ix[i], bins+1)
+        phase_firing = dF_cell[phase_frames]
+        if shuffle:
+                    np.random.shuffle(phase_firing)
+        bin_ix = np.digitize(phase_frames, bin_edges)
+        for j in range(bins):
+            binned_phase_firing[i,j] = np.mean(phase_firing[bin_ix == j+1])
+
+    avg_bin = np.nanmean(binned_phase_firing, axis=0)
+    std_bin = np.nanstd(binned_phase_firing, axis=0)
+    sem_bin = std_bin / np.sqrt(binned_phase_firing.shape[0])
+
+    return binned_phase_firing, avg_bin, sem_bin
+
+def extract_gp_correct_transitions(dF,cell,session,frame_rate = 45,bins=90,shuffle=False):
+    try:
+        n_goals = len(session['goal_idx'])
+        goal_values = session['goal_idx']
+    except:
+        n_goals = len(session['goal_ids'])
+        goal_values = session['goal_ids']
+    cat_goal_binned_phase_firing = np.zeros((n_goals, bins))
+    cat_sem_goal_binned_phase_firing = np.zeros((n_goals, bins))
+    transitions_arr = np.asarray(session['correct_transitions'])
+    dF_cell = extract_cell_trace(dF, cell, plot=False, session=session) 
+    for i, goal in enumerate(goal_values):
+        goal_ix = np.where(transitions_arr[:, 0] == goal)[0]
+        goal_start_ix = transitions_arr[goal_ix, 2].astype(int)
+        goal_end_ix = transitions_arr[goal_ix, 3].astype(int)
+        if len(goal_start_ix) == 0:
+            print(f"No correct transitions found for goal {goal}. Skipping.")
+            av_goal_bin = np.full((bins,), np.nan)
+            sem_goal_bin = np.full((bins,), np.nan)
+            cat_goal_binned_phase_firing[i, :] = av_goal_bin
+            cat_sem_goal_binned_phase_firing[i, :] = sem_goal_bin
+            continue
+        goal_binned_phase_firing = np.zeros((len(goal_start_ix)-1, bins))
+        for k in range(len(goal_start_ix)-1):
+            phase_frames = np.arange(goal_start_ix[k], goal_end_ix[k])
+            bin_edges = np.linspace(goal_start_ix[k], goal_end_ix[k], bins+1)
+            phase_firing = dF_cell[phase_frames]
+            if shuffle:
+                np.random.shuffle(phase_firing)
+            bin_ix = np.digitize(phase_frames, bin_edges)
+            for j in range(bins):
+                goal_binned_phase_firing[k,j] = np.mean(phase_firing[bin_ix == j+1])
+        av_goal_bin = np.nanmean(goal_binned_phase_firing, axis=0)
+        sem_goal_bin = np.nanstd(goal_binned_phase_firing, axis=0) / np.sqrt(goal_binned_phase_firing.shape[0])
+        cat_goal_binned_phase_firing[i, :] = av_goal_bin
+        cat_sem_goal_binned_phase_firing[i, :] = sem_goal_bin
+    cat_goal_binned_phase_firing = cat_goal_binned_phase_firing.flatten()
+    cat_sem_goal_binned_phase_firing = cat_sem_goal_binned_phase_firing.flatten()
+
+    return cat_goal_binned_phase_firing, cat_sem_goal_binned_phase_firing
+
+def calc_gp_tuning_corr_trans(dF,cell,session,frame_rate = 45,bins=90,shuffle=False):
+    """
+    Calculate the goal progress tuning for a specific cell for correct transitions between goals.
+    """
+    binned_phase_firing, avg_bin, sem_bin = extract_gp_correct_transitions_unsorted(dF,cell,session,frame_rate,bins,shuffle)
+    phase_pref = np.argmax(avg_bin)
+    tuning_strength = (np.max(avg_bin) - np.min(avg_bin)) / np.mean(avg_bin)
+    return binned_phase_firing, avg_bin, sem_bin, phase_pref, tuning_strength
+
 
 def plot_goal_progress(dF_cell, session,frame_rate=45,bins=90,plot=True):
 
@@ -1310,8 +1398,14 @@ def plot_goal_progress(dF_cell, session,frame_rate=45,bins=90,plot=True):
         binned_A = binned_phase_firing[np.where(goal_rew_vec==3)[0],:]
         min_state = np.min([binned_A.shape[0],binned_B.shape[0],binned_C.shape[0],binned_D.shape[0]], axis=0)
         binned_all = np.concatenate(( binned_B[:min_state,:], binned_C[:min_state,:], binned_D[:min_state,:],binned_A[:min_state,:]), axis=1)
+    elif ngoals == 3:
+        binned_B = binned_phase_firing[np.where(goal_rew_vec==0)[0],:]
+        binned_C = binned_phase_firing[np.where(goal_rew_vec==1)[0],:]
+        binned_A = binned_phase_firing[np.where(goal_rew_vec==2)[0],:]
+        min_state = np.min([binned_A.shape[0],binned_B.shape[0],binned_C.shape[0]], axis=0)
+        binned_all = np.concatenate(( binned_B[:min_state,:], binned_C[:min_state,:],binned_A[:min_state,:]), axis=1)
     else:
-        print("Only 4 goals are supported for this goal progress extraction for now. Check extract_arb_progress for other specs.")
+        print("Only 3 or 4 goals are supported for this goal progress extraction for now. Check extract_arb_progress for other specs.")
     avg_bin = np.nanmean(binned_all, axis=0)
     std_bin = np.nanstd(binned_all, axis=0)
     sem_bin = std_bin / np.sqrt(binned_all.shape[0])
@@ -1320,7 +1414,10 @@ def plot_goal_progress(dF_cell, session,frame_rate=45,bins=90,plot=True):
         ax1 = fig.add_subplot(111, projection='polar')
         ax1.set_theta_zero_location('N')
         ax1.set_theta_direction(-1)
-        angles = np.linspace(0, 2 * np.pi, bins*4, endpoint=False)
+        if ngoals == 3:
+            angles = np.linspace(0, 2 * np.pi, bins*3, endpoint=False)
+        else:
+            angles = np.linspace(0, 2 * np.pi, bins*4, endpoint=False)
         # add the first angle to close the circle
         angles = np.concatenate((angles, [angles[0]]))
         avg_bin = np.concatenate((avg_bin, [avg_bin[0]]))
@@ -1328,13 +1425,17 @@ def plot_goal_progress(dF_cell, session,frame_rate=45,bins=90,plot=True):
         ax1.plot(angles, avg_bin, color='blue', linewidth=2)
         ax1.fill_between(angles, avg_bin - sem_bin, avg_bin + sem_bin, color='blue', alpha=0.2)
         #label the cardinal directions
-        ax1.set_xticks(np.linspace(0, 2 * np.pi, 4, endpoint=False))
-        ax1.set_xticklabels(['A', 'B', 'C', 'D'])
+        if ngoals == 3:
+            ax1.set_xticks(np.linspace(0, 2 * np.pi, 3, endpoint=False))
+            ax1.set_xticklabels(['A', 'B', 'C'])
+        else:
+            ax1.set_xticks(np.linspace(0, 2 * np.pi, 4, endpoint=False))
+            ax1.set_xticklabels(['A', 'B', 'C', 'D'])
         ax1.set_title('Average Firing Rate (Polar)')
-        # ax2 = fig.add_subplot(122)
-        # cax = ax2.imshow(binned_all, aspect='auto', cmap='viridis', interpolation='none')
-        # ax2.set_title('Binned Firing Rates')
-        # plt.colorbar(cax, ax=ax2, label='dF/F')
+        ax2 = fig.add_subplot(122)
+        cax = ax2.imshow(binned_all, aspect='auto', cmap='viridis', interpolation='none')
+        ax2.set_title('Binned Firing Rates')
+        plt.colorbar(cax, ax=ax2, label='dF/F')
         plt.tight_layout()
 
     return binned_all
@@ -1410,7 +1511,7 @@ def calc_goal_tuningix(dF, cell, session, condition='goal',event_frames=None,n_g
     if condition == 'goal':
         binned_all, _ = extract_goal_progress(dF, cell, session, frame_rate=frame_rate, bins=bins, plot=False, shuffle=False)
     elif condition == 'arb':
-        binned_all = extract_arb_progress(dF, cell, event_frames, n_goals, bins, plot=False, shuffle=False)
+        binned_all = extract_arb_progress(dF, cell, event_frames, n_goals, bins=bins, plot=False, shuffle=False)
 
     av_binned = np.nanmean(binned_all, axis=0)
     std_bin = np.nanstd(binned_all, axis=0)
@@ -1442,7 +1543,7 @@ def calc_goal_tuningix(dF, cell, session, condition='goal',event_frames=None,n_g
             if condition == 'goal':
                 binned_all, _ = extract_goal_progress(dF, cell, session, frame_rate=frame_rate, bins=bins, plot=False, shuffle=True)
             elif condition == 'arb':
-                binned_all = extract_arb_progress(dF, cell, event_frames, n_goals, bins, plot=False, shuffle=True)
+                binned_all = extract_arb_progress(dF, cell, event_frames, n_goals, bins=bins, plot=False, shuffle=True)
             av_binned = np.nanmean(binned_all, axis=0)
             ngoals = av_binned.shape[0]/bins
             ngoals = int(ngoals)
