@@ -38,5 +38,16 @@ Standard Suite2p arrays are saved in `suite2p/plane0`. The combined HTML and
 PNG report is saved in `suite2p/qc`, and logs and provenance are saved in
 `suite2p/.workflow`.
 
+Trace QC uses the raw-fluorescence signal-quality definitions imported from
+`preprocessing/quality_control` (baseline fluorescence, SNR, skew and detected
+event fraction) and plots the highest-SNR cells automatically. Neuropil-corrected
+green/red/G/R and CellTV-style traces are retained as a separate supplementary
+section. The original YAML-driven comparison commands remain available:
+
+```bash
+python preprocessing/quality_control/compare_signal_quality.py SETTINGS.yaml
+python preprocessing/quality_control/plot_high_snr_traces.py SETTINGS.yaml
+```
+
 Normally only `submit_full_session_pipeline.sh` is called directly. Its
 implementation is kept in the `full_session_pipeline` subfolder.

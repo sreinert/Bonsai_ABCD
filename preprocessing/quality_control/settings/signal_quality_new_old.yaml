@@ -1,0 +1,80 @@
+# Settings for compare_signal_quality.py and plot_high_snr_traces.py.
+# Usage (from preprocessing/quality_control):
+#   python compare_signal_quality.py settings/signal_quality_002_vs_010.yaml [--recompute]
+#   python plot_high_snr_traces.py settings/signal_quality_002_vs_010.yaml [--recompute]
+#
+# Per mouse: label, base, color, sessions (required); suite2p_subpath, cache_dir (optional).
+# Mice are plotted in the order listed.
+
+output_dir: ~/Desktop
+output_name: signal_quality_comparison   # -> <name>.png/.csv/_chan2.png, traces in <name>_high_snr_traces/
+
+# optional: one session drawn with an outline in the lower panels and all channel-2 panels
+highlight_session: ses-008_id-full065_date-20260128T174811
+title: |-
+  sub-002 vs. sub-010 vs. TAA0000066 (cohort2, independently known to have good signal)
+  highlighted point = sub-010's own dimmest session
+chan2_title: |-
+  Channel 2 (red, activity-independent) is also dimmer in sub-002, but by a smaller factor
+  than channel 1 — consistent with a general imaging shortfall plus an additional functional-channel deficit
+
+# optional, defaults shown; changing any of these invalidates the cache
+params: {baseline_percentile: 8, event_sigma: 3, snr_threshold: 5, skew_threshold: 1}
+traces: {n_cells: 8, window_frames: 20000}
+
+mice:
+  - label: sub-002 (GoalProgress)
+    base: /Volumes/mrsic_flogel/public/projects/SaReMaRa_20260629_GoalProgress/preprocessed/sub-002
+    color: "#eb6834"   # dataviz categorical slot 2 (orange)
+    sessions:
+      - ses-1LM001_date-20260701T132524-t0
+      - ses-1LM002_date-20260702T134515-t1
+      - ses-1LM003_date-20260703T142959-t2
+      - ses-1LM009_date-20260713T144654-t3
+      - ses-seq1-001_date-20260714T123233-t4
+      - ses-seq1-002_date-20260715T131655-t5
+      - ses-seq1-003_date-20260716T132147-t6
+      - ses-seq1-004_date-20260717T125723-t7
+
+  - label: sub-010 (cohort3)
+    base: /Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_funcimg_Nov2025/derivatives/sub-010
+    color: "#2a78d6"   # dataviz categorical slot 1 (blue)
+    sessions:
+      - ses-001_id-grey002_date-20251006T162436
+      - ses-002_id-1LM007_date-20251015T154322
+      - ses-006_id-full010_date-20251022T131509
+      - ses-006_id-full014_date-20251026T174420
+      - ses-006_id-full037_date-20251201T150330
+      - ses-007_id-full012_date-20251024T143755
+      - ses-007_id-full049_date-20251218T145620
+      - ses-008_id-full065_date-20260128T174811   # much later + dim: natural low-brightness control
+
+  - label: TAA0000066 (cohort2)
+    base: /Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/TAA0000066
+    color: "#1baf7a"   # dataviz categorical slot 3 (aqua)
+    # different suite2p layout, single (green) channel only
+    suite2p_subpath: funcimg/Session/suite2p/plane0
+    # suite2p sits inside the raw tree here, so keep cache files out of it
+    cache_dir: /Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/analysis/TAA0000066/signal_quality_cache
+    sessions:
+      - ses-005_date-20250218_protocol-t0
+      - ses-007_date-20250304_protocol-t2
+      - ses-009_date-20250313_protocol-t4
+      - ses-012_date-20250318_protocol-t6
+      - ses-014_date-20250326_protocol-t8
+      - ses-016_date-20250330_protocol-t10
+      - ses-018_date-20250403_protocol-t12
+      - ses-023_date-20250516_protocol-t17
+
+  - label: sub-IAA1145942 (test mouse)
+    base: /Volumes/mrsic_flogel/public/projects/SuKu_20250111_FeedbackRF/derivatives/sub-IAA1145942
+    color: "#f0c419"   # dataviz categorical slot 4 (yellow)
+    sessions:
+      - ses-054_protocol-driftinggratingv1_date-20260331
+
+  - label: new sub-004 (G6m mouse)
+    base: /Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1/preprocessed/sub-004
+    color: "#de19f0"   # pink
+    suite2p_subpath: funcimg/func_suite2p/plane0
+    sessions:
+      - ses-2LM002_date-20261007T164533-t1

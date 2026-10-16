@@ -1,0 +1,30 @@
+# Settings for compare_detection_pipelines.py.
+# Usage (from preprocessing/quality_control):
+#   python compare_detection_pipelines.py settings/detection_cellpose_vs_functional.yaml
+#
+# run_a / run_b: label and plane0 subpath (relative to each session path) of the two
+# suite2p runs to compare. Per session: label, path (required).
+
+output_dir: ~/Desktop/detection_comparison   # -> <label>/*.png, rois.csv, matched_pairs.csv; summary.csv
+
+run_a: {label: cellpose, subpath: funcimg/suite2p/plane0}
+run_b: {label: functional, subpath: funcimg/func_suite2p/plane0}
+
+# optional, defaults shown
+params:
+  neuropil_coeff: 0.7
+  baseline_percentile: 8
+  event_sigma: 3
+  snr_threshold: 5
+  iou_threshold: 0.3          # minimum mask IoU for two ROIs to count as the same cell
+  chan2_ratio_threshold: 1.2  # ROI / surround brightness in meanImg_chan2 to count as chan2+
+  annulus_inner: 2            # px around the ROI excluded from the surround
+  annulus_outer: 8            # px, outer edge of the surround
+  n_example_traces: 8
+  trace_window_s: 120
+
+sessions:
+  - label: sub-004_t1   # cellpose: cyto3 on chan1 meanImg inside suite2p
+    path: /Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1/preprocessed/sub-004/ses-2LM002_date-20261007T164533-t1
+  - label: sub-001_t0   # cellpose: chan2 meanImg segmentation imported via Convert_seg_to_stat
+    path: /Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1/preprocessed/sub-001/ses-2LM001_date-20261006T152657-t0

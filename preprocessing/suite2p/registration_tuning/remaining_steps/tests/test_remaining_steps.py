@@ -23,6 +23,7 @@ import inspect_run  # noqa: E402
 import prepare_session  # noqa: E402
 import run_detection_experiment  # noqa: E402
 import generate_trace_qc  # noqa: E402
+import two_channel_trace_qc  # noqa: E402
 import generate_full_session_qc  # noqa: E402
 import prepare_full_session_pipeline  # noqa: E402
 import run_full_session_pipeline  # noqa: E402
@@ -534,18 +535,24 @@ def test_combined_report_writes_html_png_and_metrics(
         assert check
         output_dir = Path(command[command.index("--output-dir") + 1])
         output_dir.mkdir(parents=True)
-        (output_dir / "trace_metrics.csv").write_text(
+        additional_dir = output_dir / "additional_two_channel"
+        additional_dir.mkdir()
+        (additional_dir / "trace_metrics.csv").write_text(
             "roi,iscell,green_red_correlation,ratio_red_floor_fraction,green_dff_robust_sigma\n"
             "0,1,0.5,0.1,0.2\n1,0,0.1,0.3,0.4\n",
             encoding="utf-8",
         )
+        (output_dir / "signal_quality_metrics.json").write_text(
+            json.dumps({"median_snr": 4.0, "n_cells": 1}), encoding="utf-8"
+        )
         (output_dir / "calculation.json").write_text("{}", encoding="utf-8")
         for name in (
-            "summary.png",
-            "selected_cells_celltv.png",
-            "selected_cells_dff.png",
+            "signal_quality_metrics.png",
+            "high_snr_traces.png",
         ):
             (output_dir / name).write_bytes(b"test")
+        for name in ("summary.png", "selected_cells_celltv.png", "selected_cells_dff.png"):
+            (additional_dir / name).write_bytes(b"test")
 
     monkeypatch.setattr(generate_full_session_qc.subprocess, "run", fake_trace_qc)
     monkeypatch.setattr(
@@ -598,7 +605,7 @@ def test_trace_qc_channel_calculation_matches_green_red_method() -> None:
     F2 = np.asarray([[4.0, 5.0, 6.0, 7.0, 8.0]])
     Fneu2 = np.zeros_like(F2)
 
-    result = generate_trace_qc.channel_signals(F, Fneu, F2, Fneu2, ops, 0.7)
+    result = two_channel_trace_qc.channel_signals(F, Fneu, F2, Fneu2, ops, 0.7)
 
     expected_green = F - 0.7 * Fneu
     expected_red = np.asarray([[4.0, 5.0, 6.0, 7.0, 7.0]])  # medfilt width 3
@@ -616,7 +623,7 @@ def test_trace_qc_normalizes_by_baseline() -> None:
         "prctile_baseline": 0.0,
     }
 
-    dff, base, clipped = generate_trace_qc.normalized_dff(signal, ops)
+    dff, base, clipped = two_channel_trace_qc.normalized_dff(signal, ops)
 
     assert np.allclose(base, 2.0)
     assert np.allclose(dff, [[0.0, 1.0, 2.0]])
@@ -636,7 +643,7 @@ def test_trace_qc_reads_nested_suite2p_1_1_settings() -> None:
         },
     }
 
-    dff, base, _ = generate_trace_qc.normalized_dff(signal, ops)
+    dff, base, _ = two_channel_trace_qc.normalized_dff(signal, ops)
 
     assert np.allclose(base, 2.0)
     assert np.allclose(dff, [[0.0, 1.0, 2.0]])
@@ -647,7 +654,7 @@ def test_trace_qc_cell_selection_is_deterministic() -> None:
     dff = np.asarray(
         [[0, 1, 0], [0, 1, 0], [0, 9, 0], [0, 2, 0]], dtype=float
     )
-    assert np.array_equal(generate_trace_qc.select_rois(iscell, dff, 2), [3, 1])
+    assert np.array_equal(two_channel_trace_qc.select_rois(iscell, dff, 2), [3, 1])
 
 
 def test_detection_experiment_parses_cellpose_parameters() -> None:

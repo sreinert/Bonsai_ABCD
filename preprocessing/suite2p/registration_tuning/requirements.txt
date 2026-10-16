@@ -2,4 +2,6 @@
 suite2p==1.1.0
 matplotlib>=3.8,<4
 numpy>=1.26,<3
+pandas>=2.0,<4
+PyYAML>=6,<7
 tifffile>=2024.2.12
