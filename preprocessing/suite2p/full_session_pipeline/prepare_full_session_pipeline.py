@@ -13,12 +13,17 @@ from typing import Any
 import numpy as np
 
 
-WORKFLOW_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(WORKFLOW_DIR))
+PIPELINE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(PIPELINE_DIR))
 
-from common import is_relative_to, paths_overlap, write_csv  # noqa: E402
-from discover_sessions import resolve_data_root, validate_tiff_header  # noqa: E402
-from make_full_session_tasks import (  # noqa: E402
+from full_session_common import (  # noqa: E402
+    is_relative_to,
+    paths_overlap,
+    resolve_data_root,
+    validate_tiff_header,
+    write_csv,
+)
+from full_session_config import (  # noqa: E402
     REGISTRATION,
     TIFF_SUFFIXES,
     processed_session_id,

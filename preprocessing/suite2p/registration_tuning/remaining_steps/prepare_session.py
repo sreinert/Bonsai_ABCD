@@ -11,7 +11,10 @@ from typing import Any
 
 
 WORKFLOW_DIR = Path(__file__).resolve().parents[1]
+SUITE2P_DIR = WORKFLOW_DIR.parent
+PIPELINE_DIR = SUITE2P_DIR / "full_session_pipeline"
 sys.path.insert(0, str(WORKFLOW_DIR))
+sys.path.insert(0, str(PIPELINE_DIR))
 
 from common import (  # noqa: E402
     paths_overlap,
@@ -27,7 +30,14 @@ from run_candidate import TASK_COLUMNS  # noqa: E402
 try:  # Support both direct script execution and package imports in tests.
     from .config import FS, NCHANNELS, NPLANES, REGISTRATION, SUITE2P_VERSION, TAU
 except ImportError:
-    from config import FS, NCHANNELS, NPLANES, REGISTRATION, SUITE2P_VERSION, TAU
+    from full_session_config import (
+        FS,
+        NCHANNELS,
+        NPLANES,
+        REGISTRATION,
+        SUITE2P_VERSION,
+        TAU,
+    )
 
 
 def unique_sessions(source_manifest: Path) -> list[dict[str, Any]]:

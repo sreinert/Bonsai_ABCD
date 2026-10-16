@@ -1122,3 +1122,164 @@ def plot_lick_rate_dist_across_sessions(session_data):
         # plt.tight_layout()
 
     return fig
+
+
+def plot_lick_rate_at_shared_distance_across_sessions(session_data):
+    """Compare test and non-goal lick rates at their one shared distance."""
+
+    session_names = list(session_data)
+    n_sessions = len(session_names)
+
+    if not n_sessions:
+        raise ValueError("No session data were provided.")
+
+    relationships = [
+        ("goal → non-goal", "#9D1DA3"),
+        ("goal → test", "darkorange"),
+    ]
+    color_maps = [
+        mcolors.LinearSegmentedColormap.from_list(
+            f"shared_distance_gradient_{i}",
+            ["white", base_color],
+        )
+        for i, (_, base_color) in enumerate(relationships)
+    ]
+    color_positions = (
+        np.array([1.0])
+        if n_sessions == 1
+        else np.linspace(0.35, 1.0, n_sessions)
+    )
+    session_offsets = (
+        np.array([0.0])
+        if n_sessions == 1
+        else np.linspace(-0.12, 0.12, n_sessions)
+    )
+
+    shared_results = []
+    for session_name in session_names:
+        result = session_data[session_name]
+        relation_values = []
+
+        for relation_idx in range(2):
+            distances = np.asarray(
+                result["distances"][relation_idx], dtype=float
+            )
+            means = np.asarray(
+                result["means"][relation_idx], dtype=float
+            )
+            sems = np.asarray(
+                result["sems"][relation_idx], dtype=float
+            )
+            valid = np.isfinite(distances) & np.isfinite(means)
+            relation_values.append(
+                (distances[valid], means[valid], sems[valid])
+            )
+
+        non_goal_distances = relation_values[0][0]
+        test_distances = relation_values[1][0]
+        shared_distances = np.unique([
+            distance
+            for distance in non_goal_distances
+            if np.any(np.isclose(distance, test_distances))
+        ])
+
+        if shared_distances.size != 1:
+            raise ValueError(
+                f"Session {session_name!r} has {shared_distances.size} "
+                "shared distances; expected exactly one."
+            )
+
+        shared_distance = shared_distances[0]
+        session_means = []
+        session_sems = []
+        for distances, means, sems in relation_values:
+            match = np.flatnonzero(np.isclose(distances, shared_distance))
+            if match.size != 1:
+                raise ValueError(
+                    f"Session {session_name!r} does not have exactly one "
+                    f"value at shared distance {shared_distance:g}."
+                )
+            session_means.append(means[match[0]])
+            session_sems.append(sems[match[0]])
+
+        shared_results.append({
+            "distance": shared_distance,
+            "means": np.asarray(session_means),
+            "sems": np.asarray(session_sems),
+        })
+
+    with mpl.rc_context({
+        "axes.labelsize": 18,
+        "xtick.labelsize": 14,
+        "ytick.labelsize": 14,
+    }):
+        fig, ax = plt.subplots(
+            figsize=(5.5, 4.5),
+            constrained_layout=True,
+        )
+        category_positions = np.arange(2, dtype=float)
+
+        for session_idx, result in enumerate(shared_results):
+            x = category_positions + session_offsets[session_idx]
+            ax.plot(
+                x,
+                result["means"],
+                color=mcolors.to_rgba("0.65", 0.55),
+                linewidth=1,
+                zorder=1,
+            )
+            for relation_idx in range(2):
+                ax.errorbar(
+                    x[relation_idx],
+                    result["means"][relation_idx],
+                    yerr=result["sems"][relation_idx],
+                    fmt="o",
+                    color=color_maps[relation_idx](
+                        color_positions[session_idx]
+                    ),
+                    markeredgecolor="white",
+                    markeredgewidth=0.5,
+                    markersize=8,
+                    elinewidth=1.2,
+                    capsize=3,
+                    zorder=2,
+                )
+
+        ax.set_xticks(category_positions)
+        ax.set_xticklabels([label for label, _ in relationships])
+        for tick_label, (_, color) in zip(
+            ax.get_xticklabels(), relationships
+        ):
+            tick_label.set_color(color)
+
+        all_distances = np.asarray([
+            result["distance"] for result in shared_results
+        ])
+        if np.all(np.isclose(all_distances, all_distances[0])):
+            ax.set_title(f"Shared distance = {all_distances[0]:g}")
+        else:
+            ax.set_title("Single shared distance per session")
+
+        ax.set_ylabel("Mean lick rate")
+        ax.set_xlim(-0.35, 1.35)
+        ax.spines[["top", "right"]].set_visible(False)
+
+        session_cmap = mcolors.LinearSegmentedColormap.from_list(
+            "shared_distance_session_progression",
+            ["#dddddd", "#222222"],
+        )
+        session_norm = mcolors.Normalize(0, max(n_sessions - 1, 1))
+        colorbar = fig.colorbar(
+            mpl.cm.ScalarMappable(norm=session_norm, cmap=session_cmap),
+            ax=ax,
+            fraction=0.04,
+            pad=0.02,
+            shrink=0.5,
+            aspect=20,
+        )
+        colorbar.set_ticks([0, max(n_sessions - 1, 1)])
+        colorbar.set_ticklabels(["Early", "Late"])
+        colorbar.set_label("Sessions", fontsize=14)
+        colorbar.outline.set_visible(False)
+
+    return fig

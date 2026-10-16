@@ -7,8 +7,8 @@ import os, re
 from pathlib import Path
 from align_images import adjust_intensity
 
-# sessions = ['sub-03/ses-full001_date-20260817T110352'] # EDIT
-sessions = ['TAA0000232/ses-000']
+sessions = ['sub-02/ses-full002_date-20260818T134310'] # EDIT
+# sessions = ['TAA0000232/ses-000']
 n_chan = 2 # 1 / 2 # EDIT
 
 # Define paths
@@ -18,26 +18,10 @@ else:
     ROOT = "/Volumes/mrsic_flogel/public/projects"
 
 # basepath = Path(f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2") # EDIT
-basepath = Path(f"/{ROOT}/AtAp_20260119_SequenceCompression/funcimg_screening") # EDIT
-# basepath = Path(f"/{ROOT}/AtAp_20260119_SequenceCompression/rawdata/cohort2") # EDIT
-
-# basepath = Path(f"/{ROOT}/AtApSuKuSaRe_20250129_HFScohort2") # EDIT
-basepath = Path(f"/{ROOT}/AtAp_20260119_SequenceCompression/funcimg_screening") # EDIT
-# basepath = Path(f"/{ROOT}/AtAp_20260119_SequenceCompression/rawdata/cohort2") # EDIT
+# basepath = Path(f"/{ROOT}/AtAp_20260119_SequenceCompression/funcimg_screening") # EDIT
+basepath = Path(f"/{ROOT}/AtAp_20260119_SequenceCompression/rawdata/cohort2") # EDIT
 
 for session in sessions:
-    if 'AtApSuKuSaRe_20250129_HFScohort2' in str(basepath): 
-        # old suite2p version
-        suite2p_path = 'funcimg/Session/suite2p/plane0'
-        img_path = basepath / session / suite2p_path / 'ops.npy'
-    elif 'AtAp_20260119_SequenceCompression/funcimg_screening' in str(basepath):
-        suite2p_path = 'suite2p/plane0'
-        img_path = basepath / session / suite2p_path / 'reg_outputs.npy'
-    else:
-        # new suite2p version
-        suite2p_path = 'funcimg/suite2p/plane0'
-        img_path = basepath / session / suite2p_path / 'reg_outputs.npy'
-
     if 'AtApSuKuSaRe_20250129_HFScohort2' in str(basepath): 
         # old suite2p version
         suite2p_path = 'funcimg/Session/suite2p/plane0'
@@ -72,10 +56,6 @@ for session in sessions:
     ops = np.load(img_path, allow_pickle=True).item()
     img1 = ops['meanImg']
     img1 = img_as_ubyte(adjust_intensity(img_as_ubyte(rescale_intensity(img1, in_range='image', out_range=(0, 1)))))
-    plt.imsave(os.path.join(basepath, session, suite2p_path, 'meanImg.png'), img1, cmap='gray')
-    plt.imsave(os.path.join(basepath, session, suite2p_path, 'meanImg.tiff'), img1, cmap='gray')
-    plt.close()
-    print('Saved meanImg')
     plt.imsave(os.path.join(basepath, session, suite2p_path, 'meanImg.png'), img1, cmap='gray')
     plt.imsave(os.path.join(basepath, session, suite2p_path, 'meanImg.tiff'), img1, cmap='gray')
     plt.close()

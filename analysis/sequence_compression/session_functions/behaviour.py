@@ -3,7 +3,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import scipy.stats as stats
 import importlib 
-from session_functions import utils
+try:
+    from . import utils
+except ImportError:  # Support legacy direct imports from sequence_compression/.
+    from session_functions import utils
 importlib.reload(utils)
 
 np.set_printoptions(suppress=True, precision=2)
@@ -12,6 +15,121 @@ class Behaviour():
     def __init__(self, session, performance):
         self.session = session
         self.performance = performance
+
+    def get_aab_omission_b_lick_counts(
+        self, threshold="below", omitted_landmarks=None
+    ):
+        """Return B lick counts for complete AAB triplets with one A omission.
+
+        A record is retained only when exactly one of A1/A2 is a programmed
+        omission and the other A delivered a reward.  The first B in cohort 1
+        AAB recordings is normally preceded only by the initial A2 and is
+        therefore counted as an incomplete boundary triplet.
+
+        ``omitted_landmarks`` may be supplied by the caller when omission
+        indices have already been parsed. This keeps notebook analyses aligned
+        with the established omission detector used by their preceding plots.
+
+        Returns
+        -------
+        result : dict
+            ``records`` contains one dictionary per retained B. ``qc`` counts
+            included and excluded B landmarks by reason.
+        """
+        if self.session.sequence != "AAB":
+            raise ValueError(
+                "AAB omission analysis requires an AAB session; "
+                f"got {self.session.sequence!r}."
+            )
+
+        (
+            lick_position,
+            _,
+            _,
+            reward_positions,
+            _,
+        ) = self.session.get_event_parsed(threshold=threshold)
+        (
+            _,
+            _,
+            target_positions,
+            distractor_positions,
+            _,
+            _,
+        ) = self.session.find_targets_distractors()
+        release_positions = np.sort(
+            np.concatenate([target_positions, distractor_positions])
+        )
+
+        A1, A2, B, _, _ = self.session.get_A_B_splits()
+        if omitted_landmarks is None:
+            omitted_landmarks, _ = self.get_omissions()
+
+        qc = {
+            "total_b": len(B),
+            "included": 0,
+            "incomplete_triplet": 0,
+            "no_omission": 0,
+            "invalid_omission_pattern": 0,
+            "other_a_unrewarded": 0,
+        }
+        records = []
+
+        def delivered_reward(position):
+            return bool(
+                np.any(
+                    (reward_positions > position)
+                    & (reward_positions <= position + self.session.lm_size)
+                )
+            )
+
+        for triplet_index, b_landmark_index in enumerate(B):
+            b_landmark_index = int(b_landmark_index)
+            a1_index = b_landmark_index - 2
+            a2_index = b_landmark_index - 1
+
+            if a1_index not in A1 or a2_index not in A2:
+                qc["incomplete_triplet"] += 1
+                continue
+
+            a1_omitted = a1_index in omitted_landmarks
+            a2_omitted = a2_index in omitted_landmarks
+            n_omissions = int(a1_omitted) + int(a2_omitted)
+            if n_omissions == 0:
+                qc["no_omission"] += 1
+                continue
+            if n_omissions != 1:
+                qc["invalid_omission_pattern"] += 1
+                continue
+
+            other_a_index = a2_index if a1_omitted else a1_index
+            other_a_position = release_positions[other_a_index]
+            if not delivered_reward(other_a_position):
+                qc["other_a_unrewarded"] += 1
+                continue
+
+            b_position = release_positions[b_landmark_index]
+            lick_mask = (
+                (np.round(lick_position, 1) >= np.round(b_position, 1))
+                & (
+                    np.round(lick_position, 1)
+                    < np.round(b_position, 1) + self.session.lm_size
+                )
+            )
+            records.append(
+                {
+                    "mouse": str(self.session.animal),
+                    "session": str(self.session.session_id),
+                    "triplet": triplet_index,
+                    "omitted_a": "A1" if a1_omitted else "A2",
+                    "b_landmark_index": b_landmark_index,
+                    "b_position": float(b_position),
+                    "b_lick_count": int(np.sum(lick_mask)),
+                }
+            )
+            qc["included"] += 1
+
+        return {"records": records, "qc": qc}
 
     def get_lick_persistence(self, plot=False, include_A=False, remove_disengagement=False, plot_disengagement=False):
         '''Get lick persistence (lick counts) per landmark type'''
@@ -754,7 +872,7 @@ class Behaviour():
 
         # Get last goal, non-goal and test
         goal = sess['goal_landmark_id'][-1]
-        nongoal = goal + 1
+        nongoal = sess['non_goal_landmark_id'][-1]
         test = sess['test_landmark_id']
 
         # 1. Get goal -> nongoal and goal -> test distances
@@ -794,3 +912,68 @@ class Behaviour():
         lick_rate_err = [sem_g_to_ng, sem_g_to_t]
 
         return distances, lick_rates, lick_rate_err
+
+
+def summarize_aab_omission_lick_counts(records, mouse_ids):
+    """Summarize and test A1- versus A2-omission B lick counts per mouse.
+
+    The directional alternative is that B lick counts are greater after an A1
+    omission than after an A2 omission. Holm-adjusted p-values control the
+    family of per-mouse tests; no across-mouse population test is performed.
+    """
+    summaries = []
+
+    for mouse_id in map(str, mouse_ids):
+        mouse_records = [r for r in records if str(r["mouse"]) == mouse_id]
+        a1 = np.asarray(
+            [r["b_lick_count"] for r in mouse_records if r["omitted_a"] == "A1"],
+            dtype=float,
+        )
+        a2 = np.asarray(
+            [r["b_lick_count"] for r in mouse_records if r["omitted_a"] == "A2"],
+            dtype=float,
+        )
+
+        enough_data = len(a1) > 0 and len(a2) > 0
+        if enough_data:
+            test = stats.mannwhitneyu(
+                a1,
+                a2,
+                alternative="greater",
+                method="auto",
+            )
+            statistic = float(test.statistic)
+            p_raw = float(test.pvalue)
+            status = "ok"
+        else:
+            statistic = np.nan
+            p_raw = np.nan
+            status = "insufficient data"
+
+        mean_a1 = float(np.mean(a1)) if len(a1) else np.nan
+        mean_a2 = float(np.mean(a2)) if len(a2) else np.nan
+        summaries.append(
+            {
+                "mouse": mouse_id,
+                "n_A1_omitted": len(a1),
+                "n_A2_omitted": len(a2),
+                "mean_A1_omitted": mean_a1,
+                "mean_A2_omitted": mean_a2,
+                "mean_difference_A1_minus_A2": mean_a1 - mean_a2,
+                "mannwhitney_u": statistic,
+                "p_raw": p_raw,
+                "p_holm": np.nan,
+                "status": status,
+            }
+        )
+
+    tested = [i for i, row in enumerate(summaries) if np.isfinite(row["p_raw"])]
+    ordered = sorted(tested, key=lambda i: summaries[i]["p_raw"])
+    running_max = 0.0
+    n_tests = len(ordered)
+    for rank, summary_index in enumerate(ordered):
+        adjusted = summaries[summary_index]["p_raw"] * (n_tests - rank)
+        running_max = max(running_max, adjusted)
+        summaries[summary_index]["p_holm"] = min(1.0, running_max)
+
+    return summaries

@@ -22,15 +22,15 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-WORKFLOW_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(WORKFLOW_DIR))
+PIPELINE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(PIPELINE_DIR))
 
-from common import write_json_atomic
+from full_session_common import write_json_atomic
 
 try:  # Support both direct script execution and package imports in tests.
     from .config import DETECTION, FS, SUITE2P_VERSION, TAU
 except ImportError:
-    from config import DETECTION, FS, SUITE2P_VERSION, TAU
+    from full_session_config import DETECTION, FS, SUITE2P_VERSION, TAU
 
 
 FORBIDDEN_DOWNSTREAM_OUTPUTS = ("F.npy", "Fneu.npy", "iscell.npy", "spks.npy")
@@ -95,6 +95,7 @@ def configure_default_cellpose(settings: dict[str, Any], device: str) -> dict[st
     settings["tau"] = TAU
     settings["torch_device"] = device
     settings["detection"]["algorithm"] = DETECTION["algorithm"]
+    settings["detection"]["nbins"] = DETECTION["nbins"]
     cellpose_settings = settings["detection"]["cellpose_settings"]
     cellpose_settings["cellpose_model"] = DETECTION["effective_model"]
     cellpose_settings["img"] = DETECTION["input_image"]
@@ -261,6 +262,40 @@ def main() -> None:
                     f"Unexpected Suite2p Cellpose default {key}={expected[key]!r}; expected {value!r}"
                 )
 
+        yrange = [int(value) for value in reg_outputs["yrange"]]
+        xrange = [int(value) for value in reg_outputs["xrange"]]
+        nframes = int(db["nframes"])
+        nbins = int(settings["detection"]["nbins"])
+        bin_size = int(max(1, nframes // nbins, round(settings["tau"] * settings["fs"])))
+        n_binned_frames = min(nbins, nframes // bin_size)
+        crop_shape = [yrange[1] - yrange[0], xrange[1] - xrange[0]]
+        badframes = np.asarray(reg_outputs["badframes"], dtype=bool)
+        estimated_movie_bytes = int(
+            n_binned_frames * crop_shape[0] * crop_shape[1] * np.dtype(np.float32).itemsize
+        )
+        input_diagnostics = {
+            "nframes": nframes,
+            "frame_shape": [int(db["Ly"]), int(db["Lx"])],
+            "yrange": yrange,
+            "xrange": xrange,
+            "crop_shape": crop_shape,
+            "badframes": int(np.count_nonzero(badframes)),
+            "badframe_fraction": float(np.mean(badframes)),
+            "nbins": nbins,
+            "bin_size": bin_size,
+            "n_binned_frames": n_binned_frames,
+            "estimated_binned_movie_bytes": estimated_movie_bytes,
+            "cellpose_input": DETECTION["input_image"],
+        }
+        write_json_atomic(output_dir / "input_diagnostics.json", input_diagnostics)
+        print(
+            "Detection input: "
+            f"{nframes} frames, crop {crop_shape[0]}x{crop_shape[1]}, "
+            f"{input_diagnostics['badframes']} bad frames, nbins={nbins}, "
+            f"estimated binned movie={estimated_movie_bytes / 1024**3:.2f} GiB",
+            flush=True,
+        )
+
         device = torch.device(args.device)
         with suite2p.io.BinaryFile(
             Ly=int(db["Ly"]), Lx=int(db["Lx"]), filename=data_path,
@@ -278,7 +313,7 @@ def main() -> None:
                 diameter=settings["diameter"],
                 settings=settings["detection"],
                 classifier_path=None,
-                badframes=np.asarray(reg_outputs["badframes"], dtype=bool),
+                badframes=badframes,
                 preclassify=settings["classification"]["preclassify"],
                 device=device,
             )

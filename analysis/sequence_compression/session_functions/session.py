@@ -2,7 +2,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import numpy as np
 from functools import cached_property
-from session_functions.utils import *
+try:
+    from .utils import *
+except ImportError:  # Support legacy direct imports from sequence_compression/.
+    from session_functions.utils import *
 
 np.set_printoptions(suppress=True, precision=2)
 
@@ -106,6 +109,13 @@ class Session():
         elif self.sequence == 'ABB':
             # ABB: get rid of first event if needed otherwise keep the order the same
             release_df = release_df[1:]
+
+        elif self.sequence == 'AAB':
+            # Cohort 1 can log a faulty initial landmark near position zero.
+            # After removing it, the retained cyclic sequence starts at A2:
+            # A2, B, A1, A2, B, ...
+            if release_positions[0] < 2:
+                release_df = release_df[1:]
         
         return lick_position, lick_times, reward_times, reward_positions, release_df
 
@@ -332,9 +342,6 @@ class Session():
     def get_A_B_splits(self):
 
         A_landmarks, B_landmarks, A_idx, B_idx = self.get_A_B_landmarks()
-
-        # TODO adapt for omissions
-        reward_seq = np.array([lm[0]['rewardSequencePosition'] for lm in self.trial['landmarks']])
 
         A1 = A_landmarks
         A2 = []
@@ -1480,7 +1487,7 @@ class ABCD_Session():
         '''Get the data indices where rewards were delivered'''
 
         # Ensure mouse has left last rewarded landmark 
-        reward_idx = session['rewards']
+        reward_idx = session['rewards'].astype(int)
         if session['all_landmarks'][-1,1] < session['position'][reward_idx[-1]]:  
             reward_idx = reward_idx[:-1]  
             print('Mouse did not leave the last rewarded landmark. Removing landmark...')
@@ -1559,7 +1566,7 @@ class ABCD_Session():
     
         t = extract_int(session['stage'])
 
-        session = self.get_AB_sequence(session)
+        # session = self.get_AB_sequence(session)
 
         if t == 5 or t == 6:
             assert session['num_landmarks'] == 10, 'The number of landmarks in T5 or T6 should be 10.'
@@ -1569,14 +1576,16 @@ class ABCD_Session():
                 if landmark[0]["rewardSequencePosition"] != -1:
                     rewarded_sequence.append(landmark_idx)
 
-            if session['sequence'] == 'ABAB':
-                goal_landmark_id = np.array(rewarded_sequence)
+            goal_landmark_id = np.array(rewarded_sequence)
+            if len(np.unique(np.diff(goal_landmark_id))) > 1:
+                test_landmark_id = np.nan
+            else:
                 test_landmark_id = rewarded_sequence[-1] + 2
-            
-            elif session['sequence'] == 'AABB':  
-                goal_landmark_id = np.array([0, 1, 4, 5])
-                test_landmark_id = np.array([8, 9])
-            non_goal_landmark_id = np.setxor1d(np.arange(0, session['num_landmarks']), np.append(goal_landmark_id, test_landmark_id))
+
+            if not np.isnan(test_landmark_id):
+                non_goal_landmark_id = np.setxor1d(np.arange(0, session['num_landmarks']), np.append(goal_landmark_id, test_landmark_id))
+            else:
+                non_goal_landmark_id = np.setxor1d(np.arange(0, session['num_landmarks']), goal_landmark_id)
 
         elif t == 3 or t == 4:
             assert session['num_landmarks'] == 2, 'The number of landmarks in T3 or T4 should be 2.'

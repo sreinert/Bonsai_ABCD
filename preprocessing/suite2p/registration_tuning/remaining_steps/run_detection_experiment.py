@@ -25,7 +25,10 @@ from scipy.ndimage import gaussian_filter
 
 
 WORKFLOW_DIR = Path(__file__).resolve().parents[1]
+SUITE2P_DIR = WORKFLOW_DIR.parent
+PIPELINE_DIR = SUITE2P_DIR / "full_session_pipeline"
 sys.path.insert(0, str(WORKFLOW_DIR))
+sys.path.insert(0, str(PIPELINE_DIR))
 
 from common import write_json_atomic
 
@@ -33,7 +36,7 @@ try:  # Support direct script execution and package imports in tests.
     from .config import FS, SUITE2P_VERSION, TAU
     from .run_roi_detection import FORBIDDEN_DOWNSTREAM_OUTPUTS, boundaries
 except ImportError:
-    from config import FS, SUITE2P_VERSION, TAU
+    from full_session_config import FS, SUITE2P_VERSION, TAU
     from run_roi_detection import FORBIDDEN_DOWNSTREAM_OUTPUTS, boundaries
 
 

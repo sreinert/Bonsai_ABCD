@@ -10,12 +10,15 @@ import pytest
 import tifffile
 
 
-SCRIPT_DIR = Path(__file__).parents[1]
-WORKFLOW_DIR = SCRIPT_DIR.parent
+EXPERIMENT_DIR = Path(__file__).parents[1]
+WORKFLOW_DIR = EXPERIMENT_DIR.parent
+SUITE2P_DIR = WORKFLOW_DIR.parent
+SCRIPT_DIR = SUITE2P_DIR / "full_session_pipeline"
 sys.path.insert(0, str(WORKFLOW_DIR))
+sys.path.insert(0, str(EXPERIMENT_DIR))
 sys.path.insert(0, str(SCRIPT_DIR))
 
-import config  # noqa: E402
+import full_session_config as config  # noqa: E402
 import inspect_run  # noqa: E402
 import prepare_session  # noqa: E402
 import run_detection_experiment  # noqa: E402
@@ -136,6 +139,7 @@ def test_detection_defaults_and_visual_mask_helpers() -> None:
     assert configured["fs"] == config.FS
     assert configured["tau"] == config.TAU
     assert configured["detection"]["algorithm"] == "cellpose"
+    assert configured["detection"]["nbins"] == 500
     assert configured["detection"]["cellpose_settings"] == {
         "cellpose_model": "cpsam",
         "img": "meanImg",
@@ -458,7 +462,7 @@ def test_full_pipeline_runner_resume_skips_registration(
 
     run_full_session_pipeline.main()
 
-    invoked_scripts = [Path(command[1]).name for command in commands]
+    invoked_scripts = [Path(command[2]).name for command in commands]
     assert invoked_scripts == [
         "run_roi_detection.py",
         "run_trace_extraction.py",
@@ -472,7 +476,7 @@ def test_full_pipeline_runner_resume_skips_registration(
 
 
 def test_full_pipeline_launcher_submits_one_job() -> None:
-    launcher = SCRIPT_DIR / "submit_full_session_pipeline.sh"
+    launcher = SUITE2P_DIR / "submit_full_session_pipeline.sh"
     text = launcher.read_text(encoding="utf-8")
     assert text.count("sbatch --parsable") == 1
     assert "gpu-350-02,gpu-350-04" in text

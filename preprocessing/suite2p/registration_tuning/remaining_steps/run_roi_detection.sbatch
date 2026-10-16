@@ -18,8 +18,10 @@ fi
 run_dir=$1
 script_dir=$2
 python_executable=$3
+suite2p_dir=$(cd "${script_dir}/../.." && pwd)
+pipeline_dir="${suite2p_dir}/full_session_pipeline"
 export PYTHONNOUSERSITE=1
 
-"${python_executable}" "${script_dir}/run_roi_detection.py" \
+"${python_executable}" "${pipeline_dir}/run_roi_detection.py" \
   --run-dir "${run_dir}" \
   --device cuda

@@ -15,11 +15,11 @@ from pathlib import Path
 from typing import Any
 
 
-WORKFLOW_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(WORKFLOW_DIR))
+PIPELINE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(PIPELINE_DIR))
 
-from common import read_csv, write_json_atomic  # noqa: E402
-from remaining_steps.prepare_full_session_pipeline import (  # noqa: E402
+from full_session_common import read_csv, write_json_atomic  # noqa: E402
+from prepare_full_session_pipeline import (  # noqa: E402
     clean_downstream_outputs,
     validate_registration_for_resume,
 )
@@ -86,7 +86,8 @@ def main() -> None:
 
     registration_command = [
         python_executable,
-        str(WORKFLOW_DIR / "run_candidate.py"),
+        "-u",
+        str(PIPELINE_DIR / "run_registration.py"),
         "--manifest",
         str(args.manifest.resolve()),
         "--task-id",
@@ -135,6 +136,7 @@ def main() -> None:
             "detection",
             [
                 python_executable,
+                "-u",
                 str(script_dir / "run_roi_detection.py"),
                 "--run-dir",
                 str(run_dir),
@@ -152,6 +154,7 @@ def main() -> None:
             "trace_extraction",
             [
                 python_executable,
+                "-u",
                 str(script_dir / "run_trace_extraction.py"),
                 "--run-dir",
                 str(run_dir),
@@ -174,6 +177,7 @@ def main() -> None:
             "qc",
             [
                 python_executable,
+                "-u",
                 str(script_dir / "generate_full_session_qc.py"),
                 "--run-dir",
                 str(run_dir),

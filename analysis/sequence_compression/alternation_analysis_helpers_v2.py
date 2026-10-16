@@ -802,8 +802,9 @@ def plot_cpa_results(cpa_results, neurons, YY_data, session, Y_data=None, XY_rep
         ax2.set_xticklabels([0, bins])
         ax2.set_xlabel('Time bins')
         
-        plt.suptitle(f'{condition}: neuron {cell}') 
-        plt.tight_layout()
+        if axes is None:
+            fig.suptitle(f'{condition}: neuron {cell}')
+            fig.tight_layout()
 
         if save_plot:
             if plot_dir == '':

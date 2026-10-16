@@ -22,11 +22,11 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-WORKFLOW_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(WORKFLOW_DIR))
+PIPELINE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(PIPELINE_DIR))
 
-from common import write_json_atomic  # noqa: E402
-from evaluate import array_from, compute_metrics, load_ops, show_image  # noqa: E402
+from full_session_common import write_json_atomic  # noqa: E402
+from full_session_registration_qc import array_from, compute_metrics, load_ops, show_image  # noqa: E402
 
 
 def read_json(path: Path) -> dict[str, Any]:

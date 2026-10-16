@@ -2,6 +2,22 @@
 
 from __future__ import annotations
 
+import re
+
+
+TIFF_SUFFIXES = {".tif", ".tiff"}
+SESSION_PATTERN = re.compile(r"^ses-(?P<processed>.+?)_date-\d{8}T\d{6}(?:_|$)")
+
+
+def processed_session_id(raw_session_id: str) -> str:
+    match = SESSION_PATTERN.match(raw_session_id)
+    if match is None:
+        raise ValueError(
+            f"Session {raw_session_id!r} does not match "
+            "ses-<processed-id>_date-YYYYMMDDTHHMMSS"
+        )
+    return match.group("processed")
+
 
 SUITE2P_VERSION = "1.1.0"
 FS = 45.0
@@ -30,6 +46,10 @@ DETECTION = {
     # This is the detection input validated in the earlier cpsam-meanimg
     # experiment.  Do not inherit Suite2p's "max_proj / meanImg" default.
     "input_image": "meanImg",
+    # The default of 5000 materializes several GiB for a 512x512 movie even
+    # though this workflow feeds the temporal mean (not max projection) to
+    # CPSAM. 500 keeps the same mean-image method with a bounded peak.
+    "nbins": 500,
     "diameter": [12.0, 12.0],
     "flow_threshold": 0.4,
     "cellprob_threshold": 0.0,

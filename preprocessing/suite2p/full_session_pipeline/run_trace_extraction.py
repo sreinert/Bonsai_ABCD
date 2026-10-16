@@ -20,15 +20,15 @@ import numpy as np
 from scipy.stats import skew
 
 
-WORKFLOW_DIR = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(WORKFLOW_DIR))
+PIPELINE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(PIPELINE_DIR))
 
-from common import write_json_atomic
+from full_session_common import write_json_atomic
 
 try:  # Support both direct script execution and package imports in tests.
     from .config import FS, SUITE2P_VERSION, TAU
 except ImportError:
-    from config import FS, SUITE2P_VERSION, TAU
+    from full_session_config import FS, SUITE2P_VERSION, TAU
 
 
 PLANE_OUTPUTS = (

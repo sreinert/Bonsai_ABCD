@@ -38,6 +38,7 @@ fi
 mouse_id=${positional[0]}
 session_id=${positional[1]}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+pipeline_dir="${script_dir}/full_session_pipeline"
 python_executable=${PYTHON_EXECUTABLE:-$(command -v python)}
 project_root=${PROJECT_ROOT:-AtAp_20260119_SequenceCompression}
 exclude_nodes=${EXCLUDE_NODES-gpu-350-02,gpu-350-04}
@@ -89,7 +90,7 @@ if [[ "${resume}" == true ]]; then
   prepare_options+=(--resume)
 fi
 
-"${python_executable}" "${script_dir}/prepare_full_session_pipeline.py" \
+"${python_executable}" "${pipeline_dir}/prepare_full_session_pipeline.py" \
   "${mouse_id}" "${session_id}" \
   --project-root "${project_root}" \
   --paths-json "${paths_json}" \
@@ -140,8 +141,8 @@ else
     --chdir="${workflow_dir}" \
     --output="${log_dir}/full_pipeline_%j.out" \
     --error="${log_dir}/full_pipeline_%j.err" \
-    "${script_dir}/run_full_session_pipeline.sbatch" \
-    "${manifest}" "${run_dir}" "${script_dir}" "${python_executable}" "${start_stage}")
+    "${pipeline_dir}/run_full_session_pipeline.sbatch" \
+    "${manifest}" "${run_dir}" "${pipeline_dir}" "${python_executable}" "${start_stage}")
   job_id=${submission%%;*}
   stdout_log=${log_dir}/full_pipeline_${job_id}.out
   stderr_log=${log_dir}/full_pipeline_${job_id}.err
@@ -220,8 +221,8 @@ echo "Final report:     ${report}"
 
 if [[ "${execution_mode}" == current_node ]]; then
   echo "Running pipeline in the foreground on the current node..."
-  bash "${script_dir}/run_full_session_pipeline.sbatch" \
-    "${manifest}" "${run_dir}" "${script_dir}" "${python_executable}" "${start_stage}" \
+  bash "${pipeline_dir}/run_full_session_pipeline.sbatch" \
+    "${manifest}" "${run_dir}" "${pipeline_dir}" "${python_executable}" "${start_stage}" \
     2>&1 | tee "${stdout_log}"
   echo "Pipeline complete. Final report: ${report}"
 fi

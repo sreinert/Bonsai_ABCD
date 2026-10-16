@@ -18,6 +18,8 @@ fi
 run_dir=$1
 script_dir=$2
 python_executable=$3
+suite2p_dir=$(cd "${script_dir}/../.." && pwd)
+pipeline_dir="${suite2p_dir}/full_session_pipeline"
 detection_dir=${4:-}
 output_dir=${5:-}
 export PYTHONNOUSERSITE=1
@@ -30,4 +32,4 @@ if [[ -n "${output_dir}" ]]; then
   arguments+=(--output-dir "${output_dir}")
 fi
 
-"${python_executable}" "${script_dir}/run_trace_extraction.py" "${arguments[@]}"
+"${python_executable}" "${pipeline_dir}/run_trace_extraction.py" "${arguments[@]}"

@@ -1932,7 +1932,15 @@ def get_lick_persistence(sess_dataframe, ses_settings, plot=False, include_A=Fal
         else:
             return None, A_B_diff_list, None, licked_Bs, None
 
-def get_lick_counts(sess_dataframe, ses_settings, plot=False, threshold=True, misses=False, omissions=False):
+def get_lick_counts(
+    sess_dataframe,
+    ses_settings,
+    plot=False,
+    threshold=True,
+    misses=False,
+    omissions=False,
+    require_other_a_reward=False,
+):
     '''Get lick persistence (lick counts) per landmark type'''
 
     trial = ses_settings['trial']
@@ -1983,6 +1991,55 @@ def get_lick_counts(sess_dataframe, ses_settings, plot=False, threshold=True, mi
 
     # Split by landmark type
     A1, A2, B1, B2, B3 = get_A_B_splits(A_landmarks, B_landmarks, ses_settings)
+
+    if omissions and require_other_a_reward:
+        reward_seq = np.array(
+            [lm[0]['rewardSequencePosition'] for lm in trial['landmarks']]
+        )
+        is_aab = (
+            len(reward_seq) == 3
+            and np.sum(reward_seq == 0) == 2
+            and len(A2) > 0
+            and len(B2) == 0
+            and len(B3) == 0
+        )
+        if not is_aab:
+            raise ValueError(
+                'require_other_a_reward=True is only supported for AAB sessions.'
+            )
+
+        omitted_set = set(np.asarray(omitted_lms, dtype=int))
+        A1_set = set(np.asarray(A1, dtype=int))
+        A2_set = set(np.asarray(A2, dtype=int))
+        valid_omitted_lms = []
+
+        # The retained cohort-1 AAB stream begins A2, B, A1, A2, B, ... .
+        # Therefore the first B is an incomplete boundary triplet.  For every
+        # later B, the immediately preceding two landmarks are its A1 and A2.
+        for b_index in np.asarray(B1, dtype=int):
+            a1_index = int(b_index) - 2
+            a2_index = int(b_index) - 1
+            if a1_index not in A1_set or a2_index not in A2_set:
+                continue
+
+            a1_omitted = a1_index in omitted_set
+            a2_omitted = a2_index in omitted_set
+            if int(a1_omitted) + int(a2_omitted) != 1:
+                continue
+
+            other_a_index = a2_index if a1_omitted else a1_index
+            other_a_position = release_positions[other_a_index]
+            other_a_rewarded = np.any(
+                (reward_positions > other_a_position)
+                & (reward_positions <= other_a_position + lm_size)
+            )
+            if other_a_rewarded:
+                valid_omitted_lms.append(
+                    a1_index if a1_omitted else a2_index
+                )
+
+        omitted_lms = np.asarray(valid_omitted_lms, dtype=int)
+        omitted_pos = release_positions[omitted_lms]
 
     A1_licks = lick_counter[A1]
     A2_licks = lick_counter[A2] if len(A2) else np.array([])

@@ -17,6 +17,8 @@ fi
 trace_dir=$1
 script_dir=$2
 python_executable=$3
+suite2p_dir=$(cd "${script_dir}/../.." && pwd)
+pipeline_dir="${suite2p_dir}/full_session_pipeline"
 shift 3
 
 export PYTHONNOUSERSITE=1
@@ -26,6 +28,6 @@ scratch_root=${SLURM_TMPDIR:-${TMPDIR:-/tmp}}
 export MPLCONFIGDIR="${scratch_root}/matplotlib-trace-qc-${SLURM_JOB_ID:-$$}"
 mkdir -p "${MPLCONFIGDIR}"
 
-"${python_executable}" "${script_dir}/generate_trace_qc.py" \
+"${python_executable}" "${pipeline_dir}/generate_trace_qc.py" \
   --trace-dir "${trace_dir}" \
   "$@"
