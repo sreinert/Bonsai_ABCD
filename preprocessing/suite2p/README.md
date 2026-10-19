@@ -97,3 +97,6 @@ unless `--overwrite` is supplied. `suite2p_path_created` reports whether the
 session's Suite2p directory exists. `registration_status` is `succeeded` when
 the registration outputs are complete, `failed` when the Suite2p directory
 exists without those outputs, and `not_started` when no Suite2p directory exists.
+`tiff_files_present` is `yes` when `funcimg` contains at least one direct,
+non-hidden `.tif` or `.tiff` file and `no` when the `funcimg` directory is empty
+or contains no TIFF files. Sessions without TIFF files remain in the inventory.

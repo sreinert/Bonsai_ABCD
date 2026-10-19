@@ -16,9 +16,13 @@ sys.modules[SPEC.name] = inventory
 SPEC.loader.exec_module(inventory)
 
 
-def make_session(root: Path, mouse: str, name: str) -> Path:
+def make_session(
+    root: Path, mouse: str, name: str, *, with_tiff: bool = True
+) -> Path:
     session = root / mouse / name
     (session / "funcimg").mkdir(parents=True)
+    if with_tiff:
+        (session / "funcimg" / "movie.tif").write_bytes(b"test TIFF placeholder")
     return session
 
 
@@ -52,6 +56,7 @@ def test_inventory_filters_sessions_and_reports_complete_pipeline(tmp_path: Path
             "session_full_name": "ses-full002_date-20260818T134310",
             "session_short_name": "full002",
             "date": "2026-08-18",
+            "tiff_files_present": "yes",
             "suite2p_path_created": "yes",
             "registration": "yes",
             "registration_status": "succeeded",
@@ -132,6 +137,21 @@ def test_missing_suite2p_path_means_registration_not_started(tmp_path: Path) -> 
     assert row["suite2p_path_created"] == "no"
     assert row["registration"] == "no"
     assert row["registration_status"] == "not_started"
+
+
+def test_empty_funcimg_is_included_and_reports_no_tiff(tmp_path: Path) -> None:
+    raw_root = tmp_path / "rawdata" / "cohort2"
+    processed_root = tmp_path / "processed" / "cohort2"
+    make_session(
+        raw_root,
+        "sub-07",
+        "ses-empty_date-20261005",
+        with_tiff=False,
+    )
+
+    [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-07")
+
+    assert row["tiff_files_present"] == "no"
 
 
 def test_default_output_is_inside_processed_mouse_folder(tmp_path: Path) -> None:

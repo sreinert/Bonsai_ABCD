@@ -24,11 +24,13 @@ SESSION_PATTERN = re.compile(
 )
 REGISTRATION_FILES = ("ops.npy", "data.bin")
 TRACE_FILES = ("F.npy", "Fneu.npy", "spks.npy", "iscell.npy")
+TIFF_SUFFIXES = {".tif", ".tiff"}
 FIELDNAMES = (
     "mouse_id",
     "session_full_name",
     "session_short_name",
     "date",
+    "tiff_files_present",
     "suite2p_path_created",
     "registration",
     "registration_status",
@@ -173,6 +175,15 @@ def visible_session_directories(mouse_path: Path) -> list[Path]:
     )
 
 
+def has_direct_tiff_files(funcimg_path: Path) -> bool:
+    return any(
+        path.is_file()
+        and not path.name.startswith(".")
+        and path.suffix.lower() in TIFF_SUFFIXES
+        for path in funcimg_path.iterdir()
+    )
+
+
 def inventory_mouse(
     session_root: Path, suite2p_root: Path, mouse_id: str
 ) -> list[dict[str, object]]:
@@ -184,7 +195,8 @@ def inventory_mouse(
 
     rows: list[dict[str, object]] = []
     for session_path in visible_session_directories(mouse_path):
-        if not (session_path / "funcimg").is_dir():
+        funcimg_path = session_path / "funcimg"
+        if not funcimg_path.is_dir():
             continue
         short_name, date = parse_session_name(session_path.name)
         processed_session_path = suite2p_root / mouse_id / short_name
@@ -202,6 +214,9 @@ def inventory_mouse(
                 "session_full_name": session_path.name,
                 "session_short_name": short_name,
                 "date": date,
+                "tiff_files_present": (
+                    "yes" if has_direct_tiff_files(funcimg_path) else "no"
+                ),
                 "suite2p_path_created": "yes" if status.path_created else "no",
                 "registration": "yes" if status.registration else "no",
                 "registration_status": registration_status,

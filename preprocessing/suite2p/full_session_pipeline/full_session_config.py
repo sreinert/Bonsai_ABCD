@@ -42,7 +42,7 @@ REGISTRATION = {
 
 DETECTION = {
     "algorithm": "cellpose",
-    "effective_model": "cpsam",
+    "effective_model": "cpsam_v2",
     # This is the detection input validated in the earlier cpsam-meanimg
     # experiment.  Do not inherit Suite2p's "max_proj / meanImg" default.
     "input_image": "meanImg",
