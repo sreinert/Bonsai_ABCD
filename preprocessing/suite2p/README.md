@@ -79,7 +79,10 @@ python preprocessing/suite2p/create_session_inventory.py \
 
 This creates `suite2p_session_inventory.csv` inside each processed mouse folder,
 for example `processed/cohort2/sub-02/suite2p_session_inventory.csv`. The default
-project is `/Volumes/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression`.
+project is `AtAp_20260119_SequenceCompression`, resolved automatically under
+`/ceph/mrsic_flogel/public/projects` on the cluster or
+`/Volumes/mrsic_flogel/public/projects` on macOS. Set `MRSIC_PROJECTS_ROOT` to
+override the projects mount.
 Sessions containing `funcimg` are discovered under `rawdata/cohort2`, then their
 Suite2p results are read from the matching short-name directory under
 `processed/cohort2`. Use `--project-root PATH` for another project, or override
@@ -100,3 +103,10 @@ exists without those outputs, and `not_started` when no Suite2p directory exists
 `tiff_files_present` is `yes` when `funcimg` contains at least one direct,
 non-hidden `.tif` or `.tiff` file and `no` when the `funcimg` directory is empty
 or contains no TIFF files. Sessions without TIFF files remain in the inventory.
+`meanImg_chan1_seg_created` reports whether a manual Cellpose
+`registration/meanImg_chan1_seg.npy` exists (the current pipeline location is
+`suite2p/qc/registration`). When it exists, `iscell_updated_after_seg` and
+`stat_updated_after_seg` independently compare each plane output's modification
+time with the segmentation file. They report `yes` for an equal or newer output
+and `no` for an older or missing output; both are blank when no segmentation
+file exists.

@@ -6,17 +6,22 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 import numpy as np
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(SCRIPT_DIR))
 
-DEFAULT_PROJECT_ROOT = Path(
-    "/Volumes/mrsic_flogel/public/projects/"
-    "AtAp_20260119_SequenceCompression"
+from full_session_pipeline.full_session_common import (  # noqa: E402
+    remap_mounted_path,
+    resolve_data_root,
 )
+
+DEFAULT_PROJECT_ROOT = Path("AtAp_20260119_SequenceCompression")
 OUTPUT_FILENAME = "suite2p_session_inventory.csv"
 SESSION_PATTERN = re.compile(
     r"^ses-(?P<short_name>.+?)_date-(?P<date>\d{8})(?:T\d{6})?(?:_|$)",
@@ -38,6 +43,9 @@ FIELDNAMES = (
     "trace_extraction",
     "number_of_rois",
     "number_of_cells",
+    "meanImg_chan1_seg_created",
+    "iscell_updated_after_seg",
+    "stat_updated_after_seg",
 )
 
 
@@ -49,6 +57,20 @@ class Suite2pStatus:
     trace_extraction: bool
     number_of_rois: int | None
     number_of_cells: int | None
+    segmentation_created: bool
+    iscell_updated_after_seg: bool | None
+    stat_updated_after_seg: bool | None
+
+
+def resolve_project_root(value: Path) -> Path:
+    """Resolve the project across the cluster and macOS projects mounts."""
+    value = value.expanduser()
+    if value.is_absolute():
+        resolved = remap_mounted_path(value, must_exist=True)
+        if not resolved.is_dir():
+            raise NotADirectoryError(f"Project root not found: {resolved}")
+        return resolved
+    return resolve_data_root(value)
 
 
 def parse_session_name(name: str) -> tuple[str, str]:
@@ -94,6 +116,28 @@ def all_nonempty_files(directory: Path, names: Iterable[str]) -> bool:
     )
 
 
+def find_segmentation_file(
+    suite2p_path: Path,
+    raw_session_path: Path,
+    processed_session_path: Path,
+) -> Path | None:
+    """Return the newest manual Cellpose segmentation in supported locations."""
+    filename = "meanImg_chan1_seg.npy"
+    candidates = (
+        suite2p_path / "qc" / "registration" / filename,
+        suite2p_path / "registration" / filename,
+        processed_session_path / "registration" / filename,
+        raw_session_path / "registration" / filename,
+    )
+    existing = [path for path in candidates if path.is_file()]
+    return max(existing, key=lambda path: path.stat().st_mtime_ns) if existing else None
+
+
+def updated_after(path: Path, reference: Path) -> bool:
+    """Return whether path exists and is at least as new as reference."""
+    return path.is_file() and path.stat().st_mtime_ns >= reference.stat().st_mtime_ns
+
+
 def array_length(path: Path, *, allow_pickle: bool = False) -> int:
     array = np.load(path, mmap_mode=None if allow_pickle else "r", allow_pickle=allow_pickle)
     if array.ndim == 0:
@@ -117,11 +161,37 @@ def inspect_suite2p(
 ) -> Suite2pStatus:
     suite2p_path = find_suite2p_path(raw_session_path, processed_session_path)
     if suite2p_path is None:
-        return Suite2pStatus(False, False, False, False, None, None)
+        return Suite2pStatus(
+            False, False, False, False, None, None, False, None, None
+        )
 
     plane = suite2p_path / "plane0"
+    segmentation = find_segmentation_file(
+        suite2p_path, raw_session_path, processed_session_path
+    )
+    segmentation_created = segmentation is not None
+    iscell_updated_after_seg = (
+        updated_after(plane / "iscell.npy", segmentation)
+        if segmentation is not None
+        else None
+    )
+    stat_updated_after_seg = (
+        updated_after(plane / "stat.npy", segmentation)
+        if segmentation is not None
+        else None
+    )
     if not plane.is_dir():
-        return Suite2pStatus(True, False, False, False, None, None)
+        return Suite2pStatus(
+            True,
+            False,
+            False,
+            False,
+            None,
+            None,
+            segmentation_created,
+            iscell_updated_after_seg,
+            stat_updated_after_seg,
+        )
 
     registration = all_nonempty_files(plane, REGISTRATION_FILES)
 
@@ -161,6 +231,9 @@ def inspect_suite2p(
         trace_extraction,
         number_of_rois,
         number_of_cells,
+        segmentation_created,
+        iscell_updated_after_seg,
+        stat_updated_after_seg,
     )
 
 
@@ -228,6 +301,23 @@ def inventory_mouse(
                 "number_of_cells": (
                     "" if status.number_of_cells is None else status.number_of_cells
                 ),
+                "meanImg_chan1_seg_created": (
+                    "yes" if status.segmentation_created else "no"
+                ),
+                "iscell_updated_after_seg": (
+                    ""
+                    if status.iscell_updated_after_seg is None
+                    else "yes"
+                    if status.iscell_updated_after_seg
+                    else "no"
+                ),
+                "stat_updated_after_seg": (
+                    ""
+                    if status.stat_updated_after_seg is None
+                    else "yes"
+                    if status.stat_updated_after_seg
+                    else "no"
+                ),
             }
         )
     return rows
@@ -268,7 +358,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--project-root",
         type=Path,
         default=DEFAULT_PROJECT_ROOT,
-        help=f"SequenceCompression project directory (default: {DEFAULT_PROJECT_ROOT})",
+        help=(
+            "SequenceCompression project directory or name. Relative paths "
+            "auto-detect /ceph or /Volumes "
+            f"(default: {DEFAULT_PROJECT_ROOT})"
+        ),
     )
     parser.add_argument(
         "--session-root",
@@ -296,7 +390,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
-    project_root = args.project_root.expanduser().resolve()
+    project_root = resolve_project_root(args.project_root)
     session_root = (
         args.session_root.expanduser().resolve()
         if args.session_root

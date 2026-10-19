@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -64,6 +65,9 @@ def test_inventory_filters_sessions_and_reports_complete_pipeline(tmp_path: Path
             "trace_extraction": "yes",
             "number_of_rois": 2,
             "number_of_cells": 1,
+            "meanImg_chan1_seg_created": "no",
+            "iscell_updated_after_seg": "",
+            "stat_updated_after_seg": "",
         }
     ]
 
@@ -154,6 +158,39 @@ def test_empty_funcimg_is_included_and_reports_no_tiff(tmp_path: Path) -> None:
     assert row["tiff_files_present"] == "no"
 
 
+def test_manual_segmentation_reports_independent_output_freshness(
+    tmp_path: Path,
+) -> None:
+    raw_root = tmp_path / "rawdata" / "cohort2"
+    processed_root = tmp_path / "processed" / "cohort2"
+    make_session(raw_root, "sub-08", "ses-manual_date-20261006")
+    suite2p = processed_root / "sub-08" / "manual" / "suite2p"
+    plane = suite2p / "plane0"
+    registration = suite2p / "qc" / "registration"
+    plane.mkdir(parents=True)
+    registration.mkdir(parents=True)
+    np.save(plane / "iscell.npy", np.asarray([[1, 0.9]]))
+    np.save(plane / "stat.npy", np.asarray([{"id": 0}], dtype=object))
+    np.save(registration / "meanImg_chan1_seg.npy", np.asarray([1]))
+
+    base_time = 1_700_000_000_000_000_000
+    os.utime(plane / "iscell.npy", ns=(base_time, base_time))
+    os.utime(
+        registration / "meanImg_chan1_seg.npy",
+        ns=(base_time + 1_000, base_time + 1_000),
+    )
+    os.utime(
+        plane / "stat.npy",
+        ns=(base_time + 2_000, base_time + 2_000),
+    )
+
+    [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-08")
+
+    assert row["meanImg_chan1_seg_created"] == "yes"
+    assert row["iscell_updated_after_seg"] == "no"
+    assert row["stat_updated_after_seg"] == "yes"
+
+
 def test_default_output_is_inside_processed_mouse_folder(tmp_path: Path) -> None:
     processed_root = tmp_path / "processed" / "cohort2"
 
@@ -162,3 +199,16 @@ def test_default_output_is_inside_processed_mouse_folder(tmp_path: Path) -> None
     assert output == (
         processed_root / "sub-02" / "suite2p_session_inventory.csv"
     )
+
+
+def test_default_project_root_is_mount_independent(
+    tmp_path: Path, monkeypatch
+) -> None:
+    projects_root = tmp_path / "projects"
+    project = projects_root / inventory.DEFAULT_PROJECT_ROOT
+    project.mkdir(parents=True)
+    monkeypatch.setenv("MRSIC_PROJECTS_ROOT", str(projects_root))
+
+    resolved = inventory.resolve_project_root(inventory.DEFAULT_PROJECT_ROOT)
+
+    assert resolved == project.resolve()
