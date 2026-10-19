@@ -22,9 +22,20 @@ if [[ $# -lt 2 ]]; then
     exit 2
 fi
 
-script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 subject=$1
 session=$2
 shift 2
-python "${script_dir}/Convert_seg_to_stat.py" \
+
+submit_dir=${SLURM_SUBMIT_DIR:-$(pwd)}
+if [[ -f "${submit_dir}/preprocessing/suite2p/Convert_seg_to_stat.py" ]]; then
+    converter=${submit_dir}/preprocessing/suite2p/Convert_seg_to_stat.py
+elif [[ -f "${submit_dir}/Convert_seg_to_stat.py" ]]; then
+    converter=${submit_dir}/Convert_seg_to_stat.py
+else
+    echo "Could not find Convert_seg_to_stat.py from submission directory: ${submit_dir}" >&2
+    echo "Submit from the repository root or from preprocessing/suite2p." >&2
+    exit 2
+fi
+
+python "${converter}" \
     "${subject}" "${session}" --device cuda "$@"
