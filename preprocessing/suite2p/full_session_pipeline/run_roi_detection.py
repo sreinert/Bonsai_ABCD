@@ -255,6 +255,7 @@ def main() -> None:
             "img": DETECTION["input_image"],
             "flow_threshold": DETECTION["flow_threshold"],
             "cellprob_threshold": DETECTION["cellprob_threshold"],
+            "denoise": DETECTION["denoise"],
         }
         for key, value in expected_defaults.items():
             if expected[key] != value:

@@ -51,6 +51,7 @@ DETECTION = {
     # CPSAM. 500 keeps the same mean-image method with a bounded peak.
     "nbins": 500,
     "diameter": [12.0, 12.0],
-    "flow_threshold": 0.4,
+    "flow_threshold": 1.0,
     "cellprob_threshold": 0.0,
+    "denoise": True,
 }
