@@ -10,6 +10,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -121,6 +123,33 @@ def write_or_validate_manifest(path: Path, row: dict[str, object]) -> None:
         writer.writerow(row)
 
 
+def generate_registration_qc(run_dir: Path) -> tuple[Path, Path]:
+    """Write the standard registration QC figure and its numeric metrics."""
+    sys.path.insert(0, str(PIPELINE_DIR))
+    from full_session_registration_qc import compute_metrics, load_ops
+    from generate_full_session_qc import save_registration_qc
+
+    ops_path = run_dir / "suite2p" / "plane0" / "ops.npy"
+    if not ops_path.is_file():
+        raise FileNotFoundError(f"Registration did not produce {ops_path}")
+    ops, outputs = load_ops(ops_path)
+    metrics = compute_metrics(ops, outputs)
+
+    qc_dir = run_dir / "suite2p" / "qc" / "registration"
+    qc_dir.mkdir(parents=True, exist_ok=True)
+    figure_path = qc_dir / "registration_qc.png"
+    metrics_path = qc_dir / "registration_metrics.json"
+    save_registration_qc(figure_path, ops, outputs, metrics)
+    serializable_metrics = {
+        key: value if math.isfinite(value) else None for key, value in metrics.items()
+    }
+    metrics_path.write_text(
+        json.dumps(serializable_metrics, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return figure_path, metrics_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tiff", type=Path, help="one TIFF stack to register")
@@ -152,6 +181,9 @@ def main() -> None:
     print("Registration parameters:")
     print(json.dumps(REGISTRATION_PARAMETERS, indent=2, sort_keys=True))
 
+    mpl_config_dir = run_dir / ".workflow" / "matplotlib"
+    mpl_config_dir.mkdir(parents=True, exist_ok=True)
+    os.environ.setdefault("MPLCONFIGDIR", str(mpl_config_dir))
     subprocess.run(
         [
             sys.executable,
@@ -165,12 +197,23 @@ def main() -> None:
             args.device,
         ],
         check=True,
+        env=os.environ.copy(),
     )
 
     plane_dir = run_dir / "suite2p" / "plane0"
+    qc_figure, qc_metrics = generate_registration_qc(run_dir)
     print(f"Registration complete: {plane_dir}")
     print(f"Mean-image TIFF:       {plane_dir / 'meanImg_chan1.tiff'}")
     print(f"Mean-image PNG:        {plane_dir / 'meanImg_chan1.png'}")
+    enhanced_tiff = plane_dir / "meanImgE.tiff"
+    enhanced_png = plane_dir / "meanImgE.png"
+    if enhanced_tiff.is_file() and enhanced_png.is_file():
+        print(f"Enhanced mean TIFF:    {enhanced_tiff}")
+        print(f"Enhanced mean PNG:     {enhanced_png}")
+    else:
+        print("Enhanced mean image:   not present in Suite2p ops.npy")
+    print(f"Registration QC:       {qc_figure}")
+    print(f"Registration metrics:  {qc_metrics}")
 
 
 if __name__ == "__main__":

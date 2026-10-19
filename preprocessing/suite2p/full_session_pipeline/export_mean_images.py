@@ -38,22 +38,25 @@ def export_plane(ops_path: Path, *, require_chan2: bool = True) -> list[Path]:
     ops = np.load(ops_path, allow_pickle=True).item()
     chan1 = array_from_ops(ops, "meanImg")
     chan2 = array_from_ops(ops, "meanImg_chan2")
+    enhanced = array_from_ops(ops, "meanImgE")
     if chan1.ndim != 2 or not chan1.size:
         raise KeyError(f"meanImg is missing or invalid in {ops_path}")
     if require_chan2 and (chan2.ndim != 2 or not chan2.size):
         raise KeyError(f"meanImg_chan2 is missing or invalid in {ops_path}")
 
-    images = [("chan1", chan1)]
+    images = [("chan1", "meanImg_chan1", chan1)]
     if chan2.ndim == 2 and chan2.size:
-        images.append(("chan2", chan2))
+        images.append(("chan2", "meanImg_chan2", chan2))
+    if enhanced.ndim == 2 and enhanced.size:
+        images.append(("enhanced chan1", "meanImgE", enhanced))
 
     exported: list[Path] = []
     previews: list[tuple[str, np.ndarray]] = []
-    for label, image in images:
+    for label, output_stem, image in images:
         image = np.asarray(image, dtype=np.float32)
         preview = normalized_preview(image)
-        tiff_path = ops_path.parent / f"meanImg_{label}.tiff"
-        png_path = ops_path.parent / f"meanImg_{label}.png"
+        tiff_path = ops_path.parent / f"{output_stem}.tiff"
+        png_path = ops_path.parent / f"{output_stem}.png"
         tifffile.imwrite(tiff_path, image, photometric="minisblack")
         plt.imsave(png_path, preview, cmap="gray", vmin=0, vmax=1)
         exported.extend((tiff_path, png_path))
