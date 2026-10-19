@@ -26,8 +26,8 @@ for argument in "$@"; do
   esac
 done
 
-if [[ ${#positional[@]} -ne 2 ]]; then
-  echo "Usage: $0 [--overwrite|--resume] [--current-node] MOUSE_ID FULL_RAW_SESSION_ID" >&2
+if [[ ${#positional[@]} -lt 2 ]]; then
+  echo "Usage: $0 [--overwrite|--resume] [--current-node] MOUSE_ID FULL_RAW_SESSION_ID [FULL_RAW_SESSION_ID ...]" >&2
   exit 2
 fi
 if [[ "${overwrite}" == true && "${resume}" == true ]]; then
@@ -36,8 +36,63 @@ if [[ "${overwrite}" == true && "${resume}" == true ]]; then
 fi
 
 mouse_id=${positional[0]}
-session_id=${positional[1]}
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+if [[ ${#positional[@]} -gt 2 ]]; then
+  session_ids=("${positional[@]:1}")
+  if [[ "${current_node}" == true ]]; then
+    echo "--current-node: sessions will run sequentially on the current GPU."
+  else
+    echo "Submitting one independent Slurm job per session."
+  fi
+
+  seen_sessions=()
+  for session_id in "${session_ids[@]}"; do
+    if [[ ${#seen_sessions[@]} -gt 0 ]]; then
+      for seen_session in "${seen_sessions[@]}"; do
+        if [[ "${session_id}" == "${seen_session}" ]]; then
+          echo "Duplicate session in batch: ${session_id}" >&2
+          exit 2
+        fi
+      done
+    fi
+    seen_sessions+=("${session_id}")
+  done
+
+  failed_sessions=()
+  completed_count=0
+  for session_id in "${session_ids[@]}"; do
+    echo
+    echo "=== ${mouse_id} / ${session_id} ==="
+    submission_command=(bash "${script_dir}/submit_full_session_pipeline.sh")
+    if [[ "${overwrite}" == true ]]; then
+      submission_command+=(--overwrite)
+    fi
+    if [[ "${resume}" == true ]]; then
+      submission_command+=(--resume)
+    fi
+    if [[ "${current_node}" == true ]]; then
+      submission_command+=(--current-node)
+    fi
+    submission_command+=("${mouse_id}" "${session_id}")
+    if "${submission_command[@]}"; then
+      completed_count=$((completed_count + 1))
+    else
+      failed_sessions+=("${session_id}")
+    fi
+  done
+
+  echo
+  echo "Batch summary: ${completed_count}/${#session_ids[@]} session submissions succeeded."
+  if [[ ${#failed_sessions[@]} -gt 0 ]]; then
+    echo "Failed sessions:" >&2
+    printf '  %s\n' "${failed_sessions[@]}" >&2
+    exit 1
+  fi
+  exit 0
+fi
+
+session_id=${positional[1]}
 pipeline_dir="${script_dir}/full_session_pipeline"
 python_executable=${PYTHON_EXECUTABLE:-$(command -v python)}
 project_root=${PROJECT_ROOT:-AtAp_20260119_SequenceCompression}

@@ -488,6 +488,9 @@ def test_full_pipeline_launcher_submits_one_job() -> None:
     assert "torch.cuda.is_available()" in text
     assert "Refusing current-node analysis on excluded host" in text
     assert '"${start_stage}"' in text
+    assert "Submitting one independent Slurm job per session." in text
+    assert "Batch summary:" in text
+    assert "Duplicate session in batch:" in text
 
 
 def test_combined_report_writes_html_png_and_metrics(
