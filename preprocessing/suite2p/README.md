@@ -110,3 +110,43 @@ or contains no TIFF files. Sessions without TIFF files remain in the inventory.
 time with the segmentation file. They report `yes` for an equal or newer output
 and `no` for an older or missing output; both are blank when no segmentation
 file exists.
+
+## Import a reviewed Cellpose segmentation
+
+After saving Cellpose's reviewed segmentation as
+`suite2p/qc/registration/meanImg_chan1_seg.npy`, replace Suite2p's detected ROIs
+and regenerate all ROI-dependent traces with:
+
+```bash
+python preprocessing/suite2p/Convert_seg_to_stat.py \
+  sub-02 \
+  ses-full002_date-20260818T134310
+```
+
+The short processed session ID (for example `full002`) is also accepted. Use
+`--dry-run` first to validate the resolved paths, mask dimensions, and ROI count
+without changing files. The command reads the registered `data.bin` and, when
+present, `data_chan2.bin`; it updates `stat.npy`, fluorescence/neuropil traces,
+`iscell.npy`, and `spks.npy` together. Previous outputs are retained under
+`suite2p/.workflow/manual_segmentation_backups`. On Slurm, the equivalent GPU
+submission is:
+
+```bash
+sbatch preprocessing/suite2p/convert_seg_to_stat.sh \
+  sub-02 \
+  ses-full002_date-20260818T134310
+```
+
+By default, the script looks for the segmentation in `suite2p/qc/registration`.
+For the previous layout, where the mean image and its Cellpose segmentation were
+saved directly in the Suite2p plane output folder, use:
+
+```bash
+python preprocessing/suite2p/Convert_seg_to_stat.py \
+  sub-02 \
+  ses-full002_date-20260818T134310 \
+  --meanimg-folder plane0
+```
+
+`--meanimg-folder` may also be an absolute directory. If the segmentation has a
+nonstandard filename, pass its complete path with `--segmentation` instead.
