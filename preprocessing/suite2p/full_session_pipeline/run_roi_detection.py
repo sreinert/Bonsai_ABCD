@@ -13,8 +13,10 @@ import socket
 import sys
 import time
 import traceback
+from contextlib import contextmanager
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import matplotlib
 matplotlib.use("Agg")
@@ -70,23 +72,23 @@ def boundaries(masks: np.ndarray) -> np.ndarray:
     return outline
 
 
-def model_provenance() -> dict[str, Any]:
+def model_provenance(model_name: str) -> dict[str, Any]:
     from cellpose import models
 
     candidates: list[Path] = []
     for attribute in ("MODEL_DIR", "MODEL_DIR_DEFAULT", "MODELS_DIR"):
         value = getattr(models, attribute, None)
         if value:
-            candidates.append(Path(value) / "cpsam")
-    candidates.append(Path.home() / ".cellpose" / "models" / "cpsam")
+            candidates.append(Path(value) / model_name)
+    candidates.append(Path.home() / ".cellpose" / "models" / model_name)
     for path in candidates:
         if path.is_file():
             digest = hashlib.sha256()
             with path.open("rb") as handle:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                     digest.update(chunk)
-            return {"name": "cpsam", "path": str(path), "sha256": digest.hexdigest()}
-    return {"name": "cpsam", "path": None, "sha256": None}
+            return {"name": model_name, "path": str(path), "sha256": digest.hexdigest()}
+    return {"name": model_name, "path": None, "sha256": None}
 
 
 def configure_default_cellpose(settings: dict[str, Any], device: str) -> dict[str, Any]:
@@ -103,6 +105,29 @@ def configure_default_cellpose(settings: dict[str, Any], device: str) -> dict[st
     cellpose_settings["flow_threshold"] = DETECTION["flow_threshold"]
     cellpose_settings["cellprob_threshold"] = DETECTION["cellprob_threshold"]
     return settings
+
+
+@contextmanager
+def force_cellpose_model(anatomical_module: Any, model_name: str) -> Iterator[None]:
+    """Force Suite2p 1.1.0 to pass the selected model to Cellpose.
+
+    Suite2p 1.1.0 stores ``cellpose_model`` in its settings but its
+    ``select_rois`` function does not forward that value to ``roi_detect``.
+    Patch only that call boundary for the duration of detection so the rest of
+    Suite2p's movie preparation and ROI-statistics behavior remains unchanged.
+    """
+    original_roi_detect = anatomical_module.roi_detect
+
+    @wraps(original_roi_detect)
+    def roi_detect_with_selected_model(*args: Any, **kwargs: Any) -> Any:
+        kwargs["pretrained_model"] = model_name
+        return original_roi_detect(*args, **kwargs)
+
+    anatomical_module.roi_detect = roi_detect_with_selected_model
+    try:
+        yield
+    finally:
+        anatomical_module.roi_detect = original_roi_detect
 
 
 def save_qc(
@@ -167,7 +192,7 @@ def save_qc(
         "<!doctype html><meta charset='utf-8'><title>ROI detection review</title>"
         f"<h1>ROI detection review</h1><p>Detected {len(stat)} ROIs; "
         f"median equivalent diameter {np.median(diameters):.1f} pixels.</p>"
-        "<p>Model: Suite2p 1.1.0 default Cellpose-SAM (<code>cpsam</code>).</p>"
+        f"<p>Model: Cellpose-SAM (<code>{DETECTION['effective_model']}</code>).</p>"
         "<p><a href='cellpose_input_overlay.png'>Cellpose-input overlay</a> · "
         "<a href='mean_image_overlay.png'>mean-image overlay</a></p>"
         "<img src='qc.png' style='max-width:100%;height:auto' alt='Cellpose QC'>",
@@ -304,26 +329,29 @@ def main() -> None:
         )
 
         device = torch.device(args.device)
+        from suite2p.detection import anatomical
+
         with suite2p.io.BinaryFile(
             Ly=int(db["Ly"]), Lx=int(db["Lx"]), filename=data_path,
             n_frames=int(db["nframes"]), write=False,
         ) as f_reg:
-            detect_outputs, stat, redcell = suite2p.detection.detection_wrapper(
-                f_reg,
-                # Channel 2 is retained and used for registration alignment, but
-                # is intentionally omitted here to avoid red-cell classification.
-                meanImg_chan2=None,
-                yrange=reg_outputs["yrange"],
-                xrange=reg_outputs["xrange"],
-                tau=settings["tau"],
-                fs=settings["fs"],
-                diameter=settings["diameter"],
-                settings=settings["detection"],
-                classifier_path=None,
-                badframes=badframes,
-                preclassify=settings["classification"]["preclassify"],
-                device=device,
-            )
+            with force_cellpose_model(anatomical, DETECTION["effective_model"]):
+                detect_outputs, stat, redcell = suite2p.detection.detection_wrapper(
+                    f_reg,
+                    # Channel 2 is retained and used for registration alignment, but
+                    # is intentionally omitted here to avoid red-cell classification.
+                    meanImg_chan2=None,
+                    yrange=reg_outputs["yrange"],
+                    xrange=reg_outputs["xrange"],
+                    tau=settings["tau"],
+                    fs=settings["fs"],
+                    diameter=settings["diameter"],
+                    settings=settings["detection"],
+                    classifier_path=None,
+                    badframes=badframes,
+                    preclassify=settings["classification"]["preclassify"],
+                    device=device,
+                )
 
         if len(stat) == 0:
             raise RuntimeError("Default Cellpose detection returned no ROIs")
@@ -376,7 +404,7 @@ def main() -> None:
             "torch_version": torch_version,
             "torch_cuda_version": getattr(torch.version, "cuda", None),
             "cuda_device": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None,
-            "model": model_provenance(),
+            "model": model_provenance(DETECTION["effective_model"]),
             "settings": {
                 "fs": settings["fs"],
                 "tau": settings["tau"],
@@ -409,7 +437,9 @@ def main() -> None:
         }
         write_json_atomic(output_dir / "provenance.json", provenance)
         write_json_atomic(status_path, provenance)
-        print(f"Default cpsam detection completed with {len(stat)} ROIs")
+        print(
+            f"{DETECTION['effective_model']} detection completed with {len(stat)} ROIs"
+        )
         print(f"QC report: {html_path}")
     except Exception as exc:
         write_json_atomic(

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
@@ -157,6 +158,22 @@ def test_detection_defaults_and_visual_mask_helpers() -> None:
     masks = run_roi_detection.masks_from_stat(stat, 4, 4)
     assert masks.max() == 1
     assert run_roi_detection.boundaries(masks).any()
+
+
+def test_detection_forces_configured_cellpose_model_and_restores_function() -> None:
+    calls: list[dict[str, object]] = []
+
+    def roi_detect(*args: object, **kwargs: object) -> str:
+        calls.append(kwargs)
+        return "detected"
+
+    anatomical = SimpleNamespace(roi_detect=roi_detect)
+    with run_roi_detection.force_cellpose_model(anatomical, "cpsam_v2"):
+        assert anatomical.roi_detect("image", pretrained_model="cpsam") == "detected"
+        assert anatomical.roi_detect is not roi_detect
+
+    assert calls == [{"pretrained_model": "cpsam_v2"}]
+    assert anatomical.roi_detect is roi_detect
 
 
 def test_detection_forbids_downstream_outputs() -> None:
