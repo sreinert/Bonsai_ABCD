@@ -128,6 +128,7 @@ def test_detection_defaults_and_visual_mask_helpers() -> None:
         "diameter": [12.0, 12.0],
         "detection": {
             "algorithm": "sparsery",
+            "denoise": False,
             "cellpose_settings": {
                 "cellpose_model": "cpsam",
                 "img": "max_proj / meanImg",
@@ -140,12 +141,13 @@ def test_detection_defaults_and_visual_mask_helpers() -> None:
     assert configured["fs"] == config.FS
     assert configured["tau"] == config.TAU
     assert configured["detection"]["algorithm"] == "cellpose"
-    assert configured["detection"]["nbins"] == 500
+    assert configured["detection"]["nbins"] == config.DETECTION["nbins"]
+    assert configured["detection"]["denoise"] is config.DETECTION["denoise"]
     assert configured["detection"]["cellpose_settings"] == {
-        "cellpose_model": "cpsam",
-        "img": "meanImg",
-        "flow_threshold": 0.4,
-        "cellprob_threshold": 0.0,
+        "cellpose_model": config.DETECTION["effective_model"],
+        "img": config.DETECTION["input_image"],
+        "flow_threshold": config.DETECTION["flow_threshold"],
+        "cellprob_threshold": config.DETECTION["cellprob_threshold"],
     }
 
     stat = np.asarray(

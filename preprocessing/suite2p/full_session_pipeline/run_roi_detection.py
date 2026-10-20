@@ -96,6 +96,7 @@ def configure_default_cellpose(settings: dict[str, Any], device: str) -> dict[st
     settings["torch_device"] = device
     settings["detection"]["algorithm"] = DETECTION["algorithm"]
     settings["detection"]["nbins"] = DETECTION["nbins"]
+    settings["detection"]["denoise"] = DETECTION["denoise"]
     cellpose_settings = settings["detection"]["cellpose_settings"]
     cellpose_settings["cellpose_model"] = DETECTION["effective_model"]
     cellpose_settings["img"] = DETECTION["input_image"]
@@ -255,13 +256,18 @@ def main() -> None:
             "img": DETECTION["input_image"],
             "flow_threshold": DETECTION["flow_threshold"],
             "cellprob_threshold": DETECTION["cellprob_threshold"],
-            "denoise": DETECTION["denoise"],
         }
         for key, value in expected_defaults.items():
             if expected[key] != value:
                 raise RuntimeError(
                     f"Unexpected Suite2p Cellpose default {key}={expected[key]!r}; expected {value!r}"
                 )
+        if settings["detection"]["denoise"] != DETECTION["denoise"]:
+            raise RuntimeError(
+                "Unexpected Suite2p detection setting "
+                f"denoise={settings['detection']['denoise']!r}; "
+                f"expected {DETECTION['denoise']!r}"
+            )
 
         yrange = [int(value) for value in reg_outputs["yrange"]]
         xrange = [int(value) for value in reg_outputs["xrange"]]
