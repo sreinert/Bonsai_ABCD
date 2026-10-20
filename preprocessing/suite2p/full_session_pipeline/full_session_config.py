@@ -50,7 +50,9 @@ DETECTION = {
     # though this workflow feeds the temporal mean (not max projection) to
     # CPSAM. 500 keeps the same mean-image method with a bounded peak.
     "nbins": 500,
-    "diameter": [12.0, 12.0],
+    # Match the visually validated Cellpose GUI configuration. Suite2p's
+    # generic [12, 12] default would otherwise rescale the image by 2.5x.
+    "diameter": [30.0, 30.0],
     "flow_threshold": 1.0,
     "cellprob_threshold": 0.0,
     "denoise": True,

@@ -96,6 +96,7 @@ def configure_default_cellpose(settings: dict[str, Any], device: str) -> dict[st
     settings["fs"] = FS
     settings["tau"] = TAU
     settings["torch_device"] = device
+    settings["diameter"] = list(DETECTION["diameter"])
     settings["detection"]["algorithm"] = DETECTION["algorithm"]
     settings["detection"]["nbins"] = DETECTION["nbins"]
     settings["detection"]["denoise"] = DETECTION["denoise"]
@@ -274,7 +275,10 @@ def main() -> None:
         reg_outputs = np.load(reg_outputs_path, allow_pickle=True).item()
         settings = configure_default_cellpose(suite2p.default_settings(), args.device)
         if settings["diameter"] != DETECTION["diameter"]:
-            raise RuntimeError(f"Unexpected Suite2p default diameter: {settings['diameter']}")
+            raise RuntimeError(
+                f"Detection diameter was not applied: {settings['diameter']}; "
+                f"expected {DETECTION['diameter']}"
+            )
         expected = settings["detection"]["cellpose_settings"]
         expected_defaults = {
             "cellpose_model": DETECTION["effective_model"],

@@ -141,6 +141,7 @@ def test_detection_defaults_and_visual_mask_helpers() -> None:
     configured = run_roi_detection.configure_default_cellpose(settings, "cuda")
     assert configured["fs"] == config.FS
     assert configured["tau"] == config.TAU
+    assert configured["diameter"] == config.DETECTION["diameter"]
     assert configured["detection"]["algorithm"] == "cellpose"
     assert configured["detection"]["nbins"] == config.DETECTION["nbins"]
     assert configured["detection"]["denoise"] is config.DETECTION["denoise"]
