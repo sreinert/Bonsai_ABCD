@@ -437,6 +437,34 @@ def test_full_pipeline_resume_requires_existing_registration(tmp_path: Path) -> 
         )
 
 
+def test_full_pipeline_can_rerun_detection_after_completion(tmp_path: Path) -> None:
+    mouse = "sub-02"
+    session = "ses-full002_date-20260818T134310"
+    suite2p_dir, _ = make_resumable_registration(tmp_path, mouse, session)
+    plane_dir = suite2p_dir / "plane0"
+    qc_dir = suite2p_dir / "qc"
+    qc_dir.mkdir(parents=True)
+    (qc_dir / "index.html").write_text("complete", encoding="utf-8")
+    for name in prepare_full_session_pipeline.REQUIRED_FINAL_OUTPUTS:
+        path = plane_dir / name
+        if not path.exists():
+            np.save(path, np.asarray([1]))
+
+    _, default_paths = prepare_full_session_pipeline.build_pipeline(
+        tmp_path, mouse, session
+    )
+    assert default_paths["already_complete"] is True
+
+    _, rerun_paths = prepare_full_session_pipeline.build_pipeline(
+        tmp_path, mouse, session, rerun_detection=True
+    )
+    assert rerun_paths["already_complete"] is False
+    assert rerun_paths["rerun_detection"] is True
+    assert rerun_paths["start_stage"] == "detection"
+    assert (plane_dir / "data.bin").is_file()
+    assert (plane_dir / "stat.npy").is_file()
+
+
 def test_full_pipeline_resume_and_overwrite_are_mutually_exclusive(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="mutually exclusive"):
         prepare_full_session_pipeline.build_pipeline(
@@ -503,6 +531,7 @@ def test_full_pipeline_launcher_submits_one_job() -> None:
     assert "gpu-580" not in text
     assert "--mail-type=BEGIN,END,FAIL" in text
     assert "--resume" in text
+    assert "--rerun-detection" in text
     assert "--current-node" in text
     assert "torch.cuda.is_available()" in text
     assert "Refusing current-node analysis on excluded host" in text

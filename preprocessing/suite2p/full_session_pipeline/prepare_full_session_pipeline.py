@@ -170,9 +170,12 @@ def build_pipeline(
     *,
     overwrite: bool = False,
     resume: bool = False,
+    rerun_detection: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if overwrite and resume:
-        raise ValueError("--overwrite and --resume are mutually exclusive")
+    if sum((overwrite, resume, rerun_detection)) > 1:
+        raise ValueError(
+            "--overwrite, --resume, and --rerun-detection are mutually exclusive"
+        )
     project = resolve_data_root(project_root)
     for label, value in (("mouse ID", mouse_id), ("session ID", session_id)):
         if value in {"", ".", ".."} or Path(value).name != value:
@@ -222,6 +225,14 @@ def build_pipeline(
         )
         shutil.rmtree(suite2p_dir)
         complete = False
+    elif existing_output and rerun_detection:
+        resume_validation = validate_registration_for_resume(suite2p_dir, tiffs)
+        complete = False
+    elif rerun_detection and not existing_output:
+        raise FileNotFoundError(
+            "Cannot rerun detection because no existing Suite2p registration "
+            f"was found: {suite2p_dir}"
+        )
     elif existing_output and resume and not complete:
         resume_validation = validate_registration_for_resume(suite2p_dir, tiffs)
     elif resume and not existing_output:
@@ -266,6 +277,7 @@ def build_pipeline(
         "tiff_count": len(tiffs),
         "overwrote_existing": bool(existing_output and overwrite),
         "resume": bool(resume_validation),
+        "rerun_detection": rerun_detection,
         "start_stage": "detection" if resume_validation else "registration",
         "resume_validation": resume_validation,
     }
@@ -293,6 +305,14 @@ def main() -> None:
         action="store_true",
         help="Reuse validated completed registration and restart at detection.",
     )
+    parser.add_argument(
+        "--rerun-detection",
+        action="store_true",
+        help=(
+            "For a completed pipeline, preserve validated registration and replace "
+            "detection, trace-extraction, and QC outputs."
+        ),
+    )
     args = parser.parse_args()
 
     row, paths = build_pipeline(
@@ -301,6 +321,7 @@ def main() -> None:
         args.session_id,
         overwrite=args.overwrite,
         resume=args.resume,
+        rerun_detection=args.rerun_detection,
     )
     if paths["already_complete"]:
         if args.paths_json:
@@ -309,7 +330,11 @@ def main() -> None:
         return
     manifest = args.manifest or Path(str(paths["workflow_dir"])) / "manifest.csv"
     manifest.parent.mkdir(parents=True, exist_ok=True)
-    write_csv(manifest, [row], overwrite=args.resume)
+    write_csv(
+        manifest,
+        [row],
+        overwrite=args.resume or args.rerun_detection,
+    )
     paths["manifest"] = str(manifest.resolve())
     if args.paths_json:
         args.paths_json.write_text(json.dumps(paths, indent=2) + "\n", encoding="utf-8")

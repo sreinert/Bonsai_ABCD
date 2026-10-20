@@ -3,6 +3,7 @@ set -euo pipefail
 
 overwrite=false
 resume=false
+rerun_detection=false
 current_node=false
 positional=()
 for argument in "$@"; do
@@ -12,6 +13,9 @@ for argument in "$@"; do
       ;;
     --resume)
       resume=true
+      ;;
+    --rerun-detection)
+      rerun_detection=true
       ;;
     --current-node)
       current_node=true
@@ -27,11 +31,17 @@ for argument in "$@"; do
 done
 
 if [[ ${#positional[@]} -lt 2 ]]; then
-  echo "Usage: $0 [--overwrite|--resume] [--current-node] MOUSE_ID FULL_RAW_SESSION_ID [FULL_RAW_SESSION_ID ...]" >&2
+  echo "Usage: $0 [--overwrite|--resume|--rerun-detection] [--current-node] MOUSE_ID FULL_RAW_SESSION_ID [FULL_RAW_SESSION_ID ...]" >&2
   exit 2
 fi
-if [[ "${overwrite}" == true && "${resume}" == true ]]; then
-  echo "--overwrite and --resume are mutually exclusive" >&2
+mode_count=0
+for selected_mode in "${overwrite}" "${resume}" "${rerun_detection}"; do
+  if [[ "${selected_mode}" == true ]]; then
+    mode_count=$((mode_count + 1))
+  fi
+done
+if [[ ${mode_count} -gt 1 ]]; then
+  echo "--overwrite, --resume, and --rerun-detection are mutually exclusive" >&2
   exit 2
 fi
 
@@ -70,6 +80,9 @@ if [[ ${#positional[@]} -gt 2 ]]; then
     fi
     if [[ "${resume}" == true ]]; then
       submission_command+=(--resume)
+    fi
+    if [[ "${rerun_detection}" == true ]]; then
+      submission_command+=(--rerun-detection)
     fi
     if [[ "${current_node}" == true ]]; then
       submission_command+=(--current-node)
@@ -143,6 +156,9 @@ if [[ "${overwrite}" == true ]]; then
 fi
 if [[ "${resume}" == true ]]; then
   prepare_options+=(--resume)
+fi
+if [[ "${rerun_detection}" == true ]]; then
+  prepare_options+=(--rerun-detection)
 fi
 
 "${python_executable}" "${pipeline_dir}/prepare_full_session_pipeline.py" \
@@ -255,6 +271,7 @@ PY
 echo "Mouse/session:    ${mouse_id} / ${session_id}"
 echo "Overwrite:        ${overwrite}"
 echo "Resume:           ${resume} (start stage: ${start_stage})"
+echo "Rerun detection:  ${rerun_detection}"
 echo "Execution mode:   ${execution_mode}"
 echo "Suite2p output:   ${plane_dir}"
 if [[ "${execution_mode}" == current_node ]]; then
