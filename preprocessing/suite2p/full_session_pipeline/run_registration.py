@@ -55,6 +55,37 @@ RAW_BINARY_NAMES = {
 }
 
 
+def install_temporal_smoothing_compatibility_patch(sigma: float) -> dict[str, Any] | None:
+    """Keep Suite2p temporal smoothing on the input tensor's dtype and device.
+
+    Suite2p 1.1.0 passes a torch phase-correlation tensor to SciPy and receives a
+    NumPy array, but its caller immediately invokes torch.argmax.  Patch the name
+    imported by registration.rigid only when temporal smoothing is requested.
+    """
+    if sigma <= 0:
+        return None
+
+    import torch
+    from scipy.ndimage import gaussian_filter1d
+    from suite2p.registration import rigid
+
+    def temporal_smooth_tensor(data: torch.Tensor, smoothing_sigma: float) -> torch.Tensor:
+        array = data.detach().cpu().numpy()
+        smoothed = gaussian_filter1d(array, sigma=smoothing_sigma, axis=0)
+        return torch.from_numpy(smoothed).to(device=data.device, dtype=data.dtype)
+
+    rigid.temporal_smooth = temporal_smooth_tensor
+    return {
+        "name": "suite2p_temporal_smoothing_tensor_compatibility",
+        "reason": (
+            "Suite2p 1.1.0 temporal_smooth returns NumPy but rigid.phasecorr "
+            "requires a torch tensor"
+        ),
+        "implementation": "SciPy on CPU followed by restoration to source device/dtype",
+        "smooth_sigma_time": float(sigma),
+    }
+
+
 def read_task(manifest: Path, task_id: int) -> dict[str, str]:
     rows = require_columns(read_csv(manifest), TASK_COLUMNS, "task manifest")
     if task_id < 0 or task_id >= len(rows):
@@ -110,14 +141,12 @@ def build_suite2p_configuration(
         )
     if isinstance(registration.get("block_size"), list):
         registration["block_size"] = tuple(registration["block_size"])
-    if float(registration.get("smooth_sigma_time", 0)) != 0:
-        raise ValueError("This project requires smooth_sigma_time=0")
+    if float(registration.get("smooth_sigma_time", 0)) < 0:
+        raise ValueError("smooth_sigma_time must be non-negative")
     if float(registration.get("bidiphase", 0)) != 0:
         raise ValueError("This project requires bidiphase=0")
     if bool(registration.get("do_bidiphase", False)):
         raise ValueError("This project requires do_bidiphase=False")
-    if not bool(registration.get("nonrigid", False)):
-        raise ValueError("This project requires nonrigid=True")
     if not bool(registration.get("two_step_registration", False)):
         raise ValueError("This project requires two_step_registration=True")
     settings["torch_device"] = device
@@ -342,12 +371,18 @@ def main() -> None:
         db, settings = build_suite2p_configuration(
             row, input_path, run_dir, tiff_files, args.device
         )
+        temporal_smoothing_patch = install_temporal_smoothing_compatibility_patch(
+            float(settings["registration"].get("smooth_sigma_time", 0))
+        )
         write_json_atomic(
             resolved_configuration_path,
             {
                 "suite2p_version": installed_version,
                 "db": db,
                 "settings": settings,
+                "compatibility_patches": (
+                    [temporal_smoothing_patch] if temporal_smoothing_patch else []
+                ),
             },
         )
         if args.device == "cuda":
@@ -368,6 +403,9 @@ def main() -> None:
                 ),
                 "db": db,
                 "settings": settings,
+                "compatibility_patches": (
+                    [temporal_smoothing_patch] if temporal_smoothing_patch else []
+                ),
             },
         )
 
