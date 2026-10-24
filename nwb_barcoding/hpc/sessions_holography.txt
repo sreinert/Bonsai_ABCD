@@ -7,8 +7,7 @@
 # TTLs, merged NWB built atomically. All funcimg/merged NWBs, behaviour_data.npz/.csv and
 # valid_frames.npz were deleted from BehaviourAligned_robust; behav/ NWBs are kept and reused.
 # dFF.npy is recomputed for t1-t3 (t0 sessions and sub-004 t1 already match their suite2p output).
-sub-001 seq1-001
-sub-002 seq1-001
-sub-003 seq1-001
-sub-004 seq1-001
+sub-003 seq2-001
+sub-004 seq1-009
+
 

@@ -13,7 +13,7 @@ Produces:
      correct-transitions-verified segments) vs shaping (exactly 1 rewarded landmark,
      consecutive-rewarded-visit segments) sessions from ses_settings, via
      cellTV/cellTV_functions_goalprogress.py. Sequence sessions additionally get a
-     per-segment-type breakdown (one heatmap panel per A->B, B->C, ...).
+     per-segment-type breakdown (one heatmap panel per A->B, B->C, ..., all sorted on the first).
   7. Behavioural-performance summary (cohort='3' and '2nwb') -- see
      musicboxes/behaviour_performance_summary.py: two combined figures (processed
      frame-aligned vs raw) covering lick/reward maps, transition matrices, and (for shaping
@@ -49,6 +49,31 @@ sessions without a goal identity (t0-t2). The behavioural-performance summary us
 behaviour_performance_summary.run_behaviour_summary_cohort2 (skipped for t0).
 
 Run in the `bonsai_abcd` conda env (same as the rest of this repo -- needs aeon, seaborn, etc).
+
+Command-line usage -- run as a module from the repo root so the repo imports resolve
+(`python musicboxes/session_overview.py ...` fails on `import parse_nwb_functions`):
+
+    conda activate bonsai_abcd
+    cd .../Code/Bonsai_ABCD
+
+    # cohort3 sequence session
+    python -m musicboxes.session_overview 010 full037 full037 \\
+        /Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3/preprocessed_behav_Nov2025/derivatives \\
+        --root-path /Volumes/mrsic_flogel/public/projects/SuKuSaRe_20250923_HFScohort3
+
+    # GoalProgress session (--world random for random-world sessions; --show displays
+    # each figure as it is built)
+    python -m musicboxes.session_overview 002 t2 t2 \\
+        /Volumes/mrsic_flogel/public/projects/SaReMaRa_20260629_GoalProgress/BehaviourAligned_robust \\
+        --world random --show
+
+    # cohort2 session rebuilt by nwb_barcoding (pass the ses-XXX prefix as session_id)
+    python -m musicboxes.session_overview TAA0000066 ses-XXX t6 \\
+        /Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/BehaviourAligned_robust \\
+        --cohort 2nwb
+
+Positional arguments are mouse, session_id, stage, behav_root; see `--help` for the
+options. Call run_overview() directly for the tuning parameters the CLI doesn't expose.
 """
 
 import contextlib
@@ -556,9 +581,9 @@ def plot_goal_progress_heatmap(dF, session, bins=90, cross_validated=False, save
 
 def plot_goal_progress_by_segment(dF, session, bins=90, save_path=None, quiet=True):
     """Sequence sessions only: one heatmap panel per segment type (starting-goal identity,
-    e.g. A->B, B->C, ...), each z-scored per cell and sorted by that panel's OWN peak phase
-    (not a shared sort order -- this is about checking whether each individual segment type
-    shows its own sequential tuning, not comparing them against a common order).
+    e.g. A->B, B->C, ...), each z-scored per cell. Cells are sorted by their peak phase in
+    the FIRST segment type and that same order is applied to every other panel, so the
+    panels can be compared row-by-row (does a cell keep its preferred phase across segments?).
     """
     transitions = np.asarray(session['correct_transitions'])
     goals = np.unique(transitions[:, 0].astype(int))
@@ -577,17 +602,18 @@ def plot_goal_progress_by_segment(dF, session, bins=90, save_path=None, quiet=Tr
 
     fig, axes = plt.subplots(1, len(goals), figsize=(5 * len(goals), 6), squeeze=False)
     axes = axes[0]
+    curves = {}
+    for goal in goals:
+        curve = stats.zscore(np.nanmean(per_goal_mats[int(goal)], axis=1), axis=1, nan_policy='omit')
+        curves[int(goal)] = curve[:, ~np.isnan(curve).any(axis=0)]
+    order = np.argsort(np.nanargmax(curves[int(goals[0])], axis=1))  # shared order from first segment
+
     im = None
     for ax, goal in zip(axes, goals):
-        mat = per_goal_mats[int(goal)]
-        curve = stats.zscore(np.nanmean(mat, axis=1), axis=1, nan_policy='omit')
-        good_bins = ~np.isnan(curve).any(axis=0)
-        curve = curve[:, good_bins]
-        order = np.argsort(np.nanargmax(curve, axis=1))
-        im = ax.imshow(curve[order], aspect='auto', cmap=HEATMAP_CMAP, interpolation='none')
-        ax.set_title(f'From goal {goal} (n={mat.shape[1]} trials)')
+        im = ax.imshow(curves[int(goal)][order], aspect='auto', cmap=HEATMAP_CMAP, interpolation='none')
+        ax.set_title(f'From goal {goal} (n={per_goal_mats[int(goal)].shape[1]} trials)')
         ax.set_xlabel('Goal-progress phase (bin)')
-    axes[0].set_ylabel('Cells (sorted per-segment)')
+    axes[0].set_ylabel(f'Cells (sorted on goal {goals[0]} segment)')
     fig.colorbar(im, ax=list(axes), label='z-scored dF/F', fraction=0.02)
     fig.suptitle('Goal-progress tuning, split by segment')
     if save_path:

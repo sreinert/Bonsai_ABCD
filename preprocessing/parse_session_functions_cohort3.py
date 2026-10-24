@@ -708,21 +708,32 @@ def calc_laps_needed(ses_settings):
     return laps_needed
 
 def give_state_id(sess_dataframe, ses_settings):
+    # one column per landmark: n_landmarks comes from the session config, not a hardcoded 10
+    # (a 10-column reshape misaligns the lap rows for e.g. the 9-landmark seq2 sessions)
+    n_landmarks = len(parse_stable_goal_ids(ses_settings)[1])
 
     goals,lm_ids = parse_stable_goal_ids(ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
     hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
-    if rewarded_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        rewarded_all = np.pad(rewarded_all, (0, 10 - (rewarded_all.shape[0] % 10)), 'constant')
-    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / 10).astype(int), 10)
+    if rewarded_all.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by n_landmarks
+        rewarded_all = np.pad(rewarded_all, (0, n_landmarks - (rewarded_all.shape[0] % n_landmarks)), 'constant')
+    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / n_landmarks).astype(int), n_landmarks)
 
     num_lms = len(lm_ids)
 
-    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
+    # divide_laps' num_laps return is no longer used below (see loop-bound comment), but the
+    # call itself still has to happen -- it mutates sess_dataframe in place, adding the 'Lap'
+    # column other functions in this module (e.g. calc_speed_per_lap) read afterwards.
+    _, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
 
     state_id = np.zeros(len(rewarded_all_reshaped), dtype=int)
     state_id[0] = 0
+    # Loop bound must be len(state_id), not divide_laps' num_laps (ceil(position/tunnel_
+    # length)): that position-based estimate counts a final partial lap the mouse entered but
+    # didn't finish, which rewarded_all_reshaped (built from actual landmark-visit/reward
+    # events, see calc_hit_fa) doesn't have a row for -- using it here overruns state_id by
+    # one or more rows whenever that happens.
 
     if laps_needed == 2:
         flips = np.where(np.diff(goals) < 0)[0]
@@ -736,7 +747,7 @@ def give_state_id(sess_dataframe, ses_settings):
             else:
                 defining_goal_2 = goals[2]
 
-        for i in range(0,num_laps-1):
+        for i in range(0, len(state_id)-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
 
@@ -759,7 +770,7 @@ def give_state_id(sess_dataframe, ses_settings):
             else:
                 defining_goal_3 = goals[2]
 
-        for i in range(0,num_laps-1):
+        for i in range(0, len(state_id)-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
 
@@ -784,10 +795,13 @@ def give_state_id_npz(session,ses_settings):
         rewarded_all = np.pad(rewarded_all, (0, n_landmarks - (rewarded_all.shape[0] % n_landmarks)), 'constant')
     rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / n_landmarks).astype(int), n_landmarks)
 
-    num_laps = session['num_laps']
-
     state_id = np.zeros(len(rewarded_all_reshaped), dtype=int)
     state_id[0] = 0
+    # Loop bound must be len(state_id), not session['num_laps'] (ceil(position/tunnel_length),
+    # from get_lap_idx): that position-based estimate counts a final partial lap the mouse
+    # entered but didn't finish, which rewarded_all_reshaped (built from actually-completed
+    # landmark visits, see get_lms_visited/get_licks_rewards_npz) doesn't have a row for --
+    # using it here overruns state_id by one or more rows whenever that happens.
 
     if laps_needed == 2:
         flips = np.where(np.diff(goals) < 0)[0]
@@ -801,7 +815,7 @@ def give_state_id_npz(session,ses_settings):
             else:
                 defining_goal_2 = goals[2]
 
-        for i in range(0,num_laps-1):
+        for i in range(0, len(state_id)-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
 
@@ -824,7 +838,7 @@ def give_state_id_npz(session,ses_settings):
             else:
                 defining_goal_3 = goals[2]
 
-        for i in range(0,num_laps-1):
+        for i in range(0, len(state_id)-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
 
@@ -940,82 +954,50 @@ def calc_speed_per_lm(session):
 
     return session
 
-def calc_sw_state_ratio(sess_dataframe, ses_settings):
-    state_id = give_state_id(sess_dataframe,ses_settings)
-    laps_needed = calc_laps_needed(ses_settings)
-    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
-    if licked_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
-    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
+def calc_sw_state_ratio(sess_dataframe, ses_settings, window=10):
+    """Trailing `window`-lap sliding window, per goal landmark, of the absolute difference in
+    lick fraction at that landmark between the task's cycle-states (state_id) -- i.e. how well
+    the mouse's licking at that landmark currently discriminates which state/lap of the
+    sequence it is in. Generalized to any number of goals (>1), not just the original's
+    hardcoded 4 (a,b,c,d): returns one curve per goal, however many there are, by averaging
+    the pairwise |state_i - state_j| difference over all state pairs (state count itself still
+    comes from give_state_id, which only distinguishes 2 or 3 states)."""
+    state_id = give_state_id(sess_dataframe, ses_settings)
+    # divide_laps' num_laps (ceil(position/tunnel_length)) is position-based and can exceed
+    # len(state_id) (built from actually-completed landmark-visit/reward records, see
+    # give_state_id) whenever the mouse entered but didn't finish a final lap -- use
+    # len(state_id) below instead, the true bound state_id can be indexed with.
+    _, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
+    num_laps = len(state_id)
+    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
+    n_landmarks = lm_ids.shape[0]
 
-    if laps_needed == 2:
-        window = 10
-        state1_sw = np.zeros([num_laps,10])
-        state2_sw = np.zeros([num_laps,10])
-        state_diff_1 = np.zeros([num_laps,10])
-        for i in range(num_laps):
-            if i < window:
-                state1_sw[i] = np.nan
-                state2_sw[i] = np.nan
-                state_diff_1[i] = np.nan
+    if licked_all.shape[0] % n_landmarks != 0:
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(-1, n_landmarks)[:num_laps]
 
-            else:
-                lap_range = range(i-window, i)
-                laps = licked_all_reshaped[lap_range]
-                state1_laps = laps[np.where(state_id[lap_range] == 0)[0],:]
-                state2_laps = laps[np.where(state_id[lap_range] == 1)[0],:]
+    n_states = int(np.max(state_id)) + 1
+    state_sw = np.full((n_states, num_laps, n_landmarks), np.nan)
+    for i in range(num_laps):
+        if i < window:
+            continue
+        lap_range = list(range(i - window, i))
+        laps = licked_all_reshaped[lap_range]
+        states_in_window = state_id[lap_range]
+        for s in range(n_states):
+            state_laps = laps[states_in_window == s]
+            if state_laps.shape[0] > 0:
+                state_sw[s, i] = safe_divide(np.sum(state_laps, axis=0), state_laps.shape[0])
 
-                state1_sw[i] = safe_divide(np.sum(state1_laps,axis=0), state1_laps.shape[0])
-                state2_sw[i] = safe_divide(np.sum(state2_laps,axis=0), state2_laps.shape[0])
-                state_diff_1[i] = abs(state1_sw[i]-state2_sw[i])
+    diffs = [np.abs(state_sw[s1] - state_sw[s2])
+             for s1 in range(n_states) for s2 in range(s1 + 1, n_states)]
+    state_diff = np.nanmean(diffs, axis=0)  # (num_laps, n_landmarks)
 
-        sw_state_ratio_a = state_diff_1[:,goals[0]]
-        sw_state_ratio_b = state_diff_1[:,goals[1]]
-        sw_state_ratio_c = state_diff_1[:,goals[2]]
-        sw_state_ratio_d = state_diff_1[:,goals[3]]
+    sw_state_ratios = [state_diff[:, goals[g]] for g in range(len(goals))]
+    sw_state_ratio = np.nanmean(sw_state_ratios, axis=0)
 
-    elif laps_needed == 3:
-        window = 10
-        state1_sw = np.zeros([num_laps,10])
-        state2_sw = np.zeros([num_laps,10])
-        state3_sw = np.zeros([num_laps,10])
-        state_diff_1 = np.zeros([num_laps,10])
-        state_diff_2 = np.zeros([num_laps,10])
-        state_diff_3 = np.zeros([num_laps,10])
-        for i in range(num_laps):
-            if i < window:
-                state1_sw[i] = np.nan
-                state2_sw[i] = np.nan
-                state3_sw[i] = np.nan
-                state_diff_1[i] = np.nan
-                state_diff_2[i] = np.nan
-                state_diff_3[i] = np.nan
-
-            else:
-                lap_range = range(i-window, i)
-                laps = licked_all_reshaped[lap_range]
-                state1_laps = laps[np.where(state_id[lap_range] == 0)[0],:]
-                state2_laps = laps[np.where(state_id[lap_range] == 1)[0],:]
-                state3_laps = laps[np.where(state_id[lap_range] == 2)[0],:]
-
-                state1_sw[i] = np.sum(state1_laps,axis=0)/state1_laps.shape[0]
-                state2_sw[i] = np.sum(state2_laps,axis=0)/state2_laps.shape[0]
-                state3_sw[i] = np.sum(state3_laps,axis=0)/state3_laps.shape[0]
-                state_diff_1[i] = abs(state1_sw[i]-state2_sw[i])
-                state_diff_2[i] = abs(state2_sw[i]-state3_sw[i])
-                state_diff_3[i] = abs(state1_sw[i]-state3_sw[i])
-
-        sw_state_ratio_a = (state_diff_1[:,goals[0]]+state_diff_3[:,goals[0]])/2
-        sw_state_ratio_b = (state_diff_1[:,goals[1]]+state_diff_3[:,goals[1]])/2
-        sw_state_ratio_c = (state_diff_1[:,goals[2]]+state_diff_2[:,goals[2]])/2
-        sw_state_ratio_d = (state_diff_2[:,goals[3]]+state_diff_3[:,goals[3]])/2
-
-    sw_state_ratio = np.nanmean([sw_state_ratio_a,sw_state_ratio_b,sw_state_ratio_c,sw_state_ratio_d],axis=0)
-
-    return sw_state_ratio, sw_state_ratio_a, sw_state_ratio_b, sw_state_ratio_c, sw_state_ratio_d
+    return sw_state_ratio, sw_state_ratios
 
 def estimate_release_events(sess_dataframe, ses_settings):
     trial = get_trial_settings(ses_settings)
@@ -1207,13 +1189,16 @@ def find_closest_events(
     return chosen_idx, chosen_event, odour, chosen_pos
 
 def sanity_check_parsing(sess_dataframe, ses_settings):
+    # one column per landmark: n_landmarks comes from the session config, not a hardcoded 10
+    # (a 10-column reshape misaligns the lap rows for e.g. the 9-landmark seq2 sessions)
+    n_landmarks = len(parse_stable_goal_ids(ses_settings)[1])
 
     lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings)
     event_ids = release_df["Odour"].to_numpy(dtype=int)
-    n_ids = len(event_ids) - (len(event_ids) % 10)
+    n_ids = len(event_ids) - (len(event_ids) % n_landmarks)
     event_ids = event_ids[:n_ids]
-    #reshape ids to have 10 columns (one for each target)
-    event_ids_reshaped = event_ids.reshape(-1, 10)
+    #reshape ids to have n_landmarks columns (one for each target)
+    event_ids_reshaped = event_ids.reshape(-1, n_landmarks)
     event_ids_reshaped
 
     plt.figure(figsize=(10,4))
@@ -1261,7 +1246,17 @@ def estimate_lm_events(sess_dataframe,ses_settings):
         'Odour': lm_odour
     }).set_index('time')
 
-    if lm_df['Position'][0] != 0 and not 'initialCorridorOffset' in ses_settings:
+    # Use the landmark's own nominal logged position (lm_position, exactly 0/10/20/... in the
+    # raw stream) here, not lm_df['Position'] (true_pos -- the mouse's continuously-measured
+    # sensor position at that same frame, e.g. ~0.0157 rather than exactly 0 even for a
+    # genuine landmark-0 visit): comparing that noisy value against exact 0 is essentially
+    # always true for real data, so it was firing on every session with this landmark stream
+    # and inserting a spurious duplicate landmark-0, desynchronizing session['landmarks']
+    # (one entry too many) from session['all_lms'] (get_lms_visited's naive 0..9 tiling, which
+    # has no way to know about this insertion) by exactly one landmark for the rest of the
+    # session -- see mouse 010 full049/full065, where this shifted every reward onto
+    # (true_goal + 1) % n_landmarks.
+    if lm_position[0] != 0 and not 'initialCorridorOffset' in ses_settings:
         # Add initial landmark at position 0 if not present
         initial_lm = pd.DataFrame({
             'time': [pd.NaT],
@@ -1394,6 +1389,26 @@ def get_licked_lms(session):
     return session
 
 def get_licks_rewards_npz(session):
+    """Uses session['data_lm_idx'] (get_data_lm_idx/get_lm_entry_exit: a contiguous
+    [entry_frame, exit_frame] range per landmark visit) rather than session['lm_idx']
+    (get_lm_idx: re-checks each frame's own position value against the landmark's position
+    window). The two aren't quite the same: raw's calc_hit_fa only counts a lick if it comes
+    at or after that landmark's own release event, i.e. by event/frame order -- but
+    session['position'] is itself a per-frame *mean* (see build_behaviour_data.py's
+    binned_statistic), so right at a landmark transition a frame's smoothed position value
+    can already read as "inside the next landmark's window" a frame or two before that
+    landmark's entry, letting position-value matching (lm_idx) mis-attribute a lick to the
+    wrong (usually next) visit. Frame-range matching (data_lm_idx) doesn't have this failure
+    mode, since each frame belongs to exactly one contiguous visit by construction -- matching
+    raw's by-release-event ordering much more closely.
+
+    data_lm_idx alone isn't quite enough on its own, though: since it assigns the *whole*
+    contiguous entry-to-exit frame range to a visit regardless of each frame's own position,
+    a brief backward wiggle in the frame-binned position signal right after entry (binning
+    noise, not real backward movement) can pull in frames whose position value has dipped back
+    outside the landmark's own window -- something raw's per-lick position check would reject.
+    So each candidate frame is also required to have position within [lm_start, lm_end]."""
+    session = get_data_lm_idx(session)
     licked_lms = np.zeros(len(session['all_lms']))
     rewarded_lms = np.zeros(len(session['all_lms']))
     if 'thresholded_licks' in session:
@@ -1402,9 +1417,24 @@ def get_licks_rewards_npz(session):
         licks = np.where(session['licks']>0)[0]
     rewards = session['rewards']
     for i in range(len(session['all_lms'])):
-        lm = np.where(session['lm_idx'] == i+1)[0]
+        lm = np.where(session['data_lm_idx'] == i+1)[0]
+        lm_start, lm_end = session['landmarks'][i]
+        lm = lm[(session['position'][lm] >= lm_start) & (session['position'][lm] <= lm_end)]
         target_ix = lm
-        target_licks = np.intersect1d(target_ix, licks)
+        # Licks only count at/after the landmark's release event, as in raw calc_hit_fa: the window
+        # starts LM_offset before the logged release position, and licks in that stretch (before
+        # release fires) were ~95% of processed-vs-raw disagreements (holography cohort1, all
+        # sessions). Release fires when the mouse first crosses the release position, so the
+        # release frame is the visit's first frame at/after that position, and licks count from
+        # that frame on -- by frame ORDER, not by each frame's own position: a mouse stopped at
+        # the reward drifts back 0.1-0.3 units past the release position while still licking,
+        # which raw (time-based) counts and a per-frame position test wrongly dropped.
+        lick_ix = target_ix
+        if 'lm_release_pos' in session and len(target_ix):
+            reached = target_ix[session['position'][target_ix] >= session['lm_release_pos'][i]]
+            release_frame = reached[0] if len(reached) else target_ix[np.argmax(session['position'][target_ix])]
+            lick_ix = target_ix[target_ix >= release_frame]
+        target_licks = np.intersect1d(lick_ix, licks)
         target_rewards = np.intersect1d(target_ix, rewards)
 
         if len(target_licks) > 0:
@@ -1474,10 +1504,12 @@ def get_random_lm_sequence(sess_dataframe, ses_settings):
 
 def get_lms_visited(session, sess_dataframe, ses_settings):
     # Calculate number of landmarks visited
-    if len(np.where(session['landmarks'][:,0] < session['position'][-1])[0]) != len(np.where(session['landmarks'][:,-1] < session['position'][-1])[0]):
-        num_lms = len(session['landmarks']) - 1 # session ended before mouse exited last lm entered
-    else:
-        num_lms = len(session['landmarks'])  
+    # Only landmarks the frame-aligned data actually exits count as visited. session['landmarks']
+    # comes from the full raw Bonsai session, but when imaging stops before behaviour (e.g.
+    # holography sub-001 t1) the npz ends several landmarks earlier -- the old check only dropped
+    # the single landmark the session ended inside, so get_lm_entry_exit later found no entry
+    # frame for the rest and crashed.
+    num_lms = int(np.sum(session['landmarks'][:,1] < session['position'][-1]))
 
     if session['world'] == 'stable':
         all_lms = np.array([])  # landmark ids
@@ -1707,21 +1739,33 @@ def calculate_frame_lick_rate(session):
 
 #%% ##### Functions that work with NIDAQ data only (after funcimg alignment) #####
 def get_landmark_positions(session, sess_dataframe, ses_settings):
-    '''Get the start and end of each landmark'''
+    '''Get the start and end of each landmark -- a fixed lm_size-wide window anchored at each
+    release position, matching calc_hit_fa's window exactly (including its LM_offset=3
+    correction for the constant offset between logged Position and LM_Position when
+    'LM_Count' is present). Before this fix, this window wasn't offset the same way
+    calc_hit_fa's is, so it was shifted 3 position-units later than the raw pipeline's
+    equivalent window -- letting some licks in the gap between landmarks count as "licked"
+    here when the raw pipeline (correctly) wouldn't have counted them, and vice versa
+    at the corridor edges.'''
     if 'LM_Count' in sess_dataframe.columns:
         result_df = estimate_lm_events(sess_dataframe,ses_settings)
+        LM_offset = 3
     else:
         result_df = estimate_release_events(sess_dataframe, ses_settings)
+        LM_offset = 0
     trial = get_trial_settings(ses_settings)
     lm_size = trial['landmarks'][0][0]['size']
 
     release_positions = result_df['Position'].values
     landmarks = np.zeros((len(release_positions), 2))
     for lm, pos in enumerate(release_positions):
-        landmarks[lm,0] = pos
-        landmarks[lm,1] = pos + lm_size
+        landmarks[lm,0] = pos - LM_offset
+        landmarks[lm,1] = pos - LM_offset + lm_size
 
     session['landmarks'] = landmarks
+    # logged position at each landmark's release event -- get_licks_rewards_npz uses it to mirror
+    # calc_hit_fa's "only licks at/after the release" rule
+    session['lm_release_pos'] = release_positions
 
     return session
 
@@ -1753,10 +1797,12 @@ def get_lm_entry_exit(session):
     else: 
         search_start = 0
 
-    for lm_start in session['landmarks'][:,0]:
+    # restrict to visited landmarks (see get_lms_visited) -- later ones never appear in the data
+    visited = session['landmarks'][:len(session['all_lms'])] if 'all_lms' in session else session['landmarks']
+    for lm_start in visited[:,0]:
         lm_entry_idx.append(np.where(positions[search_start:] >= lm_start)[0][0] + search_start)
 
-    for lm_end in session['landmarks'][:,1]:
+    for lm_end in visited[:,1]:
         lm_exit_idx.append(np.where(positions[search_start:] <= lm_end)[0][-1] + search_start)
 
     return np.array(lm_entry_idx), np.array(lm_exit_idx)
@@ -2053,11 +2099,17 @@ def analyse_npz_sequences(mouse,session_id, behav_root, stage, world='stable'):
     session = calc_acceleration(session)
     session = calculate_frame_lick_rate(session)
     session['lm_entry'],session['lm_exit'] = get_lm_entry_exit(session)
-    session = calc_conditional_probs_npz(session)
+    if len(np.unique(session['goal_ids'])) > 1:
+        # calc_conditional_probs_npz measures which OTHER goal the mouse transitions to next
+        # after a reward -- meaningless with a single static goal (shaping sessions), and can
+        # crash there too: with only one goal, automaticReward sessions can deliver a reward
+        # with no subsequent lick before the session ends, since licking isn't even required
+        # for reward at this stage.
+        session = calc_conditional_probs_npz(session)
     session = give_state_id_npz(session,ses_settings)
 
     print('Number of laps = ', session['num_laps'])
-    
+
     return session
 
 def analyse_npz_pre7(mouse, session_id, root, stage, world='stable'):
@@ -2634,6 +2686,9 @@ def plot_lick_lm(sess_dataframe,ses_settings):
     plt.show()
 
 def plot_full_corr(sess_dataframe,ses_settings):
+    # one column per landmark: n_landmarks comes from the session config, not a hardcoded 10
+    # (a 10-column reshape misaligns the lap rows for e.g. the 9-landmark seq2 sessions)
+    n_landmarks = len(parse_stable_goal_ids(ses_settings)[1])
 
     hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     goals, lm_ids = parse_stable_goal_ids(ses_settings)
@@ -2645,23 +2700,23 @@ def plot_full_corr(sess_dataframe,ses_settings):
             match_id = goals.index(all_lms[i])
             was_target[i] = match_id + 1  #start from 1
 
-    #reshape licked_all into 10 columns and the appropriate number of rows
-    if licked_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
-    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
-    if rewarded_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        rewarded_all = np.pad(rewarded_all, (0, 10 - (rewarded_all.shape[0] % 10)), 'constant')
-    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / 10).astype(int), 10)
-    if was_target.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        was_target = np.pad(was_target, (0, 10 - (was_target.shape[0] % 10)), 'constant')
-    was_target_reshaped = was_target.reshape(np.round(was_target.shape[0] / 10).astype(int), 10)
-    if all_lms.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        all_lms = np.pad(all_lms, (0, 10 - (all_lms.shape[0] % 10)), 'constant')
-    all_lms_reshaped = all_lms.reshape(np.round(all_lms.shape[0] / 10).astype(int), 10)
+    #reshape licked_all into n_landmarks columns and the appropriate number of rows
+    if licked_all.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by n_landmarks
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+    if rewarded_all.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by n_landmarks
+        rewarded_all = np.pad(rewarded_all, (0, n_landmarks - (rewarded_all.shape[0] % n_landmarks)), 'constant')
+    rewarded_all_reshaped = rewarded_all.reshape(np.round(rewarded_all.shape[0] / n_landmarks).astype(int), n_landmarks)
+    if was_target.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by n_landmarks
+        was_target = np.pad(was_target, (0, n_landmarks - (was_target.shape[0] % n_landmarks)), 'constant')
+    was_target_reshaped = was_target.reshape(np.round(was_target.shape[0] / n_landmarks).astype(int), n_landmarks)
+    if all_lms.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by n_landmarks
+        all_lms = np.pad(all_lms, (0, n_landmarks - (all_lms.shape[0] % n_landmarks)), 'constant')
+    all_lms_reshaped = all_lms.reshape(np.round(all_lms.shape[0] / n_landmarks).astype(int), n_landmarks)
 
     plt.figure(figsize=(10,6))
     plt.subplot(3, 1, 1)
@@ -2705,14 +2760,17 @@ def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
     plt.show()
 
 def plot_licks_per_state(sess_dataframe, ses_settings):
+    # one column per landmark: n_landmarks comes from the session config, not a hardcoded 10
+    # (a 10-column reshape misaligns the lap rows for e.g. the 9-landmark seq2 sessions)
+    n_landmarks = len(parse_stable_goal_ids(ses_settings)[1])
     state_id = give_state_id(sess_dataframe,ses_settings)
 
     hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
-    if licked_all.shape[0] % 10 != 0:
-        #extend the array to make it divisible by 10
-        licked_all = np.pad(licked_all, (0, 10 - (licked_all.shape[0] % 10)), 'constant')
-    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / 10).astype(int), 10)
+    if licked_all.shape[0] % n_landmarks != 0:
+        #extend the array to make it divisible by n_landmarks
+        licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
+    licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
 
     if laps_needed == 2:
         state1_laps = licked_all_reshaped[np.where(state_id == 0)[0],:]
@@ -2832,15 +2890,13 @@ def plot_speed_per_state(sess_dataframe, ses_settings):
 
 def plot_sw_state_ratio(sess_dataframe, ses_settings):
 
-    sw_state_ratio, sw_state_ratio_a, sw_state_ratio_b, sw_state_ratio_c, sw_state_ratio_d = calc_sw_state_ratio(sess_dataframe, ses_settings)
+    sw_state_ratio, sw_state_ratios = calc_sw_state_ratio(sess_dataframe, ses_settings)
     print(f'Average Switch-Stay Ratio: {np.nanmean(sw_state_ratio):.2f}')
 
     plt.figure(figsize=(10,4))
     plt.plot(sw_state_ratio, label='Average', color='k')
-    plt.plot(sw_state_ratio_a, label='A', color='b')
-    plt.plot(sw_state_ratio_b, label='B', color='g')
-    plt.plot(sw_state_ratio_c, label='C', color='r')
-    plt.plot(sw_state_ratio_d, label='D', color='m')
+    for g, curve in enumerate(sw_state_ratios):
+        plt.plot(curve, label=chr(65 + g))
     plt.hlines(np.nanmean(sw_state_ratio),0,len(sw_state_ratio),colors='k',linestyles='dashed',label='Mean')
     plt.ylim(0, 1)
     plt.xlabel('Lap')

@@ -287,13 +287,50 @@ def get_rewarded_lms(session):
         for j in range(len(session['landmarks'])):
             lm = np.where(session['lm_idx'] == j+1)[0]
             target_ix = np.intersect1d(lap_idx,lm)
-            target_rewards = np.intersect1d(target_ix,session['rewards'])
+            tolerance = 5 #add frame tolerance to account for the fact that the reward may be given a few frames before the mouse crosses the landmark
+            if len(target_ix) == 0:
+                continue
+            target_window = np.arange(target_ix[0]-tolerance,target_ix[-1]+tolerance)
+            target_rewards = np.intersect1d(target_window,session['rewards'])
             if len(target_rewards) > 0:
                 rewarded_lms[i,j] = 1
             else:
                 rewarded_lms[i,j] = 0
 
     session['rewarded_lms'] = rewarded_lms
+
+    return session
+
+def get_corr_transitions(session):
+    licked_lm_vector = session['licked_lms'].flatten()
+    reward_lm_vector = session['rewarded_lms'].flatten()
+    lm_sequence = session['all_lms']
+    licked_lm_ix = np.where(licked_lm_vector == 1)[0]
+    rewarded_lm_ix = np.where(reward_lm_vector == 1)[0]
+    licked_lms = lm_sequence[licked_lm_ix]
+    rewarded_lms = lm_sequence[rewarded_lm_ix]
+    correct_transitions = []
+    try:
+        goal_values = session['goal_idx']
+    except:
+        goal_values = session['goal_ids']
+
+    for g,goal in enumerate(goal_values):
+        nth_reward = np.intersect1d(np.where(reward_lm_vector == 1)[0],np.where(lm_sequence == goal)[0])
+        for i,reward in enumerate(nth_reward):
+            if i == len(nth_reward)-1:
+                break
+            next_lick_index = licked_lm_ix[licked_lm_ix>nth_reward[i]][0]
+            next_lm = lm_sequence[next_lick_index]
+            next_goal = goal_values[g+1] if g+1 < len(goal_values) else goal_values[0]
+            if next_lm == next_goal:
+                possible_goals = [goal + k*session['num_landmarks'] for k in range(session['num_laps'])]
+                goal_rew = np.where(np.isin(session['lm_idx'][session['rewards']], np.array(possible_goals)+1))[0]
+                start_rew_frame = session['rewards'][goal_rew[i]]
+                start_ix = np.where(session['rewards'] == start_rew_frame)[0][0]
+                end_rew_frame = session['rewards'][start_ix+1] if start_ix+1 < len(session['rewards']) else session['rewards'][-1]
+                correct_transitions.append((goal, next_lm, start_rew_frame, end_rew_frame))
+    session['correct_transitions'] = correct_transitions
 
     return session
 

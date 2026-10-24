@@ -1,0 +1,26 @@
+# uv environment for running ROICaT on the SWC HPC GPU nodes (see README.md).
+# Lock on the laptop:  uv lock --project preprocessing/roicat_analysis/hpc
+# Build on the HPC:    UV_PROJECT_ENVIRONMENT=/ceph/python_envs/$USER/roicat uv sync --frozen
+[project]
+name = "roicat-hpc"
+version = "0.1.0"
+description = "ROICaT tracking environment for the holography cohort (preprocessing/roicat_analysis)"
+requires-python = "==3.12.*"
+dependencies = [
+    "roicat[all]==1.7.12",
+]
+
+[tool.uv]
+package = false
+
+# Linux torch 2.14.1 from PyPI is built for CUDA 13 (needs NVIDIA driver >= 580; check `nvidia-smi`).
+# If torch.cuda.is_available() is False on the GPU nodes because the driver is older, switch to the
+# CUDA 12.6 build: uncomment below, re-run `uv lock` on the laptop, sync, and `uv sync --frozen` again.
+# [[tool.uv.index]]
+# name = "pytorch-cu126"
+# url = "https://download.pytorch.org/whl/cu126"
+# explicit = true
+#
+# [tool.uv.sources]
+# torch = { index = "pytorch-cu126", marker = "sys_platform == 'linux'" }
+# torchvision = { index = "pytorch-cu126", marker = "sys_platform == 'linux'" }

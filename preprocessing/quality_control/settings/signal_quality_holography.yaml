@@ -1,0 +1,52 @@
+# Settings for compare_signal_quality.py and plot_high_snr_traces.py: holography cohort 1
+# (SaReSuKuMaRa_20260911_holography/cohort1), last 3 sessions with suite2p output per mouse.
+# Usage (from preprocessing/quality_control):
+#   python compare_signal_quality.py settings/signal_quality_holography.yaml [--recompute]
+#   python plot_high_snr_traces.py settings/signal_quality_holography.yaml [--recompute]
+#
+# Default suite2p_subpath (funcimg/suite2p/plane0) matches this cohort's preprocessed/ tree, so the
+# cache files go next to each session's suite2p output in preprocessed/ (never rawdata/).
+
+output_dir: /Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1/analysis/signal_quality
+output_name: signal_quality_holography_last3   # -> <name>.png/.csv/_chan2.png, traces in <name>_high_snr_traces/
+
+title: |-
+  Holography cohort 1: signal quality in each mouse's last 3 imaged sessions
+  (sub-001 t4-t6, sub-002 t3-t5, sub-003/004 t2-t4)
+
+params: {baseline_percentile: 8, event_sigma: 3, snr_threshold: 5, skew_threshold: 1}
+traces: {n_cells: 8, window_frames: 20000}
+
+# colours: era_brewer Lover1 (pink, blue, brown) + Showgirl2 green
+mice:
+  - label: sub-001
+    base: /Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1/preprocessed/sub-001
+    color: "#BF567F"
+    sessions:
+      - ses-seq1-001_date-20261013T142944-t4
+      - ses-seq1-004_date-20261016T142037-t5
+      - ses-seq2-001_date-20261019T140746-t6
+
+  - label: sub-002
+    base: /Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1/preprocessed/sub-002
+    color: "#4478ac"
+    sessions:
+      - ses-2LM004_date-20261009T135315-t3
+      - ses-seq1-001_date-20261013T133137-t4
+      - ses-seq1-005_date-20261019T150352-t5
+
+  - label: sub-003
+    base: /Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1/preprocessed/sub-003
+    color: "#815F51"
+    sessions:
+      - ses-2LM003_date-20261008T160449-t2
+      - ses-2LM004_date-20261009T155050-t3
+      - ses-seq1-001_date-20261013T153323-t4
+
+  - label: sub-004
+    base: /Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1/preprocessed/sub-004
+    color: "#448363"
+    sessions:
+      - ses-2LM003_date-20261008T170615-t2
+      - ses-2LM004_date-20261009T165023-t3
+      - ses-seq1-001_date-20261013T163137-t4

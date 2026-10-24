@@ -1,0 +1,6 @@
+# SaReSuKuMaRa_20260911_holography/cohort1 -- one animal per line: <mouse> <session tags in order>
+# (2LM001 ... 2LM004 = t0 ... t3). Blank lines and lines starting with # are ignored;
+# array task N = N-th remaining line.
+sub-002 2LM001 2LM002 2LM003 2LM004 seq1-001 seq1-005 seq2-001
+sub-003 2LM001 2LM002 2LM003 2LM004 seq1-001 seq1-006
+sub-004 2LM001 2LM002 2LM003 2LM004 seq1-001
