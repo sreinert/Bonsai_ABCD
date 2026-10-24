@@ -4,7 +4,7 @@ These scripts run `roicat_tracking_holography.py` as a SLURM array job on the GP
 
 | File | Where it runs | What it does |
 |---|---|---|
-| `sync_to_cluster.sh` | laptop | copies `preprocessing/roicat_analysis/` to `hpc_files/code/Bonsai_ABCD/` on the share and writes `CODE_VERSION_roicat.txt` |
+| `sync_to_cluster.sh` | laptop | legacy: copied `preprocessing/roicat_analysis/` to `hpc_files/code/Bonsai_ABCD/` before that folder became a git clone; now refuses to run |
 | `run_roicat_array.sh` | HPC | SLURM array job; task N tracks the N-th animal in the mice file |
 | `mice_holography.txt` | HPC | one `mouse tag1 tag2 ...` per line |
 
@@ -13,12 +13,11 @@ Outputs: `cohort1/analysis/sub-00X/ROICaT/` (results `.json`/`.richfile`, `sessi
 
 ## On the laptop
 
-**1. Mount the share** and copy the code onto it:
+**1. Get the code onto the cluster.** `hpc_files/code/Bonsai_ABCD` is a git clone of this repo (branch `Sandra_analysis`; see the top-level README). Commit and push on the laptop, then on the cluster:
 ```bash
-cd "/Users/sandrareinert/Library/Mobile Documents/com~apple~CloudDocs/Documents/Postdoc_SWC/Code/Bonsai_ABCD"
-bash preprocessing/roicat_analysis/hpc/sync_to_cluster.sh
+cd /ceph/mrsic_flogel/public/projects/SaRe_20240219_hfs/hpc_files/code/Bonsai_ABCD
+git pull
 ```
-It never deletes anything at the destination.
 
 Optional check that the inputs resolve (this only prints paths):
 ```bash
@@ -50,7 +49,7 @@ python -c "import roicat, torch; print(roicat.__version__, torch.__version__, to
 deactivate
 exit
 ```
-The last line should print `1.7.12 2.14.1 True`. If it prints `False` and the driver version is below 580, the driver is too old for the CUDA 13 build. Uncomment the cu126 block at the end of `pyproject.toml`, run `uv lock --project preprocessing/roicat_analysis/hpc` on the laptop, then repeat steps 1–3.
+The last line should print `1.7.12 2.14.1 True`. If it prints `False` and the driver version is below 580, the driver is too old for the CUDA 13 build. Uncomment the cu126 block at the end of `pyproject.toml`, run `uv lock --project preprocessing/roicat_analysis/hpc` on the laptop, commit + push, then repeat steps 1–3.
 
 **GPU type:** torch 2.14.1+cu130 only supports compute capability 7.5 (Turing) and newer. The Quadro P5000 (Pascal, 6.1) fails with `cuDNN version 92400 is not compatible with devices with SM < 7.5`, so `run_roicat_array.sh` and the `srun` above exclude the P5000 nodes (`gpu-380-10`, `-12`, `-14`; `-12` and `-14` also have an RTX 2080, which is lost to the exclusion). All other GPUs in the partition (RTX 2080, Quadro RTX 5000, A4500, RTX 4000 Ada, A100, L40S) work. Check `sinfo -p gpu -o "%N %G"` if nodes are added.
 
@@ -83,7 +82,7 @@ Rerunning a task overwrites that animal's `ROICaT/` results.
 
 ## Later
 
-- **Code only:** edit on the laptop and repeat step 1. The env doesn't need rebuilding.
+- **Code only:** edit on the laptop, commit + push, and `git pull` on the cluster (step 1). The env doesn't need rebuilding.
 - **Dependencies:** edit `pyproject.toml`, run `uv lock --project preprocessing/roicat_analysis/hpc` on the laptop, then repeat steps 1–3.
-- **Other sessions/animals:** edit `mice_holography.txt`, or copy it and pass the new file as the argument to `sbatch ... run_roicat_array.sh <file>`.
+- **Other sessions/animals:** edit `mice_holography.txt` (then commit + push and `git pull`), or copy it and pass the new file as the argument to `sbatch ... run_roicat_array.sh <file>`.
 - **Parameters:** `--um_per_pixel` defaults to 0.834 (ScanImage `imagingFovUm` 426.996 µm / 512 px, the same in all 16 sessions). The alignment, blurring and embedding settings are the same as in the cohort2 script `../roicat_tracking.py`. The similarity and clustering steps use the roicat 1.7 API with its default mixing-parameter search, because the old calls no longer exist (see the script's docstring).

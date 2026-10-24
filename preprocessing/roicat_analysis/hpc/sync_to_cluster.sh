@@ -7,6 +7,9 @@
 # Copies the working tree as it is (uncommitted edits included), and records which commit +
 # local changes were copied in <DEST>/CODE_VERSION_roicat.txt.
 # Never deletes anything at the destination.
+#
+# Not needed once <DEST>/Bonsai_ABCD is a git clone (README.md): update it with `git pull` on
+# the cluster. The script then refuses to run, so it can't scatter edits over the checkout.
 
 set -euo pipefail
 
@@ -18,6 +21,10 @@ BONSAI="$(cd "$ROICAT/../.." && pwd)"
 
 if [ ! -d "$(dirname "$DEST")" ]; then
     echo "$(dirname "$DEST") not found -- is the share mounted?" >&2
+    exit 1
+fi
+if [ -d "$DEST/Bonsai_ABCD/.git" ]; then
+    echo "$DEST/Bonsai_ABCD is a git clone: commit + push here, then \`git pull\` on the cluster" >&2
     exit 1
 fi
 mkdir -p "$DEST/Bonsai_ABCD/preprocessing" "$DEST/Bonsai_ABCD/preprocessing/roicat_analysis/hpc/logs"

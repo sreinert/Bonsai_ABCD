@@ -8,3 +8,6 @@ __pycache__/
 *.pyc
 # uv virtual environment
 .venv/
+
+# SLURM job logs written next to the HPC scripts
+**/hpc/logs/

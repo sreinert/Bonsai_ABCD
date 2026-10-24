@@ -4,7 +4,7 @@ These scripts run `python -m nwb_barcoding.build_session_nwb` as a SLURM array j
 
 | File | Where it runs | What it does |
 |---|---|---|
-| `sync_to_cluster.sh` | laptop | copies `nwb_barcoding/` and `Aimbot_barcoding/preprocess_alignment/` to `hpc_files/code/` on the share, and writes `CODE_VERSION.txt` |
+| `sync_to_cluster.sh` | laptop | copies `Aimbot_barcoding/preprocess_alignment/` to `hpc_files/code/` on the share and writes `CODE_VERSION.txt` (also `nwb_barcoding/`, but only while `hpc_files/code/Bonsai_ABCD` isn't a git clone yet) |
 | `build_nwb_array.sh` | HPC | SLURM array job; task N builds the N-th session in the sessions file |
 | `sessions_holography.txt` | HPC | one `mouse tag` per line |
 
@@ -12,12 +12,17 @@ These scripts run `python -m nwb_barcoding.build_session_nwb` as a SLURM array j
 
 **1. Mount the share.** Check in Finder that `/Volumes/mrsic_flogel` exists.
 
-**2. Copy the code onto the share.**
+**2. Get the code onto the share.** `hpc_files/code/Bonsai_ABCD` is a git clone of this repo (branch `Sandra_analysis`; see the top-level README). Commit and push on the laptop, then on the cluster:
+```bash
+cd /ceph/mrsic_flogel/public/projects/SaRe_20240219_hfs/hpc_files/code/Bonsai_ABCD
+git pull
+```
+`Aimbot_barcoding` isn't a clone yet, so copy it from the laptop:
 ```bash
 cd "/Users/sandrareinert/Library/Mobile Documents/com~apple~CloudDocs/Documents/Postdoc_SWC/Code/Bonsai_ABCD"
 bash nwb_barcoding/hpc/sync_to_cluster.sh
 ```
-The script copies the working tree, including uncommitted edits, to `SaRe_20240219_hfs/hpc_files/code/`, and never deletes anything there. At the end it prints `CODE_VERSION.txt`, which lists the commits and local edits that were copied.
+The script copies Aimbot's working tree, including uncommitted edits, to `SaRe_20240219_hfs/hpc_files/code/Aimbot_barcoding`, and never deletes anything there. It skips `Bonsai_ABCD` because that's a git clone. At the end it prints `CODE_VERSION.txt`, which lists the Aimbot commit and local edits that were copied.
 
 ## On the cluster: one-time setup
 
@@ -82,9 +87,9 @@ sbatch --array=3-16%4 build_nwb_array.sh sessions_holography.txt
 
 ## Later, when things change
 
-- **Code only:** edit on the laptop and repeat step 2. The env doesn't need rebuilding.
-- **Dependencies:** edit `nwb_barcoding/pyproject.toml`, then run `uv lock --project nwb_barcoding` on the laptop. Repeat step 2, then step 4 on the cluster. When you run it on the laptop, set `UV_PROJECT_ENVIRONMENT` to a folder outside iCloud, such as `~/envs/nwb_barcoding`.
-- **New sessions:** add lines to `sessions_holography.txt` (or make a new sessions file) and sync.
+- **Code only:** edit on the laptop, commit + push, and `git pull` on the cluster (step 2; rerun the sync script only for Aimbot changes). The env doesn't need rebuilding.
+- **Dependencies:** edit `nwb_barcoding/pyproject.toml`, then run `uv lock --project nwb_barcoding` on the laptop. Commit + push, `git pull` on the cluster, then step 4. When you run it on the laptop, set `UV_PROJECT_ENVIRONMENT` to a folder outside iCloud, such as `~/envs/nwb_barcoding`.
+- **New sessions:** add lines to `sessions_holography.txt` (or make a new sessions file), commit + push and `git pull`. Small edits can also be made directly in the clone on the cluster and committed from there.
 - **Another cohort with the same layout** (`rawdata/` + `preprocessed/`): add `--export=ALL,BASE=/ceph/.../<cohort root>` to `sbatch`.
 
 ## Troubleshooting the env build

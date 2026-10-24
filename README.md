@@ -49,12 +49,18 @@ uv sync                # creates .venv in the repo
 uv run jupyter lab
 ```
 
-On the SWC HPC, keep the venv (and the Python uv downloads) on /ceph, not in home:
+On the SWC HPC the repo is a git clone at `/ceph/mrsic_flogel/public/projects/SaRe_20240219_hfs/hpc_files/code/Bonsai_ABCD`
+(branch `Sandra_analysis`). The `nwb_barcoding/hpc` and `preprocessing/roicat_analysis/hpc` jobs run from
+the same clone, each with its own venv. Update it with `git pull` after pushing from the laptop.
+Build the env on a compute node (the login node's thread limit breaks git/uv), and keep the venv
+(and the Python uv downloads) on /ceph, not in home:
 
 ```console
+srun -p cpu --cpus-per-task=4 --mem=16G -t 1:00:00 --pty bash
 module load uv
 export UV_PROJECT_ENVIRONMENT=/ceph/python_envs/$USER/bonsai_abcd
 export UV_PYTHON_INSTALL_DIR=/ceph/python_envs/$USER/python
+cd /ceph/mrsic_flogel/public/projects/SaRe_20240219_hfs/hpc_files/code/Bonsai_ABCD
 uv sync --locked
 uv run python -m musicboxes.session_overview ...   # or: source $UV_PROJECT_ENVIRONMENT/bin/activate
 ```
