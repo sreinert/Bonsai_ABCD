@@ -8,7 +8,7 @@ import pickle
 import seaborn as sns
 import importlib as imp
 import pickle as pkl
-sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..', '..')))
 import preprocessing.parse_session_functions as parse_session_functions
 from suite2p.extraction import dcnv
 import scipy.stats as stats
