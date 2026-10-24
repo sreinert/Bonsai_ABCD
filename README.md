@@ -7,7 +7,11 @@ I recommend using the environment.yml file to create a new conda environment
 
 ```console
 conda env create -f environment.yml
+conda activate bonsai_abcd
+pip install --no-deps swc-aeon==0.1.0
 ```
+
+(`swc-aeon` is installed separately because it declares `numpy<2`, which pip can't override; it works fine on numpy 2.2.6.)
 
 to activate the environment, run
 
@@ -32,8 +36,33 @@ then use the requirements.txt file to pip install the necessary packages
 
 ```console
 pip install -r requirements.txt
+pip install --no-deps swc-aeon==0.1.0
 ```
 
+
+### With uv (local or SWC HPC)
+`pyproject.toml` + `uv.lock` reproduce the `bonsai_abcd` env with uv (versions pinned to the
+working conda env; torch is CPU-only on Linux). Locally:
+
+```console
+uv sync                # creates .venv in the repo
+uv run jupyter lab
+```
+
+On the SWC HPC, keep the venv (and the Python uv downloads) on /ceph, not in home:
+
+```console
+module load uv
+export UV_PROJECT_ENVIRONMENT=/ceph/python_envs/$USER/bonsai_abcd
+export UV_PYTHON_INSTALL_DIR=/ceph/python_envs/$USER/python
+uv sync --locked
+uv run python -m musicboxes.session_overview ...   # or: source $UV_PROJECT_ENVIRONMENT/bin/activate
+```
+
+To use it as a Jupyter kernel (e.g. through a VS Code tunnel on a compute node), select the
+interpreter at `/ceph/python_envs/$USER/bonsai_abcd/bin/python`.
+
+If you add a dependency, use `uv add <pkg>` and also add it to `environment.yml` / `requirements.txt`.
 
 ## Use
 

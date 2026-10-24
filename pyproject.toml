@@ -1,0 +1,95 @@
+# uv port of the bonsai_abcd conda environment. Covers everything except nwb_barcoding/
+# (2p_preprocess_extraction env), the ROICaT scripts and the HPC suite2p scripts.
+# Not an installable package: uv only manages the venv, notebooks keep importing repo
+# modules via sys.path.
+#
+# Versions are pinned to what the working conda env (/opt/anaconda3/envs/bonsai_abcd,
+# Oct 2026) actually has installed, which differs from environment.yml in places
+# (numpy 2.2.6 not 1.26.4, ipykernel 6.30.1 not 7.0.1). Unpinned yml entries are
+# pinned here too, since newer releases change APIs (suite2p 1.x, pynwb 4.x, hdmf 6.x).
+# Packages the yml lists but the conda env lacks (jupyterlab, statsmodels, httpx,
+# requests) keep the yml pin or float.
+#
+# torch only comes in through suite2p/cellpose and nothing here calls it directly, so on
+# Linux it comes from the CPU-only PyTorch index (no ~3 GB of CUDA wheels, and default
+# CUDA 13 builds fail on the HPC's Pascal P5000 GPUs anyway).
+#
+#   uv sync                  # create/update .venv from uv.lock
+#   uv run jupyter lab       # or: uv run python -m musicboxes.session_overview ...
+[project]
+name = "bonsai-abcd"
+version = "0.1.0"
+description = "Analysis code for the VR ABCD landmark-sequence task"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aeon==1.2.0",
+    "arrow==1.4.0",
+    "astropy==8.0.1",
+    "colour==0.1.5",
+    "deprecated==1.2.18",
+    "dotmap==1.3.30",
+    "h5py==3.15.1",
+    "harp-python==0.4.1",
+    "httpx==0.28.1",
+    "ipykernel==6.30.1",
+    "ipympl==0.10.0",
+    "ipython==9.4.0",
+    "ipywidgets==8.1.9",
+    "joblib==1.5.1",
+    "jupyterlab==4.4.10",
+    "llvmlite==0.44.0",
+    "matplotlib==3.10.5",
+    "numba==0.61.2",
+    "numpy==2.2.6",
+    "opencv-python==4.11.0.86",
+    "pandas==2.3.1",
+    "pillow==11.3.0",
+    "plotly==6.5.2",
+    "pydantic-yaml==1.6.0",
+    "pydantic==2.12.5",
+    "pynapple==0.10.2",
+    "pynwb==3.1.3",
+    "python-dateutil==2.9.0.post0",
+    "pytz==2025.2",
+    "pyyaml==6.0.2",
+    "rastermap==1.0",
+    "requests==2.32.5",
+    "scikit-image==0.26.0",
+    "scikit-learn==1.6.1",
+    "scipy==1.15.3",
+    "seaborn==0.13.2",
+    "setuptools==78.1.1",
+    "statsmodels",
+    "suite2p==0.14.6",
+    "swc-aeon==0.1.0",
+    "threadpoolctl==3.6.0",
+    "tifffile==2026.1.28",
+    "typing-extensions==4.14.1",
+    "tzdata==2025.2",
+    "umap-learn==0.5.12",
+    "wesanderson==0.0.4",
+    "wheel==0.45.1",
+    "wrapt==1.17.2",
+]
+
+[tool.uv]
+package = false
+# swc-aeon 0.1.0 declares numpy<2, but the conda env runs it on numpy 2.2.6 without problems.
+override-dependencies = ["numpy==2.2.6"]
+# Transitive packages held at the conda env's versions.
+constraint-dependencies = [
+    "cellpose==4.0.8",
+    "hdmf==4.3.1",
+    "opencv-python-headless==4.13.0.90",
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+torchvision = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
