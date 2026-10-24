@@ -3,7 +3,12 @@ Adapted from https://github.com/MouseLand/suite2p/blob/main/jupyter/Run%20Suite2
 """
 import argparse
 import os
+import sys
+from pathlib import Path
 import suite2p
+
+sys.path.append(str(Path(__file__).resolve().parents[2]))  # repo root, for ceph_paths
+from ceph_paths import ceph_path
 
 parser = argparse.ArgumentParser(description="Run Suite2p with animal and session inputs.")
 parser.add_argument('--animal', type=str, default='TAA0000061', help="The animal ID (e.g. 'TAA0000066')")
@@ -11,9 +16,7 @@ parser.add_argument('--session', type=str, default='ses-007_date-20250307_protoc
 args = parser.parse_args()
 
 # Data directory
-# basepath = "/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/"  # PC
-# basepath = "Z:/public/projects/AtApSuKuSaRe_20250129_HFScohort2"  # 313
-basepath = "/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2"  # HPC
+basepath = ceph_path("/ceph/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2")  # HPC, Mac or Windows mount
 animal =  args.animal 
 session = args.session 
 tiff_path = 'funcimg/Session'

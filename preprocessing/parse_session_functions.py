@@ -19,6 +19,7 @@ from cycler import cycler
 import palettes
 import importlib
 
+from ceph_paths import ceph_path
 from analysis.sequence_compression import neural_analysis_helpers
 from cellTV import cellTV_functions as cellTV
 importlib.reload(neural_analysis_helpers)
@@ -33,7 +34,7 @@ color_scheme = wesanderson.film_palette('Darjeeling Limited',palette=0)
 custom_cycler = cycler(color=color_scheme)
 
 def find_base_path(mouse,date):
-    data_dir = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
+    data_dir = ceph_path('/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/') + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
     if not sessions:
@@ -63,7 +64,7 @@ def find_base_path(mouse,date):
     return base_path
 
 def find_base_path_npz(mouse,date):
-    data_dir = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/' + mouse
+    data_dir = ceph_path('/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/') + mouse
     folders = [f for f in os.listdir(data_dir) if os.path.isdir(os.path.join(data_dir, f))]
     sessions = [s for s in folders if date in s]
     base_path = os.path.join(data_dir, sessions[0])

@@ -92,6 +92,7 @@ import preprocessing.parse_session_functions_cohort3 as parse_session_functions_
 import cellTV.cellTV_functions as cellTV
 import cellTV.cellTV_functions_goalprogress as cellTV_gp
 import era_brewer
+from ceph_paths import ceph_path
 import musicboxes.behaviour_performance_summary as behaviour_performance_summary
 
 # Continuous colormap for the z-scored heatmaps (plots 3/4/5), built from
@@ -1032,8 +1033,9 @@ def _cli():
                          help='display each figure interactively as it\'s built '
                          '(default off, for unattended/batch terminal use)')
     args = parser.parse_args()
-    run_overview(args.mouse, args.session_id, args.stage, behav_root=args.behav_root,
-                 cohort=args.cohort, world=args.world, root_path=args.root_path, show=args.show)
+    run_overview(args.mouse, args.session_id, args.stage, behav_root=ceph_path(args.behav_root),
+                 cohort=args.cohort, world=args.world,
+                 root_path=ceph_path(args.root_path) if args.root_path else None, show=args.show)
 
 
 if __name__ == '__main__':

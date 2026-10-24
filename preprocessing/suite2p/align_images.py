@@ -7,8 +7,11 @@ from skimage.registration import phase_cross_correlation
 from skimage.restoration import denoise_bilateral
 from scipy.ndimage import shift, gaussian_filter
 import cv2
-import os, re
+import os, re, sys
 from pathlib import Path
+
+sys.path.append(str(Path(__file__).resolve().parents[2]))  # repo root, for ceph_paths
+from ceph_paths import ceph_path
 
 def align_image(img1, img2):
     """Align img2 to img1 using phase cross-correlation (translation only)."""
@@ -49,7 +52,7 @@ def main():
     # Load grayscale images
     # '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/TAA0000066/ses-007_date-20250304_ptrotocol-t2/funcimg/Session/suite2p/plane0'
     suite2p_reg = True  # Matlab or suite2p registration
-    basepath = Path('/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/')
+    basepath = Path(ceph_path('/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'))
     animal = 'TAA0000061'
     session2 = 'ses-007_date-20250307_protocol-t2'  
     session1 = 'ses-005_date-20250228_protocol-t1' 

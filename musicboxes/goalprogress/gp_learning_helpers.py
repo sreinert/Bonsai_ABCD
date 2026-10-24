@@ -60,11 +60,12 @@ from sklearn.model_selection import GroupKFold
 
 import era_brewer
 import parse_nwb_functions
+from ceph_paths import ceph_path
 import musicboxes.session_overview as session_overview
 import preprocessing.parse_session_functions_cohort3_summary as pfs
 import preprocessing.quality_control.tracking_overview as tracking_overview
 
-PROJECT_ROOT = '/Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1'
+PROJECT_ROOT = ceph_path('/Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1')
 BEHAV_ROOT = f'{PROJECT_ROOT}/BehaviourAligned_robust'
 TRACKING_ROOT = f'{PROJECT_ROOT}/analysis'
 

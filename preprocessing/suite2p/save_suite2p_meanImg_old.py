@@ -3,11 +3,14 @@ import matplotlib.pyplot as plt
 
 from skimage import io, img_as_float, img_as_ubyte
 from skimage.exposure import rescale_intensity
-import os, re
+import os, re, sys
 from pathlib import Path
 from align_images import adjust_intensity
 
-basepath = Path('/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/')
+sys.path.append(str(Path(__file__).resolve().parents[2]))  # repo root, for ceph_paths
+from ceph_paths import ceph_path
+
+basepath = Path(ceph_path('/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2/'))
 
 sessions = ['TAA0000066/ses-023_date-20250516_protocol-t17']
 

@@ -40,6 +40,7 @@ the raw session tree is modified or overwritten.
 import shutil
 from pathlib import Path
 
+from ceph_paths import ceph_path
 from . import _aimbot_path
 _aimbot_path.ensure_on_path()
 
@@ -54,7 +55,7 @@ from . import verify_session_cohort2  # noqa: E402
 from . import build_behaviour_data_cohort2  # noqa: E402
 from . import verify_behaviour_data_cohort2  # noqa: E402
 
-COHORT2_ROOT = '/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2'
+COHORT2_ROOT = ceph_path('/Volumes/mrsic_flogel/public/projects/AtApSuKuSaRe_20250129_HFScohort2')
 METADATA_DIR = _aimbot_path.AIMBOT_BARCODING_ROOT / 'preprocess_alignment' / 'nwb' / 'metadata'
 
 
@@ -184,8 +185,8 @@ def build_session(mouse: str, session_tag: str, rawdata_root: str = COHORT2_ROOT
     :param bool build_behaviour_data_files: also build behaviour_data.npz/.csv + valid_frames.npz
     :param bool force: redo steps whose output already exists (verification always runs)
     """
-    rawdata_root = Path(rawdata_root)
-    output_root = Path(output_root) if output_root else rawdata_root / 'BehaviourAligned_robust'
+    rawdata_root = Path(ceph_path(rawdata_root))
+    output_root = Path(ceph_path(output_root)) if output_root else rawdata_root / 'BehaviourAligned_robust'
     mouse_dir = rawdata_root / mouse
     session_name = layout.resolve_session(mouse_dir, session_tag)
     files = layout.find_session_files(mouse_dir / session_name)

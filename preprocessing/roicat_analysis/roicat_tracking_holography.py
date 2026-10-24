@@ -43,13 +43,16 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 
+sys.path.append(str(Path(__file__).resolve().parents[2]))  # repo root, for ceph_paths
+from ceph_paths import ceph_path
+
 #%% Define inputs and basic variables
 parser = argparse.ArgumentParser(description="Run ROICaT on holography-cohort sessions of one animal.")
 parser.add_argument('--animal', type=str, required=True, help="Subject folder, e.g. 'sub-001'")
 parser.add_argument('--sessions', type=str, nargs='+', required=True,
                     help="Session tags in order, e.g. 2LM001 2LM002 2LM003 2LM004")
 parser.add_argument('--root', type=str,
-                    default='/ceph/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1',
+                    default=ceph_path('/ceph/mrsic_flogel/public/projects/SaReSuKuMaRa_20260911_holography/cohort1'),
                     help="Cohort folder containing preprocessed/ and analysis/")
 parser.add_argument('--um_per_pixel', type=float, default=426.996 / 512,
                     help="Imaging resolution (default from ScanImage imagingFovUm, 512 px)")
@@ -58,7 +61,7 @@ args = parser.parse_args()
 
 animal = args.animal
 sessions = args.sessions
-root = Path(args.root)
+root = Path(ceph_path(args.root))
 
 # Resolve each session tag to its preprocessed folder
 session_dirs = []

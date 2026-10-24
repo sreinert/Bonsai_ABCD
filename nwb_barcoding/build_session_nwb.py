@@ -34,6 +34,7 @@ What's different:
 
 from pathlib import Path
 
+from ceph_paths import ceph_path
 from . import _aimbot_path
 _aimbot_path.ensure_on_path()
 
@@ -221,9 +222,10 @@ def build_session(subject: str, session_tag: str, rawdata_root: str, funcimg_pre
         Verification steps always run regardless (they're cheap and are the
         whole point of a rerun).
     """
-    rawdata_root = Path(rawdata_root).expanduser().resolve()
-    funcimg_preprocessed_root = Path(funcimg_preprocessed_root).expanduser().resolve()
-    output_root = Path(output_root).expanduser().resolve()
+    # Share paths may be given with any machine's prefix (/Volumes, /ceph, Y:/); see ceph_paths.py.
+    rawdata_root = Path(ceph_path(rawdata_root)).expanduser().resolve()
+    funcimg_preprocessed_root = Path(ceph_path(funcimg_preprocessed_root)).expanduser().resolve()
+    output_root = Path(ceph_path(output_root)).expanduser().resolve()
 
     subject_dir = rawdata_root / subject
     if not subject_dir.exists():

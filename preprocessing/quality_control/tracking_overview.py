@@ -97,9 +97,7 @@ try:
 except ImportError:  # run as a script: put the repo root on the path
     sys.path.append(str(Path(__file__).resolve().parents[2]))
     import era_brewer
-
-PROJECTS_ROOT = '/Volumes/mrsic_flogel/public/projects'
-HPC_PROJECTS_ROOT = '/ceph/mrsic_flogel/public/projects'
+from ceph_paths import PROJECTS_ROOT, ceph_path
 
 # Default ROICaT folder and analysis/ root per cohort; {mouse} is the mouse ID as typed on the CLI
 # (cohort2: "TAA0000062", cohort3/GP/holo: "004").
@@ -133,8 +131,8 @@ MASK_COLOR = '#FAE4A6'
 # ----------------------------------------------------------------------------------------------
 
 def _local_path(path):
-    """Map an HPC (/ceph/...) path stored in a ROICaT run to the local share mount."""
-    return Path(str(path).replace(HPC_PROJECTS_ROOT, PROJECTS_ROOT))
+    """Map a share path stored in a ROICaT run (usually /ceph/..., from the HPC) to this machine's mount."""
+    return Path(ceph_path(str(path)))
 
 
 def find_roicat_run(roicat_dir, run=None):
@@ -798,8 +796,8 @@ def _cli():
     args = parser.parse_args()
 
     preset = COHORT_PRESETS[args.cohort]
-    roicat_dir = args.roicat_dir or preset['roicat_dir'].format(mouse=args.mouse)
-    root_path = args.root_path or preset['root_path']
+    roicat_dir = ceph_path(args.roicat_dir) if args.roicat_dir else preset['roicat_dir'].format(mouse=args.mouse)
+    root_path = ceph_path(args.root_path) if args.root_path else preset['root_path']
     run_dir = find_roicat_run(roicat_dir, args.run)
     save_dir = default_save_dir(root_path, args.mouse, run_dir, roicat_dir)
     run_tracking_overview(run_dir, save_dir, n_cells=args.n_cells, min_presence=args.min_presence,

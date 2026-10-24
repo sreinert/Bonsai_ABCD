@@ -45,6 +45,7 @@ import era_brewer
 from nwb_barcoding import barcode_alignment as ba
 from nwb_barcoding.verify_session import _get_ttl
 from preprocessing.quality_control.alignment_lag_diagnostics import _zscore_traces, peri_event_average
+from ceph_paths import ceph_path
 
 NOMINAL_FRAME_RATE = 45.0
 NOMINAL_NIDAQ_RATE = 9000.0
@@ -206,7 +207,7 @@ def main():
     p.add_argument('--event', choices=['reward', 'landmark'], default='reward')
     p.add_argument('--out', default='~/Desktop/clock_drift')
     args = p.parse_args()
-    make_figure(args.mouse, args.session_tag, args.root, args.out, event=args.event)
+    make_figure(args.mouse, args.session_tag, ceph_path(args.root), args.out, event=args.event)
 
 
 if __name__ == '__main__':

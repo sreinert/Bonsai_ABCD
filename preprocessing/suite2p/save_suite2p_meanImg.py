@@ -19,14 +19,11 @@ from skimage.exposure import rescale_intensity
 import os
 from pathlib import Path
 from align_images import adjust_intensity
+import sys
 import tifffile
 
-if Path("/ceph").exists():
-    ROOT = "/ceph/mrsic_flogel/public/projects"
-elif Path("/Volumes/mrsic_flogel").exists():
-    ROOT = "/Volumes/mrsic_flogel/public/projects"
-else:
-    ROOT = "Y:/public/projects"
+sys.path.append(str(Path(__file__).resolve().parents[2]))  # repo root, for ceph_paths
+from ceph_paths import PROJECTS_ROOT as ROOT  # HPC, Mac or Windows mount
 basepath = Path(ROOT) / "SaReSuKuMaRa_20260911_holography/cohort1/preprocessed" # "SaReMaRa_20260519_NeuralAnalysis/Cohort3" or ./Cohort2 ; "SaReMaRa_20260629_GoalProgress" ; SuKuSaRe_20250923_HFScohort3" ; "AtApSuKuSaRe_20250129_HFScohort2" ; 
 
 sessions = ['sub-004/ses-2LM001_date-20261006T170659-t0']
