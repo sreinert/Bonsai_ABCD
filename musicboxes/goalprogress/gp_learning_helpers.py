@@ -41,6 +41,18 @@ New here
     GP phase and lap position with segment-grouped CV, cross-session decoding with tracked cells,
     entry-aligned decoded-phase posteriors by visit outcome, and PCA projection of trial-averaged
     GP trajectories onto a good-session subspace.
+  - Pseudopopulations across mice (P6): per-mouse populations are small (65-220 cells, often
+    < 50 tracked), so decoder error partly reflects cell count. pseudopop_decoding concatenates
+    cells across mice by building "pseudo-trials": for each class (phase or position bin) it
+    draws bins of that class independently from every mouse and places them side by side. CV
+    folds are made per mouse by segment / lap, so train and test pseudo-trials never share a
+    real segment. This keeps tuning but discards noise correlations and any trial-to-trial
+    covariation across cells, and turns n = mice into n = 1 pooled population: variability over
+    resampling is not variability across animals, so the notebook adds leave-one-mouse-out runs.
+  - position_tuning: lap-position counterpart of gp_tuning (same index and within-lap circular
+    shuffle, binned by corridor position over complete laps), used in P6d to compare decoders
+    on all cells with decoders on cells tuned in the reference session. held_out_bins restricts
+    a decoder to odd segments / laps when cells were selected on the even ones.
 """
 
 import io
@@ -450,6 +462,53 @@ def gp_tuning(loaded, clock='reward', bins=30, n_shuffles=500, alpha=0.05, seed=
                 split_r=rowwise_corr(mean_curve(mat[:, 0::2]), mean_curve(mat[:, 1::2])))
 
 
+def lap_segments(loaded, bins):
+    """(start, end) frames of every COMPLETE lap (all `bins` position bins visited). Laps are
+    floor(position / tunnel_length) of the cumulative position, so they start at the corridor
+    wrap; session['lap_idx'] switches elsewhere (~0.36 of the corridor) and is -1 at times."""
+    session, n = loaded['session'], loaded['n_frames']
+    pos = np.asarray(session['position'][:n], float)
+    lap = np.floor(pos / session['tunnel_length']).astype(int)
+    pos_bin = np.clip(np.floor(pos % session['tunnel_length'] / session['tunnel_length'] * bins).astype(int), 0, bins - 1)
+    change = np.flatnonzero(np.diff(lap)) + 1
+    starts, ends = np.r_[0, change], np.r_[change, n]
+    keep = [len(np.unique(pos_bin[s:e])) == bins for s, e in zip(starts, ends)]
+    return np.stack([starts, ends], 1)[keep], pos_bin
+
+
+def position_tuning(loaded, bins=40, n_shuffles=500, alpha=0.05, seed=0, signal='dF', laps=slice(None)):
+    """Per-cell lap-position tuning, the position counterpart of gp_tuning: same tuning index
+    ((max-min)/mean of the curve, raw dF) and the same circular-shift shuffle within each lap,
+    but frames are binned by position in the corridor rather than by normalised time, and only
+    complete laps are used. `laps` selects a subset of the complete laps (e.g. slice(0, None, 2)
+    for even laps). No speed threshold, as for GP tuning, so bins where the mouse stops (goals)
+    are weighted by time spent there. Returns dict(laps, mat (dFn, cells x laps x bins), tuning,
+    p, significant, shuffle_z, field (preferred position), split_r)."""
+    segments, pos_bin = lap_segments(loaded, bins)
+    segments = segments[laps]
+    if len(segments) < 4:
+        return None
+    rng = np.random.default_rng(seed)
+    frames = np.concatenate([np.arange(s, e) for s, e in segments])
+    seg = np.concatenate([np.full(e - s, i) for i, (s, e) in enumerate(segments)])
+    seg_len = segments[:, 1] - segments[:, 0]
+    seg_start = np.r_[0, np.cumsum(seg_len)[:-1]]
+    layout = dict(frames=frames, seg=seg, pos=np.arange(len(frames)) - seg_start[seg], group=seg * bins + pos_bin[frames],
+                  seg_start=seg_start, seg_len=seg_len, n_seg=len(segments), bins=bins)
+    observed = tuning_index(binned_from_groups(loaded[signal][:, frames], layout['group'], layout))
+    if n_shuffles:
+        shuf = np.stack([tuning_index(binned_from_groups(loaded[signal][:, frames], shuffled_groups(layout, rng),
+                                                         layout)) for _ in range(n_shuffles)], axis=1)
+        p = (1 + np.sum(shuf >= observed[:, None], axis=1)) / (1 + n_shuffles)
+        shuffle_z = (observed - np.nanmean(shuf, 1)) / np.nanstd(shuf, 1)
+    else:
+        p, shuffle_z = np.full(len(observed), np.nan), np.full(len(observed), np.nan)
+    mat = binned_from_groups(loaded['dFn'][:, frames], layout['group'], layout)
+    return dict(bins=bins, laps=segments, mat=mat, tuning=observed, p=p, significant=p < alpha, shuffle_z=shuffle_z,
+                field=preferred_phase(mean_curve(mat)),
+                split_r=rowwise_corr(mean_curve(mat[:, 0::2]), mean_curve(mat[:, 1::2])))
+
+
 def sorted_display_curves(sort_mat, display_mat):
     """Z-scored trial-averaged curves of display_mat ordered by each cell's peak in sort_mat."""
     sort_curve = zscore_rows(mean_curve(sort_mat))
@@ -655,11 +714,28 @@ def cv_decode_all(dd, target='phase', n_splits=5):
 
 
 def _target(dd, target):
+    """Labels, CV groups, number of classes and usable-bin mask. An optional dd['mask'] (see
+    held_out_bins) restricts the usable bins further."""
+    extra = dd.get('mask', True)
     if target == 'phase':
-        return dd['phase_bin'], dd['seg'], dd['n_phase_bins'], dd['seg'] >= 0
+        return dd['phase_bin'], dd['seg'], dd['n_phase_bins'], (dd['seg'] >= 0) & extra
     if target == 'position':
-        return dd['pos_bin'], dd['lap'], dd['n_pos_bins'], np.ones(len(dd['pos_bin']), bool)
+        return dd['pos_bin'], dd['lap'], dd['n_pos_bins'], np.ones(len(dd['pos_bin']), bool) & extra
     raise ValueError(target)
+
+
+def held_out_bins(loaded, dd, target, pos_bins=40):
+    """Copy of decoding_data `dd` restricted to odd GP segments (phase) or odd complete laps
+    (position, laps as in lap_segments). Used when cells are selected on the even half of the
+    same session, so selection and decoding never see the same data."""
+    if target == 'phase':
+        mask = (dd['seg'] >= 0) & (dd['seg'] % 2 == 1)
+    else:
+        odd = np.zeros(loaded['n_frames'], bool)
+        for s, e in lap_segments(loaded, pos_bins)[0][1::2]:
+            odd[s:e] = True
+        mask = odd[dd['frame']]
+    return dict(dd, mask=mask)
 
 
 def decode_error(post, truth, n_bins):
@@ -751,6 +827,83 @@ def pv_similarity(curves_a, curves_b):
     a, b = zscore_rows(curves_a), zscore_rows(curves_b)
     return np.nanmean([np.corrcoef(a[:, i], b[:, i])[0, 1] for i in range(a.shape[1])
                        if np.isfinite(a[:, i]).all() and np.isfinite(b[:, i]).all()])
+
+
+# ---------------------------------------------------------------------------
+# P6: pseudopopulations across mice
+# ---------------------------------------------------------------------------
+
+def _class_pools(dd, target, idx):
+    """{class: bin indices} among the labelled bins `idx` of one mouse."""
+    y = _target(dd, target)[0]
+    return {c: idx[y[idx] == c] for c in np.unique(y[idx])}
+
+
+def _draw_pseudo(dds, pools, classes, n_per_class, rng):
+    """Pseudo-trials: n_per_class draws per class, each mouse's bins drawn independently and
+    concatenated along cells. Returns X (n_classes * n_per_class, total cells), y."""
+    X = np.concatenate([np.concatenate([dd['X'][rng.choice(pool[c], n_per_class)] for c in classes])
+                        for dd, pool in zip(dds, pools)], axis=1)
+    return X, np.repeat(classes, n_per_class)
+
+
+def pseudopop_decoding(dds, target='phase', dds_test=None, n_cells=None, n_train=40, n_test=10,
+                       n_splits=5, n_reps=10, seed=0):
+    """Decode GP phase or lap position from a pseudopopulation pooled across mice.
+
+    dds: per-mouse decoding_data dicts (one session each). Without dds_test, cross-validated
+    within the session: folds are made per mouse (GroupKFold by segment / lap) and fold k of every
+    mouse is used together. With dds_test (same mice, same cells in the same order, e.g. from
+    tracked_rows), train on all bins of dds and test on dds_test. n_cells: random subset of the
+    pooled cells per repetition (None = all), for matched-size comparisons.
+    Returns dict(error (median over reps), errors (per rep), chance, confusion (true class x
+    posterior, mean over reps), n_cells, n_mice)."""
+    rng = np.random.default_rng(seed)
+    n_bins = _target(dds[0], target)[2]
+    centres = (np.arange(n_bins) + 0.5) / n_bins
+    n_total = sum(dd['X'].shape[1] for dd in dds)
+    n_use = n_total if n_cells is None else min(n_cells, n_total)
+    folds = []   # list over folds of (train pools, test pools), one pool dict per mouse
+    if dds_test is None:
+        labelled = [np.where(_target(dd, target)[3])[0] for dd in dds]
+        k = min([n_splits] + [len(np.unique(_target(dd, target)[1][idx])) for dd, idx in zip(dds, labelled)])
+        if k < 2:
+            return None
+        splits = [list(GroupKFold(n_splits=k).split(idx, groups=_target(dd, target)[1][idx]))
+                  for dd, idx in zip(dds, labelled)]
+        for f in range(k):
+            folds.append(([_class_pools(dd, target, idx[sp[f][0]]) for dd, idx, sp in zip(dds, labelled, splits)],
+                          [_class_pools(dd, target, idx[sp[f][1]]) for dd, idx, sp in zip(dds, labelled, splits)]))
+        test_dds = dds
+    else:
+        folds.append(([_class_pools(dd, target, np.where(_target(dd, target)[3])[0]) for dd in dds],
+                      [_class_pools(dd, target, np.where(_target(dd, target)[3])[0]) for dd in dds_test]))
+        test_dds = dds_test
+    errors, chances, confusion = [], [], np.zeros((n_bins, n_bins))
+    for _ in range(n_reps):
+        cells = np.sort(rng.choice(n_total, n_use, replace=False))
+        rep_err, rep_pred, rep_truth = [], [], []
+        for train_pools, test_pools in folds:
+            classes = sorted(set.intersection(*[set(p) for p in train_pools + test_pools]))
+            if len(classes) < 2:
+                continue
+            Xtr, ytr = _draw_pseudo(dds, train_pools, classes, n_train, rng)
+            Xte, yte = _draw_pseudo(test_dds, test_pools, classes, n_test, rng)
+            model = _lda().fit(Xtr[:, cells], ytr)
+            post = full_posterior(model, Xte[:, cells], model.classes_, n_bins)
+            pred = posterior_to_phase(post, n_bins)
+            rep_pred.append(pred)
+            rep_truth.append(centres[yte])
+            for c in classes:
+                confusion[c] += post[yte == c].mean(0)
+        if not rep_pred:
+            return None
+        pred, truth = np.concatenate(rep_pred), np.concatenate(rep_truth)
+        errors.append(np.median(circular_distance(pred, truth)))
+        chances.append(np.median(circular_distance(rng.permutation(pred), truth)))
+    confusion /= np.maximum(confusion.sum(1, keepdims=True), 1e-12)
+    return dict(error=np.median(errors), errors=np.array(errors), chance=np.median(chances),
+                confusion=confusion, n_cells=n_use, n_mice=len(dds))
 
 
 # ---------------------------------------------------------------------------
