@@ -62,6 +62,10 @@ class FakeParsingSession(Session):
         return "AAB"
 
     @property
+    def reward_seq(self):
+        return np.array([0, 0, -1])
+
+    @property
     def lm_size(self):
         return 3.0
 
@@ -124,6 +128,35 @@ def test_aab_parser_discards_faulty_initial_cohort1_landmark():
     *_, release_df = session.get_event_parsed(threshold="all")
 
     assert release_df["Position"].tolist() == [10.0, 20.0, 30.0]
+
+
+def test_cohort2_aab_offset_starts_with_a1():
+    dataframe = pd.DataFrame(
+        {
+            "Position": [5.0, 10.0, 20.0, 30.0],
+            "Licks": [False, False, False, False],
+            "Rewards": [np.nan, np.nan, np.nan, np.nan],
+            "LM_Count": [0, 1, 2, 3],
+        }
+    )
+    session = FakeParsingSession(
+        {"initialCorridorOffset": 5}, dataframe, None, "01", 2, "aab-test"
+    )
+
+    A_landmarks, B_landmarks, _, _ = session.get_A_B_landmarks()
+    A1, A2, B1, _, _ = session.get_A_B_splits()
+    target_id, distractor_id, _, _, _, lm_id_sequence = (
+        session.find_targets_distractors()
+    )
+
+    assert A_landmarks.tolist() == [0, 1, 3]
+    assert B_landmarks.tolist() == [2]
+    assert A1.tolist() == [0, 3]
+    assert A2.tolist() == [1]
+    assert B1.tolist() == [2]
+    assert target_id.tolist() == [0, 1]
+    assert distractor_id.tolist() == [2]
+    assert lm_id_sequence.tolist() == [0, 1, 2, 0]
 
 
 def test_excludes_triplet_when_non_omitted_a_did_not_deliver_reward():

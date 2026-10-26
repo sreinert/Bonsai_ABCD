@@ -30,6 +30,14 @@ class Session():
         return self.trial['landmarks'][0][0]['size']
 
     @cached_property
+    def has_initial_corridor_offset(self):
+        """Whether cohort 2 starts before the first configured landmark."""
+        return (
+            self.cohort == 2
+            and self.settings.get('initialCorridorOffset', 0) > 0
+        )
+
+    @cached_property
     def reward_seq(self):
         seq = np.array([lm[0]['rewardSequencePosition'] for lm in self.trial['landmarks']])
         if 'full' in self.session_id:
@@ -111,10 +119,10 @@ class Session():
             release_df = release_df[1:]
 
         elif self.sequence == 'AAB':
-            # Cohort 1 can log a faulty initial landmark near position zero.
-            # After removing it, the retained cyclic sequence starts at A2:
-            # A2, B, A1, A2, B, ...
-            if release_positions[0] < 2:
+            # Without a corridor offset, VR can log a faulty initial landmark
+            # near position zero. Cohort-2 sessions with an initial offset have
+            # a genuine first landmark, which starts the cycle at A1.
+            if not self.has_initial_corridor_offset and release_positions[0] < 2:
                 release_df = release_df[1:]
         
         return lick_position, lick_times, reward_times, reward_positions, release_df
@@ -183,8 +191,12 @@ class Session():
             target_id = np.atleast_1d(lm_id[0:len(target_idx)])
 
         elif self.sequence == 'AAB':
-            distractor_id = np.atleast_1d(lm_id[-1] - 1)
-            target_id = [lm_id[target_idx[0]], lm_id[target_idx[1]] + 1]
+            if self.has_initial_corridor_offset:
+                target_id = lm_id[target_idx]
+                distractor_id = lm_id[distractor_idx]
+            else:
+                distractor_id = np.atleast_1d(lm_id[-1] - 1)
+                target_id = [lm_id[target_idx[0]], lm_id[target_idx[1]] + 1]
         
         A_landmarks, B_landmarks, A_idx, B_idx = self.get_A_B_landmarks()
 
@@ -272,7 +284,7 @@ class Session():
                 sorting = False
                 seq1 = list(range(2, len(lm_idx), len(self.reward_seq)))
                 seq2 = list(range(0, len(lm_idx), len(self.reward_seq)))
-                
+
                 A_landmarks = []
                 for a, b in zip_longest(seq1, seq2):
                     if a is not None:
@@ -307,19 +319,24 @@ class Session():
                 B_landmarks = [i for i in range(len(self.reward_seq)) if (i not in A_landmarks)]
 
             elif self.sequence == 'AAB':   
-                sorting = False
-                seq1 = list(range(2, len(lm_idx), len(self.reward_seq)))
-                seq2 = list(range(0, len(lm_idx), len(self.reward_seq)))
-                
-                A_landmarks = []
-                for a, b in zip_longest(seq1, seq2):
-                    if a is not None:
-                        A_landmarks.append(a)
-                    if b is not None:
-                        A_landmarks.append(b)
-                A_landmarks = np.sort(A_landmarks)
+                if self.has_initial_corridor_offset:
+                    # The offset makes the first recorded landmark genuine, so
+                    # the unrotated sequence is A1, A2, B.
+                    B_landmarks = list(np.where(self.reward_seq == -1)[0])
+                else:
+                    sorting = False
+                    seq1 = list(range(2, len(lm_idx), len(self.reward_seq)))
+                    seq2 = list(range(0, len(lm_idx), len(self.reward_seq)))
 
-                B_landmarks = [i for i in range(len(self.reward_seq)) if (i not in A_landmarks)]
+                    A_landmarks = []
+                    for a, b in zip_longest(seq1, seq2):
+                        if a is not None:
+                            A_landmarks.append(a)
+                        if b is not None:
+                            A_landmarks.append(b)
+                    A_landmarks = np.sort(A_landmarks)
+
+                    B_landmarks = [i for i in range(len(self.reward_seq)) if (i not in A_landmarks)]
 
         if sorting:     
             for a in range(len(np.where(self.reward_seq == 0)[0])):
@@ -352,9 +369,13 @@ class Session():
             B1 = B_landmarks[::2]
             B2 = B_landmarks[1::2]
         elif self.sequence == 'AAB':
-            # note for AAB the first lm is A2
-            A1 = A_landmarks[1::2]
-            A2 = A_landmarks[::2]
+            if self.has_initial_corridor_offset:
+                A1 = A_landmarks[::2]
+                A2 = A_landmarks[1::2]
+            else:
+                # Without the offset, the retained sequence starts at A2.
+                A1 = A_landmarks[1::2]
+                A2 = A_landmarks[::2]
             B1 = B_landmarks
         elif self.sequence == 'ABBB':  
             B1 = B_landmarks[::3]

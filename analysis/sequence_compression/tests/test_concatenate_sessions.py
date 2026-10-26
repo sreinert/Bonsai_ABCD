@@ -390,6 +390,53 @@ def test_find_base_path_prefers_concatenated_over_restored_sources(
     )
 
 
+def test_find_base_path_selects_latest_matching_condition(tmp_path: Path) -> None:
+    mouse_root = tmp_path / "cohort1" / "sub-07"
+    older_match = mouse_root / "ses-abab-random-001_date-20261019T080000"
+    newer_match = mouse_root / "ses-ABAB-fixed-002_date-20261019T090000"
+    latest_other = mouse_root / "ses-abb-random-003_date-20261019T100000"
+    for session_path in (older_match, newer_match, latest_other):
+        (session_path / "behav").mkdir(parents=True)
+
+    root = tmp_path / "cohort1"
+    assert find_base_path("07", "261019", root) == latest_other
+    assert find_base_path("07", "261019", root, condition="abab") == newer_match
+
+
+def test_find_base_path_condition_match_respects_token_boundary(
+    tmp_path: Path,
+) -> None:
+    mouse_root = tmp_path / "cohort1" / "sub-07"
+    aab = mouse_root / "ses-aab-random-001_date-20261019T080000"
+    aabb = mouse_root / "ses-aabb-fixed-002_date-20261019T090000"
+    for session_path in (aab, aabb):
+        (session_path / "behav").mkdir(parents=True)
+
+    assert find_base_path(
+        "07", "261019", tmp_path / "cohort1", condition="AAB"
+    ) == aab
+
+
+def test_find_base_path_reports_available_sessions_for_missing_condition(
+    tmp_path: Path,
+) -> None:
+    mouse_root = tmp_path / "cohort1" / "sub-07"
+    for label in ("abab-random-001", "abb-fixed-002"):
+        (mouse_root / f"ses-{label}_date-20261019T080000" / "behav").mkdir(
+            parents=True
+        )
+
+    with pytest.raises(FileNotFoundError) as error:
+        find_base_path(
+            "07", "261019", tmp_path / "cohort1", condition="aab"
+        )
+
+    message = str(error.value)
+    assert "condition 'aab'" in message
+    assert "abab-random-001" in message
+    assert "abb-fixed-002" in message
+
+
 def test_concatenate_accepts_session_without_reward_file(tmp_path: Path) -> None:
     source_root = tmp_path / "cohort2" / "source"
     first = _make_session(source_root, "20260827T140000")

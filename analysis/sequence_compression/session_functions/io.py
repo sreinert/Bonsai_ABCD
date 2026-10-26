@@ -142,13 +142,29 @@ def select_session_folders(folders, prefer_concatenated=False):
             seen.add(folder)
     return selected
 
-def find_base_path(mouse, date, root, prefer_concatenated=False):
+def _session_matches_condition(folder, condition):
+    """Return whether a session folder starts with ``condition`` as a token."""
+    session_label = folder.name.split("ses-", 1)[-1].split("_date-", 1)[0]
+    requested_condition = str(condition).strip()
+    return re.match(
+        rf"^{re.escape(requested_condition)}(?:-|$)",
+        session_label,
+        flags=re.IGNORECASE,
+    ) is not None
+
+
+def find_base_path(mouse, date, root, prefer_concatenated=False, condition=None):
     """Find a session recorded on ``date``.
 
     When ``prefer_concatenated`` is true, a combined session whose manifest
     contains the requested acquisition date is preferred over the individual
     source folders from that date. Without that option, the historical
     date-in-folder behavior is retained, with combined sessions as a fallback.
+
+    When ``condition`` is provided, only folders whose session label starts
+    with that condition as a complete token are considered. Matching is case
+    insensitive, so ``abab`` matches ``abab-random-001`` but ``aab`` does not
+    match ``aabb-fixed-001``.
     """
     mouse_path = Path(root) / f"sub-{mouse}"
 
@@ -168,6 +184,31 @@ def find_base_path(mouse, date, root, prefer_concatenated=False):
             dated_candidates.append((ts, folder))
         if _concatenated_session_contains_date(folder, date):
             concatenated_candidates.append((ts, folder))
+
+    if condition is not None:
+        available_candidates = dated_candidates + concatenated_candidates
+        dated_candidates = [
+            candidate
+            for candidate in dated_candidates
+            if _session_matches_condition(candidate[1], condition)
+        ]
+        concatenated_candidates = [
+            candidate
+            for candidate in concatenated_candidates
+            if _session_matches_condition(candidate[1], condition)
+        ]
+        if not dated_candidates and not concatenated_candidates:
+            available_labels = sorted(
+                {
+                    folder.name.split("ses-", 1)[-1].split("_date-", 1)[0]
+                    for _, folder in available_candidates
+                }
+            )
+            available_text = ", ".join(available_labels) or "none"
+            raise FileNotFoundError(
+                f"No session folder found for {mouse} on {date} matching "
+                f"condition {condition!r}. Available sessions: {available_text}"
+            )
 
     if prefer_concatenated and concatenated_candidates:
         candidates = concatenated_candidates
@@ -189,6 +230,18 @@ def find_base_path(mouse, date, root, prefer_concatenated=False):
     return latest_folder
 
 def load_settings(base_path):
+    ses_settings = load_session_settings(base_path)
+
+    rig_path = Path(base_path) / "behav/rig-settings/"
+    rig_file = list(rig_path.glob("*.json"))[0]
+    with open(rig_file, 'r') as file:
+        rig_settings = json.load(file)
+    rig_settings = rig_settings["value"]
+    return ses_settings, rig_settings
+
+
+def load_session_settings(base_path):
+    """Load only the Bonsai session settings for a recording folder."""
     settings_path = Path(base_path) / "behav/session-settings/"
     json_files = list(settings_path.glob("*.json")) or False # deal with first few sessions where config was saved as json
     if json_files:
@@ -200,14 +253,29 @@ def load_settings(base_path):
             raise FileNotFoundError(f"No valid JSON found in {settings_path}")
     with open(settings_file, 'r') as file:
         settings = json.load(file)
-    ses_settings = settings["value"]
+    return settings["value"]
 
-    rig_path = Path(base_path) / "behav/rig-settings/"
-    rig_file = list(rig_path.glob("*.json"))[0]
-    with open(rig_file, 'r') as file:
-        rig_settings = json.load(file)
-    rig_settings = rig_settings["value"]
-    return ses_settings, rig_settings
+
+def count_session_trial_types(base_path):
+    """Return the number of trial definitions saved for a recording session.
+
+    Standard sessions store one item in ``settings['trial']``. Sessions that
+    randomly interleave a standard trial with probe/omission trials store more
+    than one. Older settings may store a single trial directly as a dictionary.
+    """
+    trial_config = load_session_settings(base_path).get("trial")
+    if isinstance(trial_config, list):
+        return len(trial_config)
+    if isinstance(trial_config, dict):
+        return 1
+    raise ValueError(
+        f"Session settings in {base_path} do not contain a valid 'trial' field"
+    )
+
+
+def has_multiple_trial_types(base_path):
+    """Return whether a session interleaves more than one configured trial."""
+    return count_session_trial_types(base_path) > 1
 
 def load_data(base_path):
     '''Load raw behaviour data logged by Bonsai'''
