@@ -3,14 +3,16 @@ set -euo pipefail
 
 if [[ $# -lt 1 || $# -gt 2 ]]; then
   echo "Usage: $0 PROJECT_ROOT [PYTHON_EXECUTABLE]" >&2
-  echo "Activate the NWB/preprocess environment first, or pass its Python executable." >&2
+  echo "The default environment is /ceph/python_envs/\$USER/nwb_barcoding." >&2
   exit 2
 fi
 
 project_root=$(cd "$1" && pwd)
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "${script_dir}/../.." && pwd)
-python_executable=${2:-${PYTHON_EXECUTABLE:-$(command -v python)}}
+environment_user=${USER:-$(id -un)}
+default_environment=/ceph/python_envs/${environment_user}/nwb_barcoding
+python_executable=${2:-${PYTHON_EXECUTABLE:-${default_environment}/bin/python}}
 
 if ! command -v sbatch >/dev/null 2>&1; then
   echo "sbatch is required; run this launcher on a Slurm submission host." >&2
@@ -27,6 +29,11 @@ export PYTHONPATH="${repo_root}${PYTHONPATH:+:${PYTHONPATH}}"
 import importlib
 import sys
 
+if sys.version_info[:2] != (3, 12):
+    raise RuntimeError(
+        f"nwb_barcoding requires Python 3.12, but {sys.executable} is "
+        f"Python {sys.version.split()[0]}"
+    )
 required = ("aeon", "h5py", "matplotlib", "neuroconv", "numpy", "pynwb", "scipy", "suite2p")
 for name in required:
     importlib.import_module(name)

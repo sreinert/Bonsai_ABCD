@@ -51,17 +51,19 @@ CPU-array task per session. It currently defaults to `sub-07`, so partially prep
 mice are left out. Within each task, barcode alignment and all verification checks must
 succeed before `musicboxes/session_overview.py` runs.
 
-Activate the HPC environment containing the NWB, Aimbot, Aeon, Matplotlib, and Suite2p
-dependencies, then run:
+The launcher automatically uses
+`/ceph/python_envs/$USER/nwb_barcoding/bin/python`; environment activation is not
+required. After creating and syncing that environment, run:
 
 ```bash
 bash nwb_barcoding/hpc/submit_sequence_compression_batch.sh \
-  /ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression \
-  /absolute/path/to/the/environment/bin/python
+  /ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression
 ```
 
 The `Aimbot_barcoding` repository must be a sibling of this repository, as for individual
-NWB builds. The launcher validates required imports before submitting anything.
+NWB builds. The launcher validates Python 3.12 and all required imports before submitting
+anything. A different interpreter can still be supplied as the optional second argument or
+through `PYTHON_EXECUTABLE`.
 
 Outputs are written to:
 
