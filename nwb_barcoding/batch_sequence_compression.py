@@ -1,7 +1,7 @@
-"""Batch discovery and execution for aligned sequence-compression sessions.
+"""Batch discovery and barcode alignment for sequence-compression sessions.
 
-The Slurm wrapper runs one manifest row per array task. Within a task, NWB/barcode
-alignment must finish and verify cleanly before the session overview is generated.
+The Slurm wrapper runs one completed Suite2p session per array task. This stage builds
+and verifies alignment products only; session overviews are handled by a separate batch.
 """
 
 from __future__ import annotations
@@ -154,8 +154,8 @@ def run_session(
     session: str,
     *,
     force: bool = False,
-) -> tuple[Path, Path]:
-    """Build/verify the aligned files, then generate the session overview."""
+) -> Path:
+    """Build and verify one session's barcode-aligned outputs."""
     project_root = Path(project_root).expanduser().resolve()
     paths = resolve_paths(subject, session, project_root)
     print(f"=== {paths.subject} / {paths.full_session_name} ===", flush=True)
@@ -170,38 +170,12 @@ def run_session(
     if verification_flags:
         joined = "\n  - ".join(str(flag) for flag in verification_flags)
         raise RuntimeError(
-            "NWB/barcode verification returned issue(s); overview was not run:\n"
+            "NWB/barcode verification returned issue(s):\n"
             f"  - {joined}"
         )
 
-    # Keep plotting imports out of manifest discovery and force a headless backend on HPC.
-    import matplotlib
-
-    matplotlib.use("Agg", force=True)
-    import matplotlib.pyplot as plt
-    from analysis.sequence_compression.session_overview_sc import run_overview
-
-    overview_dir = (
-        project_root
-        / "analysis"
-        / "cohort2"
-        / paths.subject
-        / paths.full_session_name
-    )
-    _, figures = run_overview(
-        mouse=paths.subject,
-        session_id=paths.full_session_name,
-        project_root=project_root,
-        save_dir=overview_dir,
-        show=False,
-    )
-    for figure in figures.values():
-        if figure is not None:
-            plt.close(figure)
-
     print(f"Aligned output: {paths.output_session}", flush=True)
-    print(f"Overview output: {overview_dir}", flush=True)
-    return Path(merged_nwb), overview_dir
+    return Path(merged_nwb)
 
 
 def _parser() -> argparse.ArgumentParser:

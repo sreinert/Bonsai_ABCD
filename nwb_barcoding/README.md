@@ -44,12 +44,12 @@ behaviour_data.csv
 valid_frames.npz
 ```
 
-## Slurm batch: alignment followed by session overview
+## Slurm stage 1: barcode alignment
 
-The batch launcher discovers completed Suite2p `plane0` outputs for the explicitly selected
-subject and submits one independent CPU-array task per session. Partially preprocessed
-sessions are left out. Within each task, barcode alignment and all verification checks must
-succeed before the five-plot `analysis/sequence_compression/session_overview_sc.py` runs.
+The alignment launcher discovers completed Suite2p `plane0` outputs for the explicitly
+selected subject and submits one independent CPU-array task per session. Partially
+preprocessed sessions are left out. Each task builds the NWBs, aligns barcodes, creates the
+behavior-frame products, runs verification, and then stops; it does not generate plots.
 
 The launcher automatically uses
 `/ceph/python_envs/$USER/nwb_barcoding/bin/python`; environment activation is not
@@ -61,17 +61,15 @@ bash nwb_barcoding/hpc/submit_sequence_compression_batch.sh \
   sub-07
 ```
 
-The `Aimbot_barcoding` repository must be a sibling of this repository, as for individual
-NWB builds. The launcher validates Python 3.12 and all required imports before submitting
-anything. The subject may also be written as `07`. A different interpreter can still be
-supplied as the optional third argument or
-through `PYTHON_EXECUTABLE`.
+The `Aimbot_barcoding` repository must be a sibling of this repository. The launcher
+validates Python 3.12 and all required imports before submitting anything. The subject may
+also be written as `07`. A different interpreter can still be supplied as the optional
+third argument or through `PYTHON_EXECUTABLE`.
 
-Outputs are written to:
+Alignment outputs are written to:
 
 ```text
 BehaviourAligned_robust/cohort2/<subject>/<full-session>/
-analysis/cohort2/<subject>/<full-session>/
 ```
 
 To deliberately submit multiple completed mice together, use a comma-separated argument:
@@ -90,10 +88,43 @@ Useful submission environment variables:
 - `SLURM_MAIL_USER=name@example.org` enables begin/end/failure email.
 - `FORCE_REBUILD=true` rebuilds existing NWBs in each worker; the default is resumable.
 
-For a non-Slurm serial run, use:
+For a non-Slurm serial alignment run, use:
 
 ```bash
 python -m nwb_barcoding.batch_sequence_compression \
+  --project-root /path/to/AtAp_20260119_SequenceCompression \
+  --include-subject sub-07 \
+  --all
+```
+
+## Slurm stage 2: session overviews
+
+The separate overview launcher discovers sessions under `BehaviourAligned_robust` that
+contain exactly one merged NWB plus `behaviour_data.npz` and `valid_frames.npz`. It does not
+run NWB conversion or barcode alignment. Each array task runs only
+`analysis/sequence_compression/session_overview_sc.py` and writes plots to:
+
+```text
+analysis/cohort2/<subject>/<full-session>/
+```
+
+Submit overviews independently after alignment jobs have finished:
+
+```bash
+bash analysis/sequence_compression/submit_session_overview_sc_batch.sh \
+  /ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression \
+  sub-07
+```
+
+The overview launcher accepts the same subject syntax, Python override,
+`MAX_CONCURRENT`, `TASK_RANGE`, `SLURM_PARTITION`, and `SLURM_MAIL_USER` options as the
+alignment launcher. Its manifests and logs are stored separately under
+`analysis/cohort2/.session_overview_manifests`.
+
+For a non-Slurm serial overview run, use:
+
+```bash
+python -m analysis.sequence_compression.batch_session_overview_sc \
   --project-root /path/to/AtAp_20260119_SequenceCompression \
   --include-subject sub-07 \
   --all

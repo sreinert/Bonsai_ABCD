@@ -44,8 +44,8 @@ PY
 
 manifest_root=${project_root}/analysis/cohort2/.nwb_barcoding_manifests
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
-manifest=${manifest_root}/sessions_${timestamp}.csv
-log_dir=${manifest_root}/logs
+manifest=${manifest_root}/alignment_sessions_${timestamp}.csv
+log_dir=${manifest_root}/alignment_logs
 mkdir -p "${log_dir}"
 
 IFS=',' read -r -a selected_subjects <<< "${subjects_csv}"
@@ -94,10 +94,9 @@ submission=$(sbatch --parsable \
   "${manifest}" "${repo_root}" "${project_root}" "${python_executable}")
 job_id=${submission%%;*}
 
-echo "Submitted ${task_count} session(s) as Slurm array job ${job_id}."
+echo "Submitted ${task_count} alignment session(s) as Slurm array job ${job_id}."
 echo "Subjects: ${subjects_csv}"
 echo "Manifest: ${manifest}"
 echo "Array: ${array_spec}"
 echo "Logs: ${log_dir}/nwb_align_${job_id}_<task>.{out,err}"
 echo "Aligned output: ${project_root}/BehaviourAligned_robust/cohort2"
-echo "Overview output: ${project_root}/analysis/cohort2"

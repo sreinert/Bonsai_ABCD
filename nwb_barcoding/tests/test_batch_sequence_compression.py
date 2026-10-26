@@ -74,8 +74,8 @@ def test_manifest_round_trip(tmp_path):
         batch.read_manifest_task(manifest, 1)
 
 
-def test_run_session_aligns_before_overview_and_uses_cohort_output(tmp_path, monkeypatch):
-    raw = _session_tree(tmp_path, "sub-02", "full002")
+def test_run_session_only_builds_and_verifies_alignment(tmp_path, monkeypatch):
+    _session_tree(tmp_path, "sub-02", "full002")
     calls = []
     merged = tmp_path / "merged.nwb"
 
@@ -83,31 +83,15 @@ def test_run_session_aligns_before_overview_and_uses_cohort_output(tmp_path, mon
         calls.append(("build", kwargs))
         return merged, []
 
-    def fake_overview(**kwargs):
-        calls.append(("overview", kwargs))
-        return {}, {}
-
     monkeypatch.setattr(batch, "build_sequence_compression_session", fake_build)
-    fake_module = type("FakeOverview", (), {"run_overview": staticmethod(fake_overview)})
-    monkeypatch.setitem(
-        __import__("sys").modules,
-        "analysis.sequence_compression.session_overview_sc",
-        fake_module(),
-    )
 
-    result, overview_dir = batch.run_session(tmp_path, "sub-02", "full002")
+    result = batch.run_session(tmp_path, "sub-02", "full002")
 
     assert result == merged
-    assert calls[0][0] == "build"
-    assert calls[1][0] == "overview"
-    assert calls[1][1]["save_dir"] == (
-        tmp_path / "analysis" / "cohort2" / "sub-02" / raw.name
-    )
-    assert "stage" not in calls[1][1]
-    assert overview_dir == calls[1][1]["save_dir"]
+    assert [call[0] for call in calls] == ["build"]
 
 
-def test_run_session_does_not_plot_when_verification_flags(tmp_path, monkeypatch):
+def test_run_session_fails_when_verification_flags(tmp_path, monkeypatch):
     _session_tree(tmp_path, "sub-02", "full002")
     monkeypatch.setattr(
         batch,
@@ -115,5 +99,5 @@ def test_run_session_does_not_plot_when_verification_flags(tmp_path, monkeypatch
         lambda **kwargs: (Path("bad.nwb"), ["bad barcode fit"]),
     )
 
-    with pytest.raises(RuntimeError, match="overview was not run"):
+    with pytest.raises(RuntimeError, match="verification returned issue"):
         batch.run_session(tmp_path, "sub-02", "full002")
