@@ -31,7 +31,8 @@ Use `--output-root PATH` to override the isolated output root and `--force` to
 rebuild existing products. Source raw data and Suite2p outputs are read-only.
 Temporary dF/F input is created in a system temporary directory and removed
 after the imaging NWB is complete, avoiding writes to both the source trees and
-the network output tree.
+the network output tree. Its neuropil coefficient is read from each plane's
+Suite2p `ops.npy`; no coefficient is assumed by the builder.
 
 Each completed output session contains:
 
@@ -107,6 +108,19 @@ run NWB conversion or barcode alignment. Each array task runs only
 ```text
 analysis/cohort2/<subject>/<full-session>/
 ```
+
+The first overview run also reproduces CellTV's aligned two-channel extraction from
+the matching Suite2p traces, using `neucoeff` from `ops.npy`, and saves the established
+files under `BehaviourAligned_robust/cohort2/<subject>/<full-session>/funcimg/`:
+
+```text
+DF_F0.npy
+DF_F02.npy
+DG_R.npy
+```
+
+Existing complete files are reused. The overview adds raw-trace, peri-reward,
+cross-validated peri-reward, and selected-cell reward-PSTH plots for `DG_R.npy`.
 
 Submit overviews independently after alignment jobs have finished:
 

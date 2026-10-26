@@ -34,7 +34,7 @@ def stage_raw_funcimg(raw_session, staging_root, scanimage_tif):
 
 @contextmanager
 def staged_tracking_layout(suite2p_dir, output_session, source_session=None,
-                           dff_neuropil_coefficient=0.7, force=False):
+                           dff_neuropil_coefficient=None, force=False):
     """Provide Aimbot's expected ``funcimg/{suite2p,dff}`` layout without touching inputs."""
     suite2p_dir = Path(suite2p_dir).expanduser().resolve()
     output_session = Path(output_session)

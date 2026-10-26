@@ -1,10 +1,9 @@
 """Compute suite2p dF/F ('dFF.npy') if it's missing, at the exact path Aimbot_barcoding expects.
 
-Ports the algorithm from Bonsai_ABCD's preprocessing/extract_dff.ipynb (F - 0.7*Fneu
-neuropil correction, then suite2p's own dcnv.preprocess baseline correction) as a
-plain function reading only .npy files -- no dependency on the Bonsai_ABCD package
-itself, since nwb_barcoding runs in the `2p_preprocess_extraction` conda env, not
-`bonsai_abcd`.
+Implements the CellTV-style green trace: neuropil-correct using the coefficient
+stored in Suite2p's ops.npy, then apply Suite2p's own dcnv.preprocess baseline
+correction. It is a plain function reading only .npy files, with no dependency on
+the Bonsai_ABCD package itself.
 
 Path convention matches exactly what PMPipelineSegmentationExtractor looks for
 (Aimbot_barcoding's preprocess_alignment/nwb/ophys/extractors/pmpipeline_segmentation_extractor.py
@@ -42,7 +41,22 @@ def _get_baseline_params(ops):
         return (p['baseline'], p['win_baseline'], p['sig_baseline'], p['prctile_baseline'])
 
 
-def compute_dff_for_plane(suite2p_plane_path, dff_plane_path, neuropil_coefficient=0.7):
+def _get_neuropil_coefficient(ops, override=None):
+    """Return Suite2p's stored neuropil coefficient unless explicitly overridden."""
+    if override is not None:
+        return float(override)
+    if "neucoeff" in ops:
+        return float(ops["neucoeff"])
+    extraction = ops.get("extraction", {})
+    if isinstance(extraction, dict) and "neuropil_coefficient" in extraction:
+        return float(extraction["neuropil_coefficient"])
+    raise KeyError(
+        "ops.npy has no 'neucoeff' or extraction['neuropil_coefficient']; "
+        "cannot reproduce Suite2p/CellTV neuropil correction"
+    )
+
+
+def compute_dff_for_plane(suite2p_plane_path, dff_plane_path, neuropil_coefficient=None):
     """Compute dFF for one plane from F.npy/Fneu.npy/ops.npy and save it as dFF.npy.
 
     Same algorithm as preprocessing/extract_dff.ipynb. Returns the path written.
@@ -52,6 +66,9 @@ def compute_dff_for_plane(suite2p_plane_path, dff_plane_path, neuropil_coefficie
     fneu = np.load(suite2p_plane_path / 'Fneu.npy')
     ops = np.load(suite2p_plane_path / 'ops.npy', allow_pickle=True).item()
 
+    neuropil_coefficient = _get_neuropil_coefficient(
+        ops, override=neuropil_coefficient
+    )
     f_corr = f - fneu * neuropil_coefficient
     baseline, win_baseline, sig_baseline, prctile_baseline = _get_baseline_params(ops)
     dff = _suite2p_preprocess(
@@ -65,7 +82,7 @@ def compute_dff_for_plane(suite2p_plane_path, dff_plane_path, neuropil_coefficie
     return dff_file
 
 
-def ensure_dff(funcimg_dir, suite2p_dirname='suite2p', dff_dirname='dff', neuropil_coefficient=0.7,
+def ensure_dff(funcimg_dir, suite2p_dirname='suite2p', dff_dirname='dff', neuropil_coefficient=None,
                 force=False):
     """Compute dFF.npy for every suite2p plane under `funcimg_dir` that's missing one.
 
@@ -95,8 +112,14 @@ def ensure_dff(funcimg_dir, suite2p_dirname='suite2p', dff_dirname='dff', neurop
             print(f"Skipping {plane_name}: no F.npy found under {plane_dir} (nothing to compute dFF from).")
             continue
         else:
+            coefficient_source = (
+                f"explicit coefficient {neuropil_coefficient}"
+                if neuropil_coefficient is not None
+                else "the neuropil coefficient stored in ops.npy"
+            )
             print(f"dFF.npy missing for {plane_name} -- computing it from {plane_dir} "
-                  f"(F - {neuropil_coefficient}*Fneu, suite2p dcnv.preprocess baseline correction)...")
+                  f"(F - neucoeff*Fneu using {coefficient_source}, then Suite2p "
+                  "dcnv.preprocess baseline correction)...")
             dff_file = compute_dff_for_plane(plane_dir, dff_plane_path, neuropil_coefficient=neuropil_coefficient)
             print(f"Saved {dff_file}")
         dff_paths.append(dff_file)

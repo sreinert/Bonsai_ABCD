@@ -85,7 +85,7 @@ def resolve_paths(subject, session, project_root, output_root=None):
 
 def build_sequence_compression_session(subject: str, session: str, project_root: str,
                                        output_root: str | None = None,
-                                       dff_neuropil_coefficient: float = 0.7,
+                                       dff_neuropil_coefficient: float | None = None,
                                        build_behaviour_data_files: bool = True,
                                        force: bool = False):
     """Resolve sequence-compression paths and run the shared Bonsai builder."""

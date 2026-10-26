@@ -30,6 +30,57 @@ def test_valid_frames_are_checked_before_selection():
         overview._select_valid_frames(dff, [])
 
 
+def test_celltv_signals_use_ops_coefficient_and_are_saved_aligned(tmp_path, monkeypatch):
+    plane = tmp_path / "suite2p" / "plane0"
+    plane.mkdir(parents=True)
+    F = np.array([[10, 12, 14, 16], [20, 23, 26, 29]], dtype=float)
+    Fneu = np.ones_like(F) * 2
+    F2 = np.array([[4, 5, 6, 7], [8, 9, 10, 11]], dtype=float)
+    Fneu2 = np.ones_like(F2)
+    for name, values in (
+        ("F.npy", F),
+        ("Fneu.npy", Fneu),
+        ("F_chan2.npy", F2),
+        ("Fneu_chan2.npy", Fneu2),
+    ):
+        np.save(plane / name, values)
+    np.save(
+        plane / "ops.npy",
+        {
+            "fs": 4.0,
+            "neucoeff": 0.25,
+            "baseline": "constant_prctile",
+            "prctile_baseline": 0.0,
+        },
+    )
+
+    def constant_percentile(signal, ops):
+        percentile = ops["prctile_baseline"]
+        return signal - np.percentile(signal, percentile, axis=1, keepdims=True)
+
+    monkeypatch.setattr(overview, "_suite2p_preprocess", constant_percentile)
+    aligned_funcimg = tmp_path / "aligned" / "funcimg"
+    result = overview._load_or_extract_celltv_signals(
+        plane, aligned_funcimg, accepted=[1], valid_frames=[1, 3]
+    )
+
+    green = (F - 0.25 * Fneu)[:, [1, 3]]
+    red = (F2 - 0.25 * Fneu2)[:, [1, 3]]
+    red_floor = np.maximum(np.percentile(red, 5, axis=1, keepdims=True), 1e-3)
+    ratio = green / np.maximum(red, red_floor)
+    celltv_gr = ratio - np.percentile(ratio, 0, axis=1, keepdims=True)
+    expected_green = green - np.percentile(green, 0, axis=1, keepdims=True)
+    expected_red = red - np.percentile(red, 0, axis=1, keepdims=True)
+    np.testing.assert_allclose(result["dff"], expected_green[[1]], rtol=1e-6)
+    np.testing.assert_allclose(result["dff2"], expected_red[[1]], rtol=1e-6)
+    np.testing.assert_allclose(result["dg_r"], celltv_gr[[1]], rtol=3e-6)
+    assert {path.name for path in aligned_funcimg.glob("*.npy")} == {
+        "DF_F0.npy",
+        "DF_F02.npy",
+        "DG_R.npy",
+    }
+
+
 def test_accepted_cells_and_empirical_frame_rate():
     plane_seg = pd.DataFrame({"Accepted": [True, False, True]})
     np.testing.assert_array_equal(
@@ -110,7 +161,7 @@ def test_reward_psth_subplots_only_tick_window_limits_and_reward():
     plt.close(figure)
 
 
-def test_run_overview_calls_only_five_plots_and_cleans_legacy(tmp_path, monkeypatch):
+def test_run_overview_adds_four_gr_plots_and_cleans_legacy(tmp_path, monkeypatch):
     session_path = tmp_path / "aligned" / "sub-07" / "ses-full001_date-test"
     session_path.mkdir(parents=True)
     save_dir = tmp_path / "analysis"
@@ -126,6 +177,7 @@ def test_run_overview_calls_only_five_plots_and_cleans_legacy(tmp_path, monkeypa
         "load_session_data",
         lambda *args, **kwargs: {
             "dF": np.arange(120, dtype=float).reshape(3, 40),
+            "gr": np.arange(120, dtype=float).reshape(3, 40) / 10,
             "neurons": np.array([2, 5, 9]),
             "mean_img": np.zeros((2, 2)),
             "image_mask": [np.eye(2, dtype=bool)],
@@ -143,23 +195,34 @@ def test_run_overview_calls_only_five_plots_and_cleans_legacy(tmp_path, monkeypa
         return plt.figure()
 
     def fake_traces(*args, **kwargs):
-        calls.append(("traces", kwargs["save_path"]))
+        name = (
+            "gr_traces"
+            if kwargs.get("signal_label", "").startswith("CellTV")
+            else "traces"
+        )
+        calls.append((name, kwargs["save_path"]))
         selected = overview.select_trace_cells(3, 20)
         np.testing.assert_array_equal(kwargs["cell_indices"], selected)
         np.testing.assert_array_equal(kwargs["cell_labels"], np.array([2, 5, 9])[selected])
         return plt.figure()
 
     def fake_reward(*args, **kwargs):
+        prefix = (
+            "gr_" if kwargs.get("signal_label", "").startswith("CellTV") else ""
+        )
         calls.append(
             (
-                "reward_cv" if kwargs["cross_validated"] else "reward",
+                prefix + ("reward_cv" if kwargs["cross_validated"] else "reward"),
                 kwargs["save_path"],
             )
         )
         return plt.figure()
 
     def fake_reward_psth(*args, **kwargs):
-        calls.append(("reward_psth", kwargs["save_path"]))
+        prefix = (
+            "gr_" if kwargs.get("signal_label", "").startswith("CellTV") else ""
+        )
+        calls.append((prefix + "reward_psth", kwargs["save_path"]))
         selected = overview.select_trace_cells(3, 20)
         np.testing.assert_array_equal(args[1], selected)
         np.testing.assert_array_equal(kwargs["cell_labels"], np.array([2, 5, 9])[selected])
@@ -175,7 +238,15 @@ def test_run_overview_calls_only_five_plots_and_cleans_legacy(tmp_path, monkeypa
     )
 
     assert [name for name, _ in calls] == [
-        "fov", "traces", "reward", "reward_cv", "reward_psth"
+        "fov",
+        "traces",
+        "reward",
+        "reward_cv",
+        "reward_psth",
+        "gr_traces",
+        "gr_reward",
+        "gr_reward_cv",
+        "gr_reward_psth",
     ]
     assert set(figures) == {
         "fov",
@@ -183,6 +254,10 @@ def test_run_overview_calls_only_five_plots_and_cleans_legacy(tmp_path, monkeypa
         "reward",
         "reward_cv",
         "reward_psth_selected_cells",
+        "gr_raw_traces",
+        "gr_reward",
+        "gr_reward_cv",
+        "gr_reward_psth_selected_cells",
     }
     assert not legacy.exists()
     assert unrelated.exists()
@@ -228,6 +303,10 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
         save_dir / "3_reward_heatmap.png",
         save_dir / "4_reward_heatmap_cv.png",
         save_dir / "5_reward_psth_selected_cells.png",
+        save_dir / "6_gr_raw_traces.png",
+        save_dir / "7_gr_reward_heatmap.png",
+        save_dir / "8_gr_reward_heatmap_cv.png",
+        save_dir / "9_gr_reward_psth_selected_cells.png",
     ]
     for path in stale_reward_plots:
         path.touch()

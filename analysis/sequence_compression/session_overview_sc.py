@@ -1,14 +1,18 @@
 """Minimal overview plots for an aligned sequence-compression imaging session.
 
-This module intentionally depends only on the barcode-aligned imaging and behaviour
-products. Landmark intervals are parsed only to keep reward-PSTH windows from overlapping
-other landmarks; no position-tuning or goal-progress analysis is performed.
+Green activity is loaded from the barcode-aligned NWB. CellTV-style green, red, and G/R
+signals are loaded or extracted from the matching two-channel Suite2p traces and saved
+under the aligned session's ``funcimg`` folder. Landmark intervals are parsed only to
+keep reward-PSTH windows from overlapping other landmarks; no position-tuning or
+goal-progress analysis is performed.
 """
 
 from __future__ import annotations
 
 import argparse
+import inspect
 import math
+import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -136,6 +140,120 @@ def _load_nwb_imaging(session_path):
     return dff, accepted, mean_img, image_mask, frame_rate
 
 
+def _suite2p_preprocess(signal, ops):
+    """Run Suite2p baseline subtraction on CPU across supported API versions."""
+    from suite2p.extraction import dcnv
+
+    nested = ops.get("dcnv_preprocess", {})
+    if not isinstance(nested, dict):
+        nested = {}
+
+    def setting(name, default):
+        return ops.get(name, nested.get(name, default))
+
+    arguments = (
+        np.asarray(signal, dtype=np.float32).copy(),
+        setting("baseline", "maximin"),
+        float(setting("win_baseline", 60.0)),
+        float(setting("sig_baseline", 10.0)),
+        float(ops["fs"]),
+        float(setting("prctile_baseline", 8.0)),
+    )
+    if "device" in inspect.signature(dcnv.preprocess).parameters:
+        import torch
+
+        return dcnv.preprocess(*arguments, device=torch.device("cpu"))
+    return dcnv.preprocess(*arguments)
+
+
+def _atomic_save_npy(path, values):
+    """Atomically replace one NumPy output without exposing a partial file."""
+    path = Path(path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.partial.npy")
+    try:
+        np.save(temporary, values)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _load_or_extract_celltv_signals(
+    suite2p_plane_path, aligned_funcimg_path, accepted, valid_frames
+):
+    """Load or create CellTV DF_F0, DF_F02, and DG_R aligned trace files."""
+    from preprocessing.suite2p.full_session_pipeline import two_channel_trace_qc
+
+    suite2p_plane_path = Path(suite2p_plane_path)
+    aligned_funcimg_path = Path(aligned_funcimg_path)
+    output_paths = {
+        "dff": aligned_funcimg_path / "DF_F0.npy",
+        "dff2": aligned_funcimg_path / "DF_F02.npy",
+        "dg_r": aligned_funcimg_path / "DG_R.npy",
+    }
+    if all(path.is_file() for path in output_paths.values()):
+        outputs = {
+            name: np.load(path, mmap_mode="r") for name, path in output_paths.items()
+        }
+    else:
+        required = ("F.npy", "Fneu.npy", "F_chan2.npy", "Fneu_chan2.npy", "ops.npy")
+        missing = [name for name in required if not (suite2p_plane_path / name).is_file()]
+        if missing:
+            raise FileNotFoundError(
+                f"CellTV extraction requires {missing} under {suite2p_plane_path}"
+            )
+        arrays = [
+            np.load(suite2p_plane_path / name, mmap_mode="r")
+            for name in required[:4]
+        ]
+        shapes = {array.shape for array in arrays}
+        if len(shapes) != 1:
+            raise ValueError(
+                f"CellTV green/red Suite2p arrays have incompatible shapes: {shapes}"
+            )
+        valid_frames = np.asarray(valid_frames, dtype=int)
+        aligned_arrays = [array[:, valid_frames] for array in arrays]
+        ops = np.load(
+            suite2p_plane_path / "ops.npy", allow_pickle=True
+        ).item()
+        coefficient = two_channel_trace_qc.neuropil_coefficient(ops)
+        signals = two_channel_trace_qc.channel_signals(
+            *aligned_arrays, ops, coefficient
+        )
+        outputs = {
+            "dff": _suite2p_preprocess(signals["green"], ops),
+            "dff2": _suite2p_preprocess(signals["red"], ops),
+            "dg_r": _suite2p_preprocess(signals["ratio"], ops),
+        }
+        aligned_funcimg_path.mkdir(parents=True, exist_ok=True)
+        for name, path in output_paths.items():
+            _atomic_save_npy(path, np.asarray(outputs[name], dtype=np.float32))
+        print(
+            "Saved CellTV aligned signals: "
+            + ", ".join(str(path) for path in output_paths.values())
+        )
+
+    shapes = {name: tuple(values.shape) for name, values in outputs.items()}
+    if len(set(shapes.values())) != 1:
+        raise ValueError(f"Saved CellTV signal shapes are incompatible: {shapes}")
+    expected_frames = len(np.asarray(valid_frames))
+    signal_shape = next(iter(shapes.values()))
+    if signal_shape[1] != expected_frames:
+        raise ValueError(
+            f"Saved CellTV signals have {signal_shape[1]} frames, but valid_frames "
+            f"contains {expected_frames}; remove the three saved signal files and rerun"
+        )
+
+    accepted = np.asarray(accepted, dtype=int)
+    if accepted.ndim != 1 or accepted.size == 0:
+        raise ValueError("CellTV signals require at least one accepted ROI")
+    if accepted.min() < 0 or accepted.max() >= signal_shape[0]:
+        raise IndexError(
+            f"Accepted ROI range [{accepted.min()}, {accepted.max()}] is incompatible "
+            f"with CellTV signal shapes {shapes}"
+        )
+    return {name: np.asarray(values[accepted]) for name, values in outputs.items()}
+
+
 def _load_aligned_behaviour(session_path, n_frames):
     """Load aligned rewards and position, verifying their imaging-frame lengths."""
     with np.load(Path(session_path) / "behaviour_data.npz") as aligned:
@@ -202,13 +320,36 @@ def _parse_landmark_intervals(raw_session, subject, position, reward_frames):
 
 
 def load_session_data(mouse, session_id, project_root):
-    """Load the minimal aligned data needed for overview plots 1--4."""
+    """Load aligned green and CellTV G/R signals needed by the overview plots."""
     project_root = Path(project_root).expanduser().resolve()
     subject = str(mouse) if str(mouse).startswith("sub-") else f"sub-{mouse}"
     aligned_subject = project_root / "BehaviourAligned_robust" / "cohort2" / subject
     session_path = resolve_raw_session(aligned_subject, session_id)
 
     dff, accepted, mean_img, image_mask, frame_rate = _load_nwb_imaging(session_path)
+    with np.load(session_path / "valid_frames.npz") as valid_data:
+        valid_frames = np.asarray(valid_data["valid_frames"], dtype=int)
+    suite2p_plane = (
+        project_root
+        / "processed"
+        / "cohort2"
+        / subject
+        / short_session_name(session_path.name)
+        / "suite2p"
+        / "plane0"
+    )
+    try:
+        celltv = _load_or_extract_celltv_signals(
+            suite2p_plane, session_path / "funcimg", accepted, valid_frames
+        )
+    except FileNotFoundError as error:
+        print(f"CellTV signals unavailable; G/R plots will be skipped: {error}")
+        celltv = None
+    gr = None if celltv is None else celltv["dg_r"]
+    if gr is not None and gr.shape != dff.shape:
+        raise ValueError(
+            f"Aligned CellTV G/R shape {gr.shape} does not match green shape {dff.shape}"
+        )
     reward_frames, position = _load_aligned_behaviour(session_path, dff.shape[1])
     raw_session = (
         project_root / "rawdata" / "cohort2" / subject / session_path.name
@@ -220,6 +361,9 @@ def load_session_data(mouse, session_id, project_root):
     )
     return {
         "dF": dff,
+        "celltv_dF": None if celltv is None else celltv["dff"],
+        "celltv_dF2": None if celltv is None else celltv["dff2"],
+        "gr": gr,
         "neurons": accepted,
         "mean_img": mean_img,
         "image_mask": image_mask,
@@ -266,9 +410,10 @@ def plot_raw_traces(
     cell_labels=None,
     frame_rate=None,
     offset_step=6.0,
+    signal_label="dF/F",
     save_path=None,
 ):
-    """Plot stacked dF/F traces for cells sampled across the accepted population."""
+    """Plot stacked traces for cells sampled across the accepted population."""
     n_total_cells, n_total_frames = dff.shape
     if n_total_cells == 0 or n_total_frames == 0:
         raise ValueError("Raw traces require at least one cell and one frame")
@@ -302,7 +447,10 @@ def plot_raw_traces(
         [f"ROI {label}" for label in labels],
     )
     plt.xlabel(xlabel)
-    plt.title(f"Raw dF/F, {len(cell_indices)} cells, frames {start_frame}-{end_frame}")
+    plt.title(
+        f"Raw {signal_label}, {len(cell_indices)} cells, frames "
+        f"{start_frame}-{end_frame}"
+    )
     plt.xlim(time[0], time[-1])
     plt.tight_layout()
     if save_path:
@@ -430,7 +578,7 @@ def reward_psth_matrix(
 
 
 def _zscore_sort_plot(
-    mat_for_sort, mat_for_display, x_values, title, save_path=None
+    mat_for_sort, mat_for_display, x_values, title, signal_label="dF/F", save_path=None
 ):
     """Average trials, z-score cells, and display using the sorting half's peaks."""
     sort_curve = stats.zscore(
@@ -460,7 +608,7 @@ def _zscore_sort_plot(
         interpolation="none",
         extent=extent,
     )
-    plt.colorbar(label="z-scored dF/F")
+    plt.colorbar(label=f"z-scored {signal_label}")
     plt.axvline(0, color="white", linestyle="--", lw=1)
     plt.xlabel("Time from reward (s)")
     plt.ylabel(f"Cells (sorted, n={sort_curve.shape[0]})")
@@ -477,6 +625,7 @@ def plot_reward_heatmap(
     frame_rate,
     window_size=(-5, 5),
     cross_validated=False,
+    signal_label="dF/F",
     save_path=None,
 ):
     """Plot all-trial or even/odd cross-validated peri-reward activity."""
@@ -489,12 +638,20 @@ def plot_reward_heatmap(
                 "cross-validated reward tuning requires at least two complete rewards"
             )
         sort_matrix, display_matrix = matrix[:, 0::2, :], matrix[:, 1::2, :]
-        title = "Peri-reward tuning (sorted on even trials, shown on odd trials)"
+        title = (
+            f"{signal_label} peri-reward tuning "
+            "(sorted on even trials, shown on odd trials)"
+        )
     else:
         sort_matrix = display_matrix = matrix
-        title = "Peri-reward tuning (all cells)"
+        title = f"{signal_label} peri-reward tuning (all cells)"
     return _zscore_sort_plot(
-        sort_matrix, display_matrix, x_values, title, save_path=save_path
+        sort_matrix,
+        display_matrix,
+        x_values,
+        title,
+        signal_label=signal_label,
+        save_path=save_path,
     )
 
 
@@ -507,6 +664,7 @@ def plot_selected_cell_reward_psths(
     frame_rate,
     window_size=(-2, 2),
     cell_labels=None,
+    signal_label="dF/F",
     save_path=None,
 ):
     """Plot mean reward PSTH +/- SEM for each selected cell in its own subplot."""
@@ -553,12 +711,12 @@ def plot_selected_cell_reward_psths(
     for axis in axes[len(cell_indices):]:
         axis.set_visible(False)
     for row in range(n_rows):
-        axes[row * n_columns].set_ylabel("dF/F")
+        axes[row * n_columns].set_ylabel(signal_label)
     for axis in axes[-n_columns:]:
         if axis.get_visible():
             axis.set_xlabel("Time from reward (s)")
     fig.suptitle(
-        f"Reward PSTHs for raw-trace cells "
+        f"{signal_label} reward PSTHs for raw-trace cells "
         f"(n={len(usable_rewards)} rewards; {time[0]:.2f} to {time[-1]:.2f} s)"
     )
     fig.tight_layout()
@@ -593,9 +751,11 @@ def run_overview(
     save_dir=None,
     show=True,
 ):
-    """Load one aligned session and produce overview plots 1--5."""
+    """Load one aligned session and produce green plus optional CellTV G/R plots."""
     data = load_session_data(mouse, session_id, project_root)
     dff = data["dF"]
+    gr = data.get("gr")
+    n_plots = 9 if gr is not None else 5
     print(
         f"Loaded {dff.shape[0]} accepted cells, {dff.shape[1]} frames, "
         f"{data['frame_rate']:.2f} Hz"
@@ -621,14 +781,14 @@ def run_overview(
 
     trace_cell_indices = select_trace_cells(dff.shape[0], n_trace_cells)
     figures = {}
-    print("Plot 1/5: FOV with accepted-cell masks...")
+    print(f"Plot 1/{n_plots}: FOV with accepted-cell masks...")
     figures["fov"] = plot_fov_masks(
         data["mean_img"],
         data["image_mask"],
         title=f"{data['subject']} {data['session_path'].name}",
         save_path=output_path("1_fov_masks"),
     )
-    print("Plot 2/5: raw dF/F traces...")
+    print(f"Plot 2/{n_plots}: raw dF/F traces...")
     figures["raw_traces"] = plot_raw_traces(
         dff,
         n_cells=n_trace_cells,
@@ -645,7 +805,7 @@ def run_overview(
         ("reward_cv", "4_reward_heatmap_cv", True, "even/odd cross-validated"),
     ):
         print(
-            f"Plot {'4' if cross_validated else '3'}/5: "
+            f"Plot {'4' if cross_validated else '3'}/{n_plots}: "
             f"peri-reward heatmap ({label})..."
         )
         try:
@@ -664,7 +824,10 @@ def run_overview(
             if skipped_output:
                 Path(skipped_output).unlink(missing_ok=True)
 
-    print("Plot 5/5: selected-cell reward PSTHs bounded by neighboring landmarks...")
+    print(
+        f"Plot 5/{n_plots}: selected-cell reward PSTHs bounded by "
+        "neighboring landmarks..."
+    )
     try:
         figures["reward_psth_selected_cells"] = plot_selected_cell_reward_psths(
             dff,
@@ -683,6 +846,83 @@ def run_overview(
         skipped_output = output_path("5_reward_psth_selected_cells")
         if skipped_output:
             Path(skipped_output).unlink(missing_ok=True)
+
+    gr_outputs = (
+        "6_gr_raw_traces",
+        "7_gr_reward_heatmap",
+        "8_gr_reward_heatmap_cv",
+        "9_gr_reward_psth_selected_cells",
+    )
+    if gr is None:
+        for filename in gr_outputs:
+            skipped_output = output_path(filename)
+            if skipped_output:
+                Path(skipped_output).unlink(missing_ok=True)
+    else:
+        gr_label = "CellTV Δ(G/R)"
+        print(f"Plot 6/{n_plots}: raw {gr_label} traces...")
+        figures["gr_raw_traces"] = plot_raw_traces(
+            gr,
+            n_cells=n_trace_cells,
+            start_frame=trace_start_frame,
+            n_frames=trace_n_frames,
+            cell_indices=trace_cell_indices,
+            cell_labels=data["neurons"][trace_cell_indices],
+            frame_rate=data["frame_rate"],
+            signal_label=gr_label,
+            save_path=output_path(gr_outputs[0]),
+        )
+
+        for key, filename, cross_validated, plot_number, label in (
+            ("gr_reward", gr_outputs[1], False, 7, "all trials"),
+            ("gr_reward_cv", gr_outputs[2], True, 8, "even/odd cross-validated"),
+        ):
+            print(
+                f"Plot {plot_number}/{n_plots}: {gr_label} peri-reward "
+                f"heatmap ({label})..."
+            )
+            try:
+                figures[key] = plot_reward_heatmap(
+                    gr,
+                    data["reward_frames"],
+                    data["frame_rate"],
+                    window_size=reward_window,
+                    cross_validated=cross_validated,
+                    signal_label=gr_label,
+                    save_path=output_path(filename),
+                )
+            except ValueError as error:
+                print(f"  skipping plot: {error}")
+                figures[key] = None
+                skipped_output = output_path(filename)
+                if skipped_output:
+                    Path(skipped_output).unlink(missing_ok=True)
+
+        print(
+            f"Plot 9/{n_plots}: selected-cell {gr_label} reward PSTHs bounded "
+            "by neighboring landmarks..."
+        )
+        try:
+            figures["gr_reward_psth_selected_cells"] = (
+                plot_selected_cell_reward_psths(
+                    gr,
+                    trace_cell_indices,
+                    data["reward_frames"],
+                    data["landmark_entries"],
+                    data["landmark_exits"],
+                    data["frame_rate"],
+                    window_size=reward_psth_window,
+                    cell_labels=data["neurons"][trace_cell_indices],
+                    signal_label=gr_label,
+                    save_path=output_path(gr_outputs[3]),
+                )
+            )
+        except ValueError as error:
+            print(f"  skipping plot: {error}")
+            figures["gr_reward_psth_selected_cells"] = None
+            skipped_output = output_path(gr_outputs[3])
+            if skipped_output:
+                Path(skipped_output).unlink(missing_ok=True)
 
     if save_dir:
         remove_legacy_overview_plots(save_dir)

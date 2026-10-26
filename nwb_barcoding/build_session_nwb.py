@@ -194,7 +194,7 @@ def _publish_build_files(partial_directory, destination_directory):
 
 def build_session_from_paths(subject, full_session_name, raw_session_path, suite2p_dir,
                              output_session, source_session=None,
-                             dff_neuropil_coefficient=0.7,
+                             dff_neuropil_coefficient=None,
                              build_behaviour_data_files=True, force=False):
     """Run the common Bonsai alignment pipeline against already-resolved paths."""
     raw_session_path = Path(raw_session_path).expanduser().resolve()
@@ -334,7 +334,7 @@ def build_session_from_paths(subject, full_session_name, raw_session_path, suite
 
 
 def build_session(subject: str, session_tag: str, rawdata_root: str, funcimg_preprocessed_root: str,
-                   output_root: str, dff_neuropil_coefficient: float = 0.7,
+                   output_root: str, dff_neuropil_coefficient: float | None = None,
                    build_behaviour_data_files: bool = True, force: bool = False):
     """Build behav/funcimg/merged NWBs for one session and verify the result.
 
@@ -359,9 +359,8 @@ def build_session(subject: str, session_tag: str, rawdata_root: str, funcimg_pre
     :param str output_root: where to write the new behav/funcimg/merged NWBs, e.g.
         ".../SaReMaRa_20260629_GoalProgress/BehaviourAligned_robust" -- a NEW,
         isolated tree, never the existing behav_aligned/BehaviourAligned output.
-    :param float dff_neuropil_coefficient: neuropil correction factor used if
-        dFF.npy needs to be computed (see compute_dff.py); 0.7 matches
-        preprocessing/extract_dff.ipynb's default.
+    :param float dff_neuropil_coefficient: optional explicit neuropil correction
+        override. By default, the value stored in Suite2p's ops.npy is used.
     :param bool build_behaviour_data_files: if True (default), also build
         behaviour_data.npz/.csv + valid_frames.npz (see build_behaviour_data.py --
         a script port of preprocessing/read_align_timestamps_bonsai.ipynb) and run

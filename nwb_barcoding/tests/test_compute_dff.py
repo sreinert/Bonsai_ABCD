@@ -18,6 +18,7 @@ def test_compute_dff_writes_only_to_requested_destination(tmp_path, monkeypatch)
             "sig_baseline": 10.0,
             "prctile_baseline": 0.0,
             "fs": 45.0,
+            "neucoeff": 0.35,
         },
     )
     source_files = sorted(path.name for path in source.iterdir())
@@ -29,7 +30,24 @@ def test_compute_dff_writes_only_to_requested_destination(tmp_path, monkeypatch)
     monkeypatch.setattr(compute_dff, "_suite2p_preprocess", constant_percentile)
     result = compute_dff.compute_dff_for_plane(source, destination)
 
-    corrected = fluorescence - 0.7 * neuropil
+    corrected = fluorescence - 0.35 * neuropil
     expected = corrected - np.percentile(corrected, 0.0, axis=1)[:, None]
     assert np.allclose(np.load(result), expected)
     assert sorted(path.name for path in source.iterdir()) == source_files
+
+
+def test_neuropil_coefficient_can_be_read_from_nested_ops():
+    ops = {"extraction": {"neuropil_coefficient": 0.55}}
+
+    assert compute_dff._get_neuropil_coefficient(ops) == 0.55
+
+
+def test_missing_neuropil_coefficient_is_not_silently_assumed():
+    import pytest
+
+    with pytest.raises(KeyError, match="cannot reproduce Suite2p/CellTV"):
+        compute_dff._get_neuropil_coefficient({})
+
+
+def test_explicit_neuropil_coefficient_override_remains_available():
+    assert compute_dff._get_neuropil_coefficient({"neucoeff": 0.35}, 0.8) == 0.8
