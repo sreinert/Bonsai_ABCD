@@ -81,6 +81,15 @@ def test_celltv_signals_use_ops_coefficient_and_are_saved_aligned(tmp_path, monk
     }
 
 
+def test_overview_reads_neuropil_coefficient_without_qc_helper():
+    assert overview._neuropil_coefficient({"neucoeff": 0.35}) == 0.35
+    assert overview._neuropil_coefficient(
+        {"extraction": {"neuropil_coefficient": 0.55}}
+    ) == 0.55
+    with pytest.raises(KeyError, match="cannot reproduce CellTV"):
+        overview._neuropil_coefficient({})
+
+
 def test_accepted_cells_and_empirical_frame_rate():
     plane_seg = pd.DataFrame({"Accepted": [True, False, True]})
     np.testing.assert_array_equal(

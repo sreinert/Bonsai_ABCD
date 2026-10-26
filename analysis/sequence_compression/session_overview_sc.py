@@ -177,6 +177,19 @@ def _atomic_save_npy(path, values):
         temporary.unlink(missing_ok=True)
 
 
+def _neuropil_coefficient(ops):
+    """Read Suite2p's neuropil coefficient without assuming a fallback value."""
+    if "neucoeff" in ops:
+        return float(ops["neucoeff"])
+    extraction = ops.get("extraction", {})
+    if isinstance(extraction, dict) and "neuropil_coefficient" in extraction:
+        return float(extraction["neuropil_coefficient"])
+    raise KeyError(
+        "ops.npy has no 'neucoeff' or extraction['neuropil_coefficient']; "
+        "cannot reproduce CellTV neuropil correction"
+    )
+
+
 def _load_or_extract_celltv_signals(
     suite2p_plane_path, aligned_funcimg_path, accepted, valid_frames
 ):
@@ -215,7 +228,7 @@ def _load_or_extract_celltv_signals(
         ops = np.load(
             suite2p_plane_path / "ops.npy", allow_pickle=True
         ).item()
-        coefficient = two_channel_trace_qc.neuropil_coefficient(ops)
+        coefficient = _neuropil_coefficient(ops)
         signals = two_channel_trace_qc.channel_signals(
             *aligned_arrays, ops, coefficient
         )
