@@ -68,6 +68,23 @@ python preprocessing/quality_control/plot_high_snr_traces.py SETTINGS.yaml
 Normally only `submit_full_session_pipeline.sh` is called directly. Its
 implementation is kept in the `full_session_pipeline` subfolder.
 
+## Find the session for a Slurm job
+
+Look up the processed-data session from either the numeric Slurm job ID or the
+exact job name shown by `squeue`/`sacct`:
+
+```bash
+python preprocessing/suite2p/find_slurm_session.py 12345678
+python preprocessing/suite2p/find_slurm_session.py s2p__sub-02__full002
+```
+
+The command prints the processed session directory and its Suite2p output
+directory. It checks the pipeline's saved `submission.json` provenance and, when
+available, the Slurm working directory reported by `squeue` or `sacct`. Future
+full-session submissions use names such as `s2p__sub-02__full002`, which are
+unique to a mouse/session. Older jobs used the shared name `s2p-full-session`,
+so use their numeric job ID when that name matches more than one session.
+
 ## Session inventory
 
 Create one CSV per selected cohort-2 mouse with:
@@ -103,6 +120,8 @@ exists without those outputs, and `not_started` when no Suite2p directory exists
 `tiff_files_present` is `yes` when `funcimg` contains at least one direct,
 non-hidden `.tif` or `.tiff` file and `no` when the `funcimg` directory is empty
 or contains no TIFF files. Sessions without TIFF files remain in the inventory.
+`h5_files_present` similarly reports whether `funcimg` contains at least one
+direct, non-hidden `.h5` file (case-insensitive).
 `meanImg_chan1_seg_created` reports whether a manual Cellpose
 `registration/meanImg_chan1_seg.npy` exists (the current pipeline location is
 `suite2p/qc/registration`). When it exists, `iscell_updated_after_seg` and
@@ -110,6 +129,10 @@ or contains no TIFF files. Sessions without TIFF files remain in the inventory.
 time with the segmentation file. They report `yes` for an equal or newer output
 and `no` for an older or missing output; both are blank when no segmentation
 file exists.
+`automatic_roi_detection_model` reads the recorded automatic detection
+provenance and reports `cpsam` or `cpsam_v2`. It is blank when no supported
+automatic model can be identified; manual GUI segmentation alone does not set
+this field.
 
 ## Import a reviewed Cellpose segmentation
 

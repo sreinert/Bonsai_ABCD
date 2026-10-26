@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -58,10 +59,12 @@ def test_inventory_filters_sessions_and_reports_complete_pipeline(tmp_path: Path
             "session_short_name": "full002",
             "date": "2026-08-18",
             "tiff_files_present": "yes",
+            "h5_files_present": "no",
             "suite2p_path_created": "yes",
             "registration": "yes",
             "registration_status": "succeeded",
             "detection": "yes",
+            "automatic_roi_detection_model": "",
             "trace_extraction": "yes",
             "number_of_rois": 2,
             "number_of_cells": 1,
@@ -156,6 +159,18 @@ def test_empty_funcimg_is_included_and_reports_no_tiff(tmp_path: Path) -> None:
     [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-07")
 
     assert row["tiff_files_present"] == "no"
+    assert row["h5_files_present"] == "no"
+
+
+def test_funcimg_reports_direct_visible_h5_file(tmp_path: Path) -> None:
+    raw_root = tmp_path / "rawdata" / "cohort2"
+    processed_root = tmp_path / "processed" / "cohort2"
+    session = make_session(raw_root, "sub-10", "ses-h5_date-20261009")
+    (session / "funcimg" / "recording.H5").write_bytes(b"HDF5 placeholder")
+
+    [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-10")
+
+    assert row["h5_files_present"] == "yes"
 
 
 def test_manual_segmentation_reports_independent_output_freshness(
@@ -189,6 +204,38 @@ def test_manual_segmentation_reports_independent_output_freshness(
     assert row["meanImg_chan1_seg_created"] == "yes"
     assert row["iscell_updated_after_seg"] == "no"
     assert row["stat_updated_after_seg"] == "yes"
+
+
+def test_automatic_roi_detection_model_comes_from_provenance(tmp_path: Path) -> None:
+    raw_root = tmp_path / "rawdata" / "cohort2"
+    processed_root = tmp_path / "processed" / "cohort2"
+    expected = {
+        "ses-model1_date-20261007": "cpsam",
+        "ses-model2_date-20261008": "cpsam_v2",
+    }
+    for session_name, model_name in expected.items():
+        session = make_session(raw_root, "sub-09", session_name)
+        short_name, _ = inventory.parse_session_name(session.name)
+        processed_session = processed_root / "sub-09" / short_name
+        save_complete_suite2p(processed_session)
+        detection_dir = processed_session / "suite2p" / "qc" / "detection"
+        detection_dir.mkdir(parents=True)
+        (detection_dir / "status.json").write_text(
+            json.dumps(
+                {
+                    "state": "complete",
+                    "model": {"name": model_name, "path": f"/models/{model_name}"},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    rows = inventory.inventory_mouse(raw_root, processed_root, "sub-09")
+
+    assert {
+        row["session_full_name"]: row["automatic_roi_detection_model"]
+        for row in rows
+    } == expected
 
 
 def test_default_output_is_inside_processed_mouse_folder(tmp_path: Path) -> None:

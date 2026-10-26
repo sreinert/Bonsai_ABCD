@@ -111,6 +111,13 @@ python_executable=${PYTHON_EXECUTABLE:-$(command -v python)}
 project_root=${PROJECT_ROOT:-AtAp_20260119_SequenceCompression}
 exclude_nodes=${EXCLUDE_NODES-gpu-350-02,gpu-350-04}
 mail_user=${SLURM_MAIL_USER:-athina.apostolelli.24@ucl.ac.uk}
+session_short=${session_id#ses-}
+session_short=${session_short%%_date-*}
+job_name="s2p__${mouse_id}__${session_short}"
+if [[ ${#job_name} -gt 128 ]]; then
+  echo "Generated Slurm job name is longer than 128 characters: ${job_name}" >&2
+  exit 2
+fi
 
 if [[ "${current_node}" == false ]] && ! command -v sbatch >/dev/null 2>&1; then
   echo "sbatch is required; run this launcher on a Slurm login or submission host." >&2
@@ -203,7 +210,7 @@ if [[ "${current_node}" == true ]]; then
   stdout_log=${log_dir}/full_pipeline_current_node_${run_stamp}.log
   stderr_log=${stdout_log}
 else
-  sbatch_options=(--mail-user="${mail_user}" --mail-type=BEGIN,END,FAIL)
+  sbatch_options=(--job-name="${job_name}" --mail-user="${mail_user}" --mail-type=BEGIN,END,FAIL)
   if [[ -n "${exclude_nodes}" ]]; then
     sbatch_options+=(--exclude="${exclude_nodes}")
   fi
@@ -222,7 +229,7 @@ fi
 "${python_executable}" - \
   "${workflow_dir}/submission.json" "${workflow_dir}/status.json" \
   "${mouse_id}" "${session_id}" "${run_dir}" "${mail_user}" "${exclude_nodes}" \
-  "${job_id}" "${start_stage}" "${execution_mode}" "${stdout_log}" "${stderr_log}" <<'PY'
+  "${job_id}" "${job_name}" "${start_stage}" "${execution_mode}" "${stdout_log}" "${stderr_log}" <<'PY'
 import json
 import os
 import sys
@@ -231,7 +238,7 @@ from pathlib import Path
 
 (
     submission_path, status_path, mouse_id, session_id, run_dir, mail_user,
-    exclude_nodes, job_id, start_stage, execution_mode, stdout_log, stderr_log,
+    exclude_nodes, job_id, job_name, start_stage, execution_mode, stdout_log, stderr_log,
 ) = sys.argv[1:]
 payload = {
     "state": "submitted" if execution_mode == "slurm" else "starting_on_current_node",
@@ -246,8 +253,10 @@ payload = {
     "excluded_gpu_nodes": [value for value in exclude_nodes.split(",") if value],
     "stdout_log": stdout_log,
     "stderr_log": stderr_log,
+    "job_name": job_name,
     "job": {
         "job_id": job_id or None,
+        "name": job_name,
         "partition": "gpu" if execution_mode == "slurm" else None,
         "gpus": 1 if execution_mode == "slurm" else None,
         "cpus": 4 if execution_mode == "slurm" else None,
@@ -277,9 +286,9 @@ echo "Suite2p output:   ${plane_dir}"
 if [[ "${execution_mode}" == current_node ]]; then
   echo "Current host:     $(hostname -s)"
 elif [[ "${start_stage}" == detection ]]; then
-  echo "Pipeline job:     ${job_id} (reuse registration -> detection -> traces -> QC)"
+  echo "Pipeline job:     ${job_id} / ${job_name} (reuse registration -> detection -> traces -> QC)"
 else
-  echo "Pipeline job:     ${job_id} (registration -> detection -> traces -> QC)"
+  echo "Pipeline job:     ${job_id} / ${job_name} (registration -> detection -> traces -> QC)"
 fi
 echo "Excluded GPUs:    ${exclude_nodes:-<none>}"
 if [[ "${execution_mode}" == slurm ]]; then

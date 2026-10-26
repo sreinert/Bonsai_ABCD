@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 import sys
 from dataclasses import dataclass
@@ -36,10 +37,12 @@ FIELDNAMES = (
     "session_short_name",
     "date",
     "tiff_files_present",
+    "h5_files_present",
     "suite2p_path_created",
     "registration",
     "registration_status",
     "detection",
+    "automatic_roi_detection_model",
     "trace_extraction",
     "number_of_rois",
     "number_of_cells",
@@ -60,6 +63,7 @@ class Suite2pStatus:
     segmentation_created: bool
     iscell_updated_after_seg: bool | None
     stat_updated_after_seg: bool | None
+    automatic_roi_detection_model: str | None
 
 
 def resolve_project_root(value: Path) -> Path:
@@ -138,6 +142,60 @@ def updated_after(path: Path, reference: Path) -> bool:
     return path.is_file() and path.stat().st_mtime_ns >= reference.stat().st_mtime_ns
 
 
+def model_name_from_metadata(value: object) -> str | None:
+    """Find an exact supported CPSAM model name in nested provenance data."""
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        return normalized if normalized in {"cpsam", "cpsam_v2"} else None
+    if isinstance(value, dict):
+        for key in ("cellpose_model", "effective_model", "model", "name"):
+            if key in value:
+                found = model_name_from_metadata(value[key])
+                if found is not None:
+                    return found
+        for nested in value.values():
+            found = model_name_from_metadata(nested)
+            if found is not None:
+                return found
+    if isinstance(value, list):
+        for nested in value:
+            found = model_name_from_metadata(nested)
+            if found is not None:
+                return found
+    return None
+
+
+def automatic_detection_model(
+    suite2p_path: Path, processed_session_path: Path
+) -> str | None:
+    """Read the automatic ROI model from current or legacy provenance."""
+    metadata_paths = (
+        suite2p_path / "qc" / "detection" / "status.json",
+        suite2p_path / "qc" / "detection" / "provenance.json",
+        processed_session_path / "roi_detection" / "cpsam" / "status.json",
+        processed_session_path / "roi_detection" / "cpsam" / "provenance.json",
+        processed_session_path
+        / "cellpose_exploration"
+        / "default_cpsam"
+        / "status.json",
+        processed_session_path
+        / "cellpose_exploration"
+        / "default_cpsam"
+        / "provenance.json",
+    )
+    for path in metadata_paths:
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            continue
+        model_name = model_name_from_metadata(payload)
+        if model_name is not None:
+            return model_name
+    return None
+
+
 def array_length(path: Path, *, allow_pickle: bool = False) -> int:
     array = np.load(path, mmap_mode=None if allow_pickle else "r", allow_pickle=allow_pickle)
     if array.ndim == 0:
@@ -162,10 +220,11 @@ def inspect_suite2p(
     suite2p_path = find_suite2p_path(raw_session_path, processed_session_path)
     if suite2p_path is None:
         return Suite2pStatus(
-            False, False, False, False, None, None, False, None, None
+            False, False, False, False, None, None, False, None, None, None
         )
 
     plane = suite2p_path / "plane0"
+    detection_model = automatic_detection_model(suite2p_path, processed_session_path)
     segmentation = find_segmentation_file(
         suite2p_path, raw_session_path, processed_session_path
     )
@@ -191,6 +250,7 @@ def inspect_suite2p(
             segmentation_created,
             iscell_updated_after_seg,
             stat_updated_after_seg,
+            detection_model,
         )
 
     registration = all_nonempty_files(plane, REGISTRATION_FILES)
@@ -234,6 +294,7 @@ def inspect_suite2p(
         segmentation_created,
         iscell_updated_after_seg,
         stat_updated_after_seg,
+        detection_model,
     )
 
 
@@ -253,6 +314,15 @@ def has_direct_tiff_files(funcimg_path: Path) -> bool:
         path.is_file()
         and not path.name.startswith(".")
         and path.suffix.lower() in TIFF_SUFFIXES
+        for path in funcimg_path.iterdir()
+    )
+
+
+def has_direct_h5_files(funcimg_path: Path) -> bool:
+    return any(
+        path.is_file()
+        and not path.name.startswith(".")
+        and path.suffix.lower() == ".h5"
         for path in funcimg_path.iterdir()
     )
 
@@ -290,10 +360,16 @@ def inventory_mouse(
                 "tiff_files_present": (
                     "yes" if has_direct_tiff_files(funcimg_path) else "no"
                 ),
+                "h5_files_present": (
+                    "yes" if has_direct_h5_files(funcimg_path) else "no"
+                ),
                 "suite2p_path_created": "yes" if status.path_created else "no",
                 "registration": "yes" if status.registration else "no",
                 "registration_status": registration_status,
                 "detection": "yes" if status.detection else "no",
+                "automatic_roi_detection_model": (
+                    status.automatic_roi_detection_model or ""
+                ),
                 "trace_extraction": "yes" if status.trace_extraction else "no",
                 "number_of_rois": (
                     "" if status.number_of_rois is None else status.number_of_rois

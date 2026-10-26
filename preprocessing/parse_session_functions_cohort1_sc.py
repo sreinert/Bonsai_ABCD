@@ -1940,28 +1940,100 @@ def get_lick_counts(
     misses=False,
     omissions=False,
     require_other_a_reward=False,
+    calculate_distances=True,
+    exclude_b_after_invalid_a=True,
 ):
-    '''Get lick persistence (lick counts) per landmark type'''
+    '''Get lick persistence (lick counts) per landmark type.
 
-    trial = ses_settings['trial']
-    if isinstance(trial, list):
-        trial = trial[0]['trial']
+    ``calculate_distances=False`` returns the per-landmark counts without the
+    rewarded-A distance analysis.  That analysis assumes a rewarded reference
+    A on every sequence and is therefore not defined robustly for omission
+    trials (including periodic ABAB and ABB sessions).
+    '''
+
+    trial_config = ses_settings['trial']
+    has_multiple_trial_types = isinstance(trial_config, list) and len(trial_config) > 1
+    trial = trial_config[0]['trial'] if isinstance(trial_config, list) else trial_config
     lm_size = trial['landmarks'][0][0]['size']
 
-    lick_position, lick_times, reward_times, reward_positions, _ = get_event_parsed(sess_dataframe, ses_settings, threshold=threshold)
-    A_landmarks, B_landmarks, _, _ = get_A_B_landmarks(sess_dataframe, ses_settings)
-    target_id, distractor_id, target_positions, distractor_positions, lm_ids, _ = find_targets_distractors(sess_dataframe, ses_settings)
-    release_positions = np.sort(np.concatenate([target_positions, distractor_positions]))
+    lick_position, lick_times, reward_times, reward_positions, release_df = get_event_parsed(sess_dataframe, ses_settings, threshold=threshold)
+    release_indices = np.asarray(release_df['Index'].to_numpy(), dtype=int)
+    release_positions = sess_dataframe['Position'].to_numpy()[release_indices]
 
-    num_As, num_Bs = get_num_A_B(sess_dataframe, ses_settings)
+    reward_seq = np.array(
+        [lm[0]['rewardSequencePosition'] for lm in trial['landmarks']]
+    )
+    is_abb = len(reward_seq) == 3 and np.sum(reward_seq == 0) == 1
+    is_abab = (
+        len(reward_seq) == 4
+        and np.sum(reward_seq == 0) == 2
+        and np.all(reward_seq[::2] == reward_seq[0])
+        and np.all(reward_seq[1::2] == reward_seq[1])
+    )
+    is_periodic = is_abb or is_abab
+
+    if is_periodic:
+        # Infer the phase from rewarded events.  Unlike LM_Count, row order is
+        # stable across these sessions even when landmark-count values jump.
+        sequence_values = sess_dataframe['Sequence_Position'].to_numpy()[release_indices]
+        rewarded_indices = np.flatnonzero(sequence_values == 0)
+        n_landmarks = len(reward_seq)
+        phase_counts = np.bincount(
+            rewarded_indices % n_landmarks, minlength=n_landmarks
+        )
+        n_a_phases = int(np.sum(reward_seq == 0))
+        if rewarded_indices.size:
+            A_phases = np.sort(np.argsort(phase_counts)[-n_a_phases:])
+        else:
+            # A fully omitted session has no rewarded event from which to
+            # infer phase, so fall back to the phase encoded in the settings.
+            A_phases = np.flatnonzero(reward_seq == 0)
+        event_phases = np.arange(len(release_positions)) % n_landmarks
+        A_landmarks = np.flatnonzero(np.isin(event_phases, A_phases))
+        B_landmarks = np.flatnonzero(~np.isin(event_phases, A_phases))
+
+        if is_abb:
+            A1, A2 = A_landmarks, np.array([], dtype=int)
+            A_phase = int(A_phases[0])
+            B1 = np.flatnonzero(event_phases == (A_phase + 1) % 3)
+            B2 = np.flatnonzero(event_phases == (A_phase + 2) % 3)
+            B3 = np.array([], dtype=int)
+            num_As, num_Bs = 1, 2
+        else:  # ABAB: both A phases and both B phases share one label.
+            A1, A2 = A_landmarks, np.array([], dtype=int)
+            B1, B2, B3 = B_landmarks, np.array([], dtype=int), np.array([], dtype=int)
+            num_As, num_Bs = 1, 1
+    else:
+        A_landmarks, B_landmarks, _, _ = get_A_B_landmarks(sess_dataframe, ses_settings)
+        A1, A2, B1, B2, B3 = get_A_B_splits(A_landmarks, B_landmarks, ses_settings)
+        num_As, num_Bs = get_num_A_B(sess_dataframe, ses_settings)
 
     # Get misses and omissions
-    if len(trial) > 1:
-        omitted_lms, omitted_pos = get_omissions(sess_dataframe, ses_settings)
-    missed_lms, missed_pos = get_misses(sess_dataframe, ses_settings)
+    omitted_lms = np.array([], dtype=int)
+    omitted_pos = np.array([], dtype=float)
+    if has_multiple_trial_types:
+        if is_periodic:
+            omitted_lms = A_landmarks[sequence_values[A_landmarks] == -1]
+            omitted_pos = release_positions[omitted_lms]
+        else:
+            omitted_lms, omitted_pos = get_omissions(sess_dataframe, ses_settings)
+    if is_periodic:
+        missed_lms = []
+        for A_index in A_landmarks:
+            A_position = release_positions[A_index]
+            has_reward = np.any(
+                (reward_positions > A_position)
+                & (reward_positions <= A_position + lm_size)
+            )
+            if not has_reward:
+                missed_lms.append(int(A_index))
+        missed_pos = release_positions[missed_lms]
+    else:
+        missed_lms, missed_pos = get_misses(sess_dataframe, ses_settings)
 
     # Find total number of licks inside each landmark 
-    lick_counter = np.zeros(len(release_positions))
+    # NaN distinguishes an excluded landmark from a genuine zero-lick event.
+    lick_counter = np.full(len(release_positions), np.nan)
 
     for i, pos in enumerate(release_positions):
         # Licks within landmark boundaries
@@ -1980,7 +2052,10 @@ def get_lick_counts(
                 mask &= (lick_times <= reward_time)
         else:
             prev_pos = release_positions[release_positions < pos][-num_As:]
-            if np.any(np.isin(prev_pos, omitted_pos)) or np.any(np.isin(prev_pos, missed_pos)):
+            if exclude_b_after_invalid_a and (
+                np.any(np.isin(prev_pos, omitted_pos))
+                or np.any(np.isin(prev_pos, missed_pos))
+            ):
                 # Do not consider this landmark if it was preceded by an omission or a miss
                 continue
             
@@ -1989,13 +2064,7 @@ def get_lick_counts(
     # if misses:
     #     lick_counter[lick_counter == 0] = np.nan
 
-    # Split by landmark type
-    A1, A2, B1, B2, B3 = get_A_B_splits(A_landmarks, B_landmarks, ses_settings)
-
     if omissions and require_other_a_reward:
-        reward_seq = np.array(
-            [lm[0]['rewardSequencePosition'] for lm in trial['landmarks']]
-        )
         is_aab = (
             len(reward_seq) == 3
             and np.sum(reward_seq == 0) == 2
@@ -2066,6 +2135,11 @@ def get_lick_counts(
         }.items()
     }
 
+    if not calculate_distances:
+        if plot:
+            raise ValueError('plot=True requires calculate_distances=True.')
+        return lick_counter_groups, [], [], [], [], None
+
     # Compute distances 
     A_A_diff, A_B_diff, A_positions, B_positions = find_all_A_B_distance_and_positions(sess_dataframe, ses_settings)
     
@@ -2095,7 +2169,10 @@ def get_lick_counts(
         for j in range(num_Bs):
             curr_pos = pos[j]
             prev_pos = release_positions[release_positions < curr_pos][-num_As:]
-            if np.any(np.isin(prev_pos, omitted_pos)) or np.any(np.isin(prev_pos, missed_pos)):
+            if exclude_b_after_invalid_a and (
+                np.any(np.isin(prev_pos, omitted_pos))
+                or np.any(np.isin(prev_pos, missed_pos))
+            ):
                 # Do not consider this landmark if it was preceded by an omission or a miss
                 continue
             mask = (
@@ -2207,6 +2284,126 @@ def get_lick_counts(
     
     else:
         return lick_counter_groups, licked_As, licked_Bs, A_A_diff_list, A_B_diff_list, None
+
+
+def get_preceding_b_omission_lick_pairs(
+    sess_dataframe,
+    ses_settings,
+    threshold='below',
+):
+    """Pair each omitted A with the most recent preceding B.
+
+    The returned responses are lick *counts* within each landmark, not binary
+    lick/no-lick values.  Taking the most recent preceding B implements the
+    requested reference for ABAB, ABB (B2), and AAB (the preceding cycle's B
+    for either an A1 or A2 omission).
+
+    Returns
+    -------
+    pairs : pandas.DataFrame
+        One row per valid pair, including ``omitted_A``, ``B``, and their
+        difference.
+    total_omissions : int
+        Number of omitted As before dropping boundary omissions that have no
+        preceding B.
+    """
+    columns = [
+        'pair_id', 'omitted_a_type', 'omitted_a_index',
+        'preceding_b_index', 'omitted_A', 'B',
+        'difference_A_minus_B',
+    ]
+
+    trial_config = ses_settings['trial']
+    if not isinstance(trial_config, list) or len(trial_config) <= 1:
+        return pd.DataFrame(columns=columns), 0
+
+    trial = trial_config[0]['trial']
+    reward_seq = np.array(
+        [lm[0]['rewardSequencePosition'] for lm in trial['landmarks']]
+    )
+    lm_size = trial['landmarks'][0][0]['size']
+
+    lick_position, _, _, _, release_df = get_event_parsed(
+        sess_dataframe, ses_settings, threshold=threshold
+    )
+    release_indices = np.asarray(release_df['Index'].to_numpy(), dtype=int)
+    release_positions = sess_dataframe['Position'].to_numpy()[release_indices]
+
+    is_abb = len(reward_seq) == 3 and np.sum(reward_seq == 0) == 1
+    is_abab = (
+        len(reward_seq) == 4
+        and np.sum(reward_seq == 0) == 2
+        and np.all(reward_seq[::2] == reward_seq[0])
+        and np.all(reward_seq[1::2] == reward_seq[1])
+    )
+
+    if is_abb or is_abab:
+        sequence_values = sess_dataframe['Sequence_Position'].to_numpy()[release_indices]
+        n_landmarks = len(reward_seq)
+        rewarded_indices = np.flatnonzero(sequence_values == 0)
+        n_a_phases = int(np.sum(reward_seq == 0))
+        if rewarded_indices.size:
+            phase_counts = np.bincount(
+                rewarded_indices % n_landmarks, minlength=n_landmarks
+            )
+            A_phases = np.sort(np.argsort(phase_counts)[-n_a_phases:])
+        else:
+            A_phases = np.flatnonzero(reward_seq == 0)
+        event_phases = np.arange(len(release_positions)) % n_landmarks
+        A_landmarks = np.flatnonzero(np.isin(event_phases, A_phases))
+        B_landmarks = np.flatnonzero(~np.isin(event_phases, A_phases))
+        omitted_lms = A_landmarks[sequence_values[A_landmarks] == -1]
+        A1, A2, _, _, _ = get_A_B_splits(
+            A_landmarks, B_landmarks, ses_settings
+        )
+    else:
+        A_landmarks, B_landmarks, _, _ = get_A_B_landmarks(
+            sess_dataframe, ses_settings
+        )
+        omitted_lms, _ = get_omissions(sess_dataframe, ses_settings)
+        A1, A2, _, _, _ = get_A_B_splits(
+            A_landmarks, B_landmarks, ses_settings
+        )
+
+    total_omissions = len(omitted_lms)
+    lick_counts = np.zeros(len(release_positions), dtype=float)
+    for landmark_index, position in enumerate(release_positions):
+        in_landmark = (
+            (np.round(lick_position, 1) >= np.round(position, 1))
+            & (np.round(lick_position, 1) < np.round(position, 1) + lm_size)
+        )
+        lick_counts[landmark_index] = np.sum(in_landmark)
+
+    A1_set = set(np.asarray(A1, dtype=int))
+    A2_set = set(np.asarray(A2, dtype=int))
+    rows = []
+    for pair_id, omitted_index in enumerate(np.asarray(omitted_lms, dtype=int)):
+        preceding_bs = np.asarray(B_landmarks, dtype=int)
+        preceding_bs = preceding_bs[preceding_bs < omitted_index]
+        if preceding_bs.size == 0:
+            continue
+        preceding_b_index = int(preceding_bs[-1])
+        omitted_count = float(lick_counts[omitted_index])
+        b_count = float(lick_counts[preceding_b_index])
+        if omitted_index in A1_set and len(A2_set):
+            omitted_a_type = 'A1'
+        elif omitted_index in A2_set:
+            omitted_a_type = 'A2'
+        else:
+            omitted_a_type = 'A'
+        rows.append(
+            {
+                'pair_id': pair_id,
+                'omitted_a_type': omitted_a_type,
+                'omitted_a_index': int(omitted_index),
+                'preceding_b_index': preceding_b_index,
+                'omitted_A': omitted_count,
+                'B': b_count,
+                'difference_A_minus_B': omitted_count - b_count,
+            }
+        )
+
+    return pd.DataFrame(rows, columns=columns), total_omissions
            
 def get_response_end(target_licks):
     '''Find the index (if any) where the mouse stopped licking in the task'''
