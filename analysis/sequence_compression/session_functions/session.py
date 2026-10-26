@@ -1280,7 +1280,10 @@ class ABCD_Session():
                     n = len(lm_exit)
                     lm_entry = lm_entry[:n]
                 else:
-                    raise ValueError(f'Something is wrong with landmark parsing using the photodiode data in {session['mouse']} {session['stage']}')
+                    raise ValueError(
+                        "Something is wrong with landmark parsing using the photodiode data in "
+                        f"{session['mouse']} {session['stage']}"
+                    )
 
             # Store landmarks 
             landmarks = np.column_stack([lm_entry, lm_exit])
