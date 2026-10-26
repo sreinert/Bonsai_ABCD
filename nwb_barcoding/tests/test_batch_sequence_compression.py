@@ -90,7 +90,9 @@ def test_run_session_aligns_before_overview_and_uses_cohort_output(tmp_path, mon
     monkeypatch.setattr(batch, "build_sequence_compression_session", fake_build)
     fake_module = type("FakeOverview", (), {"run_overview": staticmethod(fake_overview)})
     monkeypatch.setitem(
-        __import__("sys").modules, "musicboxes.session_overview", fake_module()
+        __import__("sys").modules,
+        "analysis.sequence_compression.session_overview_sc",
+        fake_module(),
     )
 
     result, overview_dir = batch.run_session(tmp_path, "sub-02", "full002")
@@ -101,6 +103,7 @@ def test_run_session_aligns_before_overview_and_uses_cohort_output(tmp_path, mon
     assert calls[1][1]["save_dir"] == (
         tmp_path / "analysis" / "cohort2" / "sub-02" / raw.name
     )
+    assert "stage" not in calls[1][1]
     assert overview_dir == calls[1][1]["save_dir"]
 
 

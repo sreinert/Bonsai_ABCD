@@ -49,7 +49,7 @@ valid_frames.npz
 The batch launcher discovers completed Suite2p `plane0` outputs for the explicitly selected
 subject and submits one independent CPU-array task per session. Partially preprocessed
 sessions are left out. Within each task, barcode alignment and all verification checks must
-succeed before `musicboxes/session_overview.py` runs.
+succeed before the five-plot `analysis/sequence_compression/session_overview_sc.py` runs.
 
 The launcher automatically uses
 `/ceph/python_envs/$USER/nwb_barcoding/bin/python`; environment activation is not

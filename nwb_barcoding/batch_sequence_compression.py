@@ -179,7 +179,7 @@ def run_session(
 
     matplotlib.use("Agg", force=True)
     import matplotlib.pyplot as plt
-    from musicboxes.session_overview import run_overview
+    from analysis.sequence_compression.session_overview_sc import run_overview
 
     overview_dir = (
         project_root
@@ -191,7 +191,6 @@ def run_session(
     _, figures = run_overview(
         mouse=paths.subject,
         session_id=paths.full_session_name,
-        stage=paths.short_session_name,
         project_root=project_root,
         save_dir=overview_dir,
         show=False,
