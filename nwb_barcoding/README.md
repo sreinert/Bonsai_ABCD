@@ -46,9 +46,9 @@ valid_frames.npz
 
 ## Slurm batch: alignment followed by session overview
 
-The batch launcher discovers completed Suite2p `plane0` outputs and submits one independent
-CPU-array task per session. It currently defaults to `sub-07`, so partially preprocessed
-mice are left out. Within each task, barcode alignment and all verification checks must
+The batch launcher discovers completed Suite2p `plane0` outputs for the explicitly selected
+subject and submits one independent CPU-array task per session. Partially preprocessed
+sessions are left out. Within each task, barcode alignment and all verification checks must
 succeed before `musicboxes/session_overview.py` runs.
 
 The launcher automatically uses
@@ -57,12 +57,14 @@ required. After creating and syncing that environment, run:
 
 ```bash
 bash nwb_barcoding/hpc/submit_sequence_compression_batch.sh \
-  /ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression
+  /ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression \
+  sub-07
 ```
 
 The `Aimbot_barcoding` repository must be a sibling of this repository, as for individual
 NWB builds. The launcher validates Python 3.12 and all required imports before submitting
-anything. A different interpreter can still be supplied as the optional second argument or
+anything. The subject may also be written as `07`. A different interpreter can still be
+supplied as the optional third argument or
 through `PYTHON_EXECUTABLE`.
 
 Outputs are written to:
@@ -72,10 +74,16 @@ BehaviourAligned_robust/cohort2/<subject>/<full-session>/
 analysis/cohort2/<subject>/<full-session>/
 ```
 
+To deliberately submit multiple completed mice together, use a comma-separated argument:
+
+```bash
+bash nwb_barcoding/hpc/submit_sequence_compression_batch.sh \
+  /ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression \
+  sub-02,sub-07
+```
+
 Useful submission environment variables:
 
-- `SUBJECTS=sub-07` selects subjects (the current default). Later, for example, use
-  `SUBJECTS=sub-02,sub-07` once both mice have finished preprocessing.
 - `MAX_CONCURRENT=4` controls the array concurrency limit.
 - `TASK_RANGE=0-9%2` submits only a manifest subset.
 - `SLURM_PARTITION=cpu` overrides the CPU partition.

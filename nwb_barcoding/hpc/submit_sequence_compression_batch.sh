@@ -1,18 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-if [[ $# -lt 1 || $# -gt 2 ]]; then
-  echo "Usage: $0 PROJECT_ROOT [PYTHON_EXECUTABLE]" >&2
+if [[ $# -lt 2 || $# -gt 3 ]]; then
+  echo "Usage: $0 PROJECT_ROOT SUBJECT [PYTHON_EXECUTABLE]" >&2
+  echo "SUBJECT may be 07, sub-07, or a comma-separated list such as sub-02,sub-07." >&2
   echo "The default environment is /ceph/python_envs/\$USER/nwb_barcoding." >&2
   exit 2
 fi
 
 project_root=$(cd "$1" && pwd)
+subjects_csv=$2
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "${script_dir}/../.." && pwd)
 environment_user=${USER:-$(id -un)}
 default_environment=/ceph/python_envs/${environment_user}/nwb_barcoding
-python_executable=${2:-${PYTHON_EXECUTABLE:-${default_environment}/bin/python}}
+python_executable=${3:-${PYTHON_EXECUTABLE:-${default_environment}/bin/python}}
 
 if ! command -v sbatch >/dev/null 2>&1; then
   echo "sbatch is required; run this launcher on a Slurm submission host." >&2
@@ -46,7 +48,6 @@ manifest=${manifest_root}/sessions_${timestamp}.csv
 log_dir=${manifest_root}/logs
 mkdir -p "${log_dir}"
 
-subjects_csv=${SUBJECTS:-sub-07}
 IFS=',' read -r -a selected_subjects <<< "${subjects_csv}"
 manifest_options=()
 for subject in "${selected_subjects[@]}"; do
@@ -56,7 +57,7 @@ for subject in "${selected_subjects[@]}"; do
   fi
 done
 if [[ ${#manifest_options[@]} -eq 0 ]]; then
-  echo "SUBJECTS did not contain a subject identifier." >&2
+  echo "SUBJECT did not contain a subject identifier." >&2
   exit 2
 fi
 
