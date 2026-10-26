@@ -1,0 +1,7 @@
+# Add these analysis-only packages to the existing suite2p-reg-1.1.0 environment.
+# Suite2p, Torch, NumPy, SciPy, Pandas, Matplotlib, and PyYAML are supplied by
+# preprocessing/suite2p/registration_tuning/requirements-hpc-cu126.txt.
+swc-aeon==0.1.0
+pynwb==3.1.2
+h5py>=3.11,<4
+seaborn>=0.13,<0.14

@@ -4,7 +4,7 @@ set -euo pipefail
 if [[ $# -lt 2 || $# -gt 3 ]]; then
   echo "Usage: $0 PROJECT_ROOT SUBJECT [PYTHON_EXECUTABLE]" >&2
   echo "SUBJECT may be 07, sub-07, or a comma-separated list such as sub-02,sub-07." >&2
-  echo "The default environment is /ceph/python_envs/\$USER/nwb_barcoding." >&2
+  echo "The default conda environment is suite2p-reg-1.1.0." >&2
   exit 2
 fi
 
@@ -12,9 +12,20 @@ project_root=$(cd "$1" && pwd)
 subjects_csv=$2
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "${script_dir}/../.." && pwd)
-environment_user=${USER:-$(id -un)}
-default_environment=/ceph/python_envs/${environment_user}/nwb_barcoding
-python_executable=${3:-${PYTHON_EXECUTABLE:-${default_environment}/bin/python}}
+overview_environment=${SESSION_OVERVIEW_ENV:-suite2p-reg-1.1.0}
+if [[ $# -eq 3 ]]; then
+  python_executable=$3
+elif [[ -n "${PYTHON_EXECUTABLE:-}" ]]; then
+  python_executable=${PYTHON_EXECUTABLE}
+else
+  if [[ "${CONDA_DEFAULT_ENV:-}" != "${overview_environment}" ]]; then
+    if type module >/dev/null 2>&1; then
+      module load mamba
+    fi
+    source activate "${overview_environment}"
+  fi
+  python_executable=$(command -v python)
+fi
 
 if ! command -v sbatch >/dev/null 2>&1; then
   echo "sbatch is required; run this launcher on a Slurm submission host." >&2
@@ -29,17 +40,28 @@ export PYTHONNOUSERSITE=1
 export PYTHONPATH="${repo_root}${PYTHONPATH:+:${PYTHONPATH}}"
 "${python_executable}" - <<'PY'
 import importlib
+import importlib.metadata
 import sys
 
-if sys.version_info[:2] != (3, 12):
+if sys.version_info[:2] != (3, 11):
     raise RuntimeError(
-        f"session_overview_sc requires Python 3.12, but {sys.executable} is "
+        f"suite2p-reg-1.1.0 requires Python 3.11, but {sys.executable} is "
         f"Python {sys.version.split()[0]}"
     )
-required = ("aeon", "h5py", "matplotlib", "numpy", "pandas", "pynwb", "scipy")
+suite2p_version = importlib.metadata.version("suite2p")
+if suite2p_version != "1.1.0":
+    raise RuntimeError(
+        f"session_overview_sc requires suite2p==1.1.0, found {suite2p_version} "
+        f"using {sys.executable}"
+    )
+required = (
+    "aeon", "h5py", "matplotlib", "numpy", "pandas", "pynwb", "scipy",
+    "seaborn", "suite2p", "torch",
+)
 for name in required:
     importlib.import_module(name)
 print("Validated overview Python:", sys.executable)
+print("Validated Suite2p version:", suite2p_version)
 PY
 
 manifest_root=${project_root}/analysis/cohort2/.session_overview_manifests
@@ -96,6 +118,8 @@ job_id=${submission%%;*}
 
 echo "Submitted ${task_count} overview session(s) as Slurm array job ${job_id}."
 echo "Subjects: ${subjects_csv}"
+echo "Environment: ${overview_environment}"
+echo "Python: ${python_executable}"
 echo "Manifest: ${manifest}"
 echo "Array: ${array_spec}"
 echo "Logs: ${log_dir}/session_overview_${job_id}_<task>.{out,err}"
