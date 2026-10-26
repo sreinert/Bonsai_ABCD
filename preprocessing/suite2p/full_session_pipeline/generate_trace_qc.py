@@ -82,7 +82,7 @@ separately below.</div>
 <h2>Additional two-channel/CellTV diagnostics</h2>
 <img src="additional_two_channel/summary.png" alt="Additional two-channel summary">
 <h3>CellTV-style traces</h3><img src="additional_two_channel/selected_cells_celltv.png" alt="CellTV traces">
-<h3>Normalized traces</h3><img src="additional_two_channel/selected_cells_dff.png" alt="Normalized traces">
+<h3>Opt-in red-reference correction</h3><img src="additional_two_channel/selected_cells_reference.png" alt="Red-reference-corrected traces">
 <p><a href="signal_quality_metrics.csv">Raw session metrics CSV</a> ·
 <a href="additional_two_channel/trace_metrics.csv">Additional per-ROI metrics CSV</a> ·
 <a href="calculation.json">Calculation settings and provenance</a></p>
@@ -179,7 +179,7 @@ def main() -> None:
     parser.add_argument("--trace-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, help="Default: TRACE_DIR/qc")
     parser.add_argument("--n-cells", type=int, default=6)
-    parser.add_argument("--neucoeff", type=float, help="Default: ops['neucoeff'], or 0.7")
+    parser.add_argument("--neucoeff", type=float, help="Default: coefficient stored in ops.npy")
     args = parser.parse_args()
     output_dir = (args.output_dir or args.trace_dir / "qc").resolve()
     generate_trace_qc(

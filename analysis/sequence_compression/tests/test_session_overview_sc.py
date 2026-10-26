@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -30,7 +31,7 @@ def test_valid_frames_are_checked_before_selection():
         overview._select_valid_frames(dff, [])
 
 
-def test_celltv_signals_use_ops_coefficient_and_are_saved_aligned(tmp_path, monkeypatch):
+def test_reference_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypatch):
     plane = tmp_path / "suite2p" / "plane0"
     plane.mkdir(parents=True)
     F = np.array([[10, 12, 14, 16], [20, 23, 26, 29]], dtype=float)
@@ -54,40 +55,74 @@ def test_celltv_signals_use_ops_coefficient_and_are_saved_aligned(tmp_path, monk
         },
     )
 
-    def constant_percentile(signal, ops):
-        percentile = ops["prctile_baseline"]
-        return signal - np.percentile(signal, percentile, axis=1, keepdims=True)
+    delta_calls = []
 
-    monkeypatch.setattr(overview, "_suite2p_preprocess", constant_percentile)
+    def fake_channel_delta(signal, neuropil, ops):
+        delta_calls.append((signal.copy(), neuropil.copy(), ops))
+        corrected = signal - ops["neucoeff"] * neuropil
+        return corrected - np.min(corrected, axis=1, keepdims=True)
+
+    def fake_reference_correction(green, red, fs):
+        corrected = green - 0.5 * (red - np.median(red, axis=1, keepdims=True))
+        n_rois = green.shape[0]
+        return SimpleNamespace(
+            corrected=corrected,
+            beta=np.full(n_rois, 0.5),
+            raw_standardized_coupling=np.full(n_rois, 0.6),
+            applied_standardized_coupling=np.full(n_rois, 0.6),
+            green_scale=np.ones(n_rois),
+            red_scale=np.ones(n_rois),
+            converged=np.ones(n_rois, dtype=bool),
+            iterations=np.ones(n_rois, dtype=int),
+            status=np.full(n_rois, "applied"),
+            smoothing_kernel_frames=1,
+            tuning_constant=3.0,
+            max_iterations=50,
+            tolerance=1e-6,
+            scale_epsilon=1e-6,
+        )
+
+    monkeypatch.setattr(overview, "compute_channel_delta", fake_channel_delta)
+    monkeypatch.setattr(
+        overview, "fit_reference_correction", fake_reference_correction
+    )
     aligned_funcimg = tmp_path / "aligned" / "funcimg"
-    result = overview._load_or_extract_celltv_signals(
+    aligned_funcimg.mkdir(parents=True)
+    for legacy_name in ("DF_F0.npy", "DF_F02.npy", "DG_R.npy"):
+        np.save(aligned_funcimg / legacy_name, np.full((2, 2), 999))
+    result = overview._load_or_extract_reference_signals(
         plane, aligned_funcimg, accepted=[1], valid_frames=[1, 3]
     )
 
-    green = (F - 0.25 * Fneu)[:, [1, 3]]
-    red = (F2 - 0.25 * Fneu2)[:, [1, 3]]
-    red_floor = np.maximum(np.percentile(red, 5, axis=1, keepdims=True), 1e-3)
-    ratio = green / np.maximum(red, red_floor)
-    celltv_gr = ratio - np.percentile(ratio, 0, axis=1, keepdims=True)
-    expected_green = green - np.percentile(green, 0, axis=1, keepdims=True)
-    expected_red = red - np.percentile(red, 0, axis=1, keepdims=True)
-    np.testing.assert_allclose(result["dff"], expected_green[[1]], rtol=1e-6)
-    np.testing.assert_allclose(result["dff2"], expected_red[[1]], rtol=1e-6)
-    np.testing.assert_allclose(result["dg_r"], celltv_gr[[1]], rtol=3e-6)
+    green_full = F - 0.25 * Fneu
+    red_full = F2 - 0.25 * Fneu2
+    expected_green_full = green_full - np.min(
+        green_full, axis=1, keepdims=True
+    )
+    expected_red_full = red_full - np.min(red_full, axis=1, keepdims=True)
+    expected_corrected_full = expected_green_full - 0.5 * (
+        expected_red_full - np.median(expected_red_full, axis=1, keepdims=True)
+    )
+    expected_green = expected_green_full[:, [1, 3]]
+    expected_red = expected_red_full[:, [1, 3]]
+    expected_corrected = expected_corrected_full[:, [1, 3]]
+    np.testing.assert_allclose(result["green_delta"], expected_green[[1]])
+    np.testing.assert_allclose(result["red_delta"], expected_red[[1]])
+    np.testing.assert_allclose(
+        result["corrected_green_delta"], expected_corrected[[1]]
+    )
+    assert len(delta_calls) == 2
+    np.testing.assert_array_equal(delta_calls[0][0], F)
+    np.testing.assert_array_equal(delta_calls[1][0], F2)
     assert {path.name for path in aligned_funcimg.glob("*.npy")} == {
         "DF_F0.npy",
         "DF_F02.npy",
         "DG_R.npy",
+        "reference_green_delta_v1.npy",
+        "reference_red_delta_v1.npy",
+        "reference_corrected_green_delta_v1.npy",
     }
-
-
-def test_overview_reads_neuropil_coefficient_without_qc_helper():
-    assert overview._neuropil_coefficient({"neucoeff": 0.35}) == 0.35
-    assert overview._neuropil_coefficient(
-        {"extraction": {"neuropil_coefficient": 0.55}}
-    ) == 0.55
-    with pytest.raises(KeyError, match="cannot reproduce CellTV"):
-        overview._neuropil_coefficient({})
+    assert (aligned_funcimg / "reference_correction_diagnostics_v1.npz").is_file()
 
 
 def test_accepted_cells_and_empirical_frame_rate():
@@ -170,7 +205,7 @@ def test_reward_psth_subplots_only_tick_window_limits_and_reward():
     plt.close(figure)
 
 
-def test_run_overview_adds_four_gr_plots_and_cleans_legacy(tmp_path, monkeypatch):
+def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monkeypatch):
     session_path = tmp_path / "aligned" / "sub-07" / "ses-full001_date-test"
     session_path.mkdir(parents=True)
     save_dir = tmp_path / "analysis"
@@ -186,7 +221,9 @@ def test_run_overview_adds_four_gr_plots_and_cleans_legacy(tmp_path, monkeypatch
         "load_session_data",
         lambda *args, **kwargs: {
             "dF": np.arange(120, dtype=float).reshape(3, 40),
-            "gr": np.arange(120, dtype=float).reshape(3, 40) / 10,
+            "red_reference_corrected_dF": (
+                np.arange(120, dtype=float).reshape(3, 40) / 10
+            ),
             "neurons": np.array([2, 5, 9]),
             "mean_img": np.zeros((2, 2)),
             "image_mask": [np.eye(2, dtype=bool)],
@@ -205,8 +242,8 @@ def test_run_overview_adds_four_gr_plots_and_cleans_legacy(tmp_path, monkeypatch
 
     def fake_traces(*args, **kwargs):
         name = (
-            "gr_traces"
-            if kwargs.get("signal_label", "").startswith("CellTV")
+            "corrected_traces"
+            if kwargs.get("signal_label", "").startswith("Red-reference")
             else "traces"
         )
         calls.append((name, kwargs["save_path"]))
@@ -217,7 +254,9 @@ def test_run_overview_adds_four_gr_plots_and_cleans_legacy(tmp_path, monkeypatch
 
     def fake_reward(*args, **kwargs):
         prefix = (
-            "gr_" if kwargs.get("signal_label", "").startswith("CellTV") else ""
+            "corrected_"
+            if kwargs.get("signal_label", "").startswith("Red-reference")
+            else ""
         )
         calls.append(
             (
@@ -229,7 +268,9 @@ def test_run_overview_adds_four_gr_plots_and_cleans_legacy(tmp_path, monkeypatch
 
     def fake_reward_psth(*args, **kwargs):
         prefix = (
-            "gr_" if kwargs.get("signal_label", "").startswith("CellTV") else ""
+            "corrected_"
+            if kwargs.get("signal_label", "").startswith("Red-reference")
+            else ""
         )
         calls.append((prefix + "reward_psth", kwargs["save_path"]))
         selected = overview.select_trace_cells(3, 20)
@@ -252,10 +293,10 @@ def test_run_overview_adds_four_gr_plots_and_cleans_legacy(tmp_path, monkeypatch
         "reward",
         "reward_cv",
         "reward_psth",
-        "gr_traces",
-        "gr_reward",
-        "gr_reward_cv",
-        "gr_reward_psth",
+        "corrected_traces",
+        "corrected_reward",
+        "corrected_reward_cv",
+        "corrected_reward_psth",
     ]
     assert set(figures) == {
         "fov",
@@ -263,10 +304,10 @@ def test_run_overview_adds_four_gr_plots_and_cleans_legacy(tmp_path, monkeypatch
         "reward",
         "reward_cv",
         "reward_psth_selected_cells",
-        "gr_raw_traces",
-        "gr_reward",
-        "gr_reward_cv",
-        "gr_reward_psth_selected_cells",
+        "reference_corrected_raw_traces",
+        "reference_corrected_reward",
+        "reference_corrected_reward_cv",
+        "reference_corrected_reward_psth_selected_cells",
     }
     assert not legacy.exists()
     assert unrelated.exists()
@@ -312,10 +353,10 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
         save_dir / "3_reward_heatmap.png",
         save_dir / "4_reward_heatmap_cv.png",
         save_dir / "5_reward_psth_selected_cells.png",
-        save_dir / "6_gr_raw_traces.png",
-        save_dir / "7_gr_reward_heatmap.png",
-        save_dir / "8_gr_reward_heatmap_cv.png",
-        save_dir / "9_gr_reward_psth_selected_cells.png",
+        save_dir / "6_reference_corrected_raw_traces.png",
+        save_dir / "7_reference_corrected_reward_heatmap.png",
+        save_dir / "8_reference_corrected_reward_heatmap_cv.png",
+        save_dir / "9_reference_corrected_reward_psth_selected_cells.png",
     ]
     for path in stale_reward_plots:
         path.touch()

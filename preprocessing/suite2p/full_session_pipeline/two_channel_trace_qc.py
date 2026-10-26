@@ -21,10 +21,38 @@ import numpy as np
 from scipy.ndimage import gaussian_filter, maximum_filter1d, minimum_filter1d
 from scipy.signal import medfilt
 
+try:
+    from .red_reference_correction import (
+        ReferenceCorrectionResult,
+        compute_channel_delta,
+        fit_reference_correction,
+    )
+except ImportError:  # Direct script execution on the HPC.
+    from red_reference_correction import (
+        ReferenceCorrectionResult,
+        compute_channel_delta,
+        fit_reference_correction,
+    )
+
 
 REQUIRED_FILES = ("F.npy", "Fneu.npy", "iscell.npy", "ops.npy", "stat.npy")
 CHANNEL2_FILES = ("F_chan2.npy", "Fneu_chan2.npy")
 COLORS = {"green": "#16853b", "red": "#d43f3a", "ratio": "#272727"}
+
+
+def neuropil_coefficient(ops: dict[str, Any], override: float | None = None) -> float:
+    """Return Suite2p's stored neuropil coefficient unless explicitly overridden."""
+    if override is not None:
+        return float(override)
+    if "neucoeff" in ops:
+        return float(ops["neucoeff"])
+    extraction = ops.get("extraction", {})
+    if isinstance(extraction, dict) and "neuropil_coefficient" in extraction:
+        return float(extraction["neuropil_coefficient"])
+    raise KeyError(
+        "ops.npy has no 'neucoeff' or extraction['neuropil_coefficient']; "
+        "cannot reproduce CellTV neuropil correction"
+    )
 
 
 def baseline(signal: np.ndarray, ops: dict[str, Any]) -> np.ndarray:
@@ -176,11 +204,11 @@ def plot_selected(
             "red": "Red ΔF (channel 2; CellTV)",
             "ratio": "Δ(G/R) (CellTV)",
         }
-    elif trace_kind == "normalized":
+    elif trace_kind == "reference":
         column_titles = {
-            "green": "Green ΔF/F (channel 1)",
-            "red": "Red ΔF/F (channel 2)",
-            "ratio": "Ratio ΔF/F (G/R)",
+            "green": "Green ΔF (channel 1)",
+            "red": "Red ΔF (channel 2)",
+            "ratio": "Red-reference-corrected green ΔF",
         }
     else:
         raise ValueError(f"Unknown trace kind: {trace_kind!r}")
@@ -261,34 +289,56 @@ def plot_summary(
 def metric_rows(
     signals: dict[str, np.ndarray],
     celltv_delta: dict[str, np.ndarray],
-    dff: dict[str, np.ndarray],
-    baselines: dict[str, np.ndarray],
-    clipped: dict[str, np.ndarray],
+    correction: ReferenceCorrectionResult,
     iscell: np.ndarray,
 ) -> list[dict[str, Any]]:
-    correlation = row_correlation(signals["green"], signals["red"])
+    correlation_before = row_correlation(celltv_delta["green"], celltv_delta["red"])
+    correlation_after = row_correlation(correction.corrected, celltv_delta["red"])
+    fitted_scale = robust_sigma(correction.fitted_reference)
+    variance_fraction = np.divide(
+        fitted_scale**2,
+        correction.green_scale**2,
+        out=np.zeros_like(fitted_scale),
+        where=correction.green_scale > 0,
+    )
     rows: list[dict[str, Any]] = []
     for roi in range(len(iscell)):
         row: dict[str, Any] = {
             "roi": roi,
             "iscell": int(iscell[roi, 0] > 0.5),
             "cell_probability": float(iscell[roi, 1]),
-            "green_red_correlation": float(correlation[roi]),
+            "green_red_correlation": float(correlation_before[roi]),
+            "green_red_correlation_after": float(correlation_after[roi]),
             "ratio_red_floor": float(signals["red_floor"][roi, 0]),
             "ratio_red_floor_fraction": float(np.mean(signals["ratio_floor_mask"][roi])),
+            "reference_raw_standardized_coupling": float(
+                correction.raw_standardized_coupling[roi]
+            ),
+            "reference_applied_standardized_coupling": float(
+                correction.applied_standardized_coupling[roi]
+            ),
+            "reference_beta": float(correction.beta[roi]),
+            "reference_green_scale": float(correction.green_scale[roi]),
+            "reference_red_scale": float(correction.red_scale[roi]),
+            "reference_variance_fraction": float(variance_fraction[roi]),
+            "reference_converged": int(correction.converged[roi]),
+            "reference_iterations": int(correction.iterations[roi]),
+            "reference_status": str(correction.status[roi]),
+            "reference_corrected_robust_sigma": float(
+                robust_sigma(correction.corrected[roi : roi + 1])[0]
+            ),
+            "reference_corrected_p99": float(
+                np.percentile(correction.corrected[roi], 99)
+            ),
         }
         for name in ("green", "red", "ratio"):
             row[f"{name}_corrected_median"] = float(np.median(signals[name][roi]))
-            row[f"{name}_baseline_median"] = float(np.median(baselines[name][roi]))
             row[f"{name}_celltv_delta_robust_sigma"] = float(
                 robust_sigma(celltv_delta[name][roi : roi + 1])[0]
             )
             row[f"{name}_celltv_delta_p99"] = float(
                 np.percentile(celltv_delta[name][roi], 99)
             )
-            row[f"{name}_dff_robust_sigma"] = float(robust_sigma(dff[name][roi : roi + 1])[0])
-            row[f"{name}_dff_p99"] = float(np.percentile(dff[name][roi], 99))
-            row[f"{name}_baseline_epsilon_fraction"] = float(np.mean(clipped[name][roi]))
         rows.append(row)
     return rows
 
@@ -316,24 +366,21 @@ def report_html(
         f"<td>{selected_rows[int(roi)]['green_celltv_delta_robust_sigma']:.3g}</td>"
         f"<td>{selected_rows[int(roi)]['red_celltv_delta_robust_sigma']:.3g}</td>"
         f"<td>{selected_rows[int(roi)]['ratio_celltv_delta_robust_sigma']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['green_dff_robust_sigma']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['red_dff_robust_sigma']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['ratio_dff_robust_sigma']:.3g}</td>"
+        f"<td>{selected_rows[int(roi)]['reference_raw_standardized_coupling']:.3g}</td>"
+        f"<td>{selected_rows[int(roi)]['reference_applied_standardized_coupling']:.3g}</td>"
+        f"<td>{selected_rows[int(roi)]['reference_beta']:.3g}</td>"
+        f"<td>{html.escape(str(selected_rows[int(roi)]['reference_status']))}</td>"
         "</tr>"
         for roi in selected
     )
     n_cells = sum(row["iscell"] for row in metrics)
     classified_rows = [row for row in metrics if row["iscell"]]
-    median_green_sigma = float(np.median([row["green_dff_robust_sigma"] for row in classified_rows]))
-    median_correlation = float(np.median([row["green_red_correlation"] for row in classified_rows]))
-    warning = ""
-    if median_green_sigma > 1:
-        warning = (
-            "<div class=\"warning\"><b>Baseline warning.</b> The classified-cell median green "
-            f"ΔF/F robust σ is {median_green_sigma:.2f}. Several neuropil-corrected baselines are "
-            "small relative to trace noise, so normalized ΔF/F becomes large. Inspect the CSV and "
-            "consider the notebook's offset-restored percentile baseline before downstream analysis.</div>"
-        )
+    summary_rows = classified_rows or metrics
+    median_correlation = float(np.median([row["green_red_correlation"] for row in summary_rows]))
+    applied_count = sum(
+        row["reference_applied_standardized_coupling"] > 0 for row in summary_rows
+    )
+    unstable_ratio_count = sum(row["ratio_red_floor_fraction"] > 0.05 for row in summary_rows)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Trace extraction QC</title>
 <style>body{{font:15px system-ui,sans-serif;max-width:1200px;margin:2rem auto;padding:0 1rem;color:#222}}
@@ -349,25 +396,30 @@ code{{background:#f2f2f2;padding:.1rem .3rem}} .note{{background:#eef6ff;padding
 The red trace alone is median-filtered over {settings['red_kernel_frames']} frames before G/R, matching
 <code>get_dff_GR</code>. Its denominator is floored at each ROI's fifth percentile or 1e−3, whichever is larger.
 The <b>CellTV-style</b> plots show <code>signal − F0</code>, exactly matching the baseline-subtracted output
-of Suite2p <code>preprocess</code> used by <code>get_dff</code> and <code>get_dff_GR</code>. The separate
-<b>normalized</b> plots show <code>(signal − F0) / |F0|</code>. Both use Suite2p's
-<code>{html.escape(settings['baseline'])}</code> baseline parameters.</div>
+of Suite2p <code>preprocess</code> used by <code>get_dff</code> and <code>get_dff_GR</code>; despite historical
+naming, these are ΔF and are not divided by F0. The opt-in correction fits the smoothed red ΔF to green
+ΔF using Tukey-bisquare IRLS and subtracts only the fitted component. It never divides by red fluorescence.
+An applied coupling of zero means the reference did not provide safe positive evidence of shared motion.</div>
 <h2>Overview</h2><img src="summary.png" alt="QC summary">
 <h2>Example classified cells</h2><p>Selected reproducibly by descending Suite2p cell probability,
 then green-trace robust activity—not by manual choice. Plot limits use each panel's 0.5–99.5th percentiles;
 traces are non-overlapping mean-binned to at most 1,500 points for display, and the CSV metrics use the
 unbinned traces. Classified-cell median G/R channel correlation is
-{median_correlation:.3f}.</p>
+{median_correlation:.3f}. The reference correction was applied to {applied_count}/{len(summary_rows)}
+classified cells; {unstable_ratio_count}/{len(summary_rows)} used the legacy ratio denominator floor in
+more than 5% of frames.</p>
 <h3>Exact CellTV-style baseline-subtracted traces</h3>
 <p>These reproduce what the current CellTV functions return, although those functions call the result dF/F.</p>
 <img src="selected_cells_celltv_zoom.png" alt="CellTV-style selected cell trace zoom">
 <details><summary>Show full CellTV-style traces</summary><img src="selected_cells_celltv.png" alt="Full CellTV-style selected cell traces"></details>
-<h3>Normalized ΔF/F traces</h3>{warning}
-<img src="selected_cells_dff_zoom.png" alt="Normalized selected cell trace zoom">
-<details><summary>Show full normalized traces</summary><img src="selected_cells_dff.png" alt="Full normalized selected cell traces"></details>
+<h3>Opt-in red-reference correction</h3>
+<p>Green and red use the same Suite2p baseline-subtracted ΔF calculation as the NWB-barcoding pipeline.
+The third column is corrected green ΔF; current CellTV outputs and cached arrays are not changed.</p>
+<img src="selected_cells_reference_zoom.png" alt="Reference-corrected selected cell trace zoom">
+<details><summary>Show full reference-corrected traces</summary><img src="selected_cells_reference.png" alt="Full reference-corrected selected cell traces"></details>
 <h2>Selected-cell metrics</h2><table><thead><tr><th>ROI</th><th>p(cell)</th><th>corr(G,R)</th>
 <th>red floor fraction</th><th>CellTV green σ</th><th>CellTV red σ</th><th>CellTV ratio σ</th>
-<th>ΔF/F green σ</th><th>ΔF/F red σ</th><th>ΔF/F ratio σ</th></tr></thead><tbody>
+<th>raw coupling</th><th>applied coupling</th><th>β</th><th>status</th></tr></thead><tbody>
 {table_rows}</tbody></table>
 <h2>Files</h2><ul><li><a href="trace_metrics.csv">trace_metrics.csv</a>: metrics for every ROI</li>
 <li><a href="calculation.json">calculation.json</a>: exact calculation settings and selected ROI indices</li></ul>
@@ -411,32 +463,33 @@ def generate_two_channel_qc(
     shapes = {array.shape for array in (F, Fneu, F2, Fneu2)}
     if len(shapes) != 1 or F.ndim != 2 or F.shape[0] != len(iscell) or len(stat) != len(iscell):
         raise ValueError("Trace, classification, and ROI array shapes are inconsistent")
-    extraction = ops.get("extraction", {})
-    if not isinstance(extraction, dict):
-        extraction = {}
-    neucoeff = float(
-        neucoeff_override
-        if neucoeff_override is not None
-        else ops.get("neucoeff", extraction.get("neuropil_coefficient", 0.7))
-    )
+    neucoeff = neuropil_coefficient(ops, override=neucoeff_override)
     dcnv = ops.get("dcnv_preprocess", {})
     if not isinstance(dcnv, dict):
         dcnv = {}
 
     signals = channel_signals(F, Fneu, F2, Fneu2, ops, neucoeff)
-    celltv_delta: dict[str, np.ndarray] = {}
-    dff: dict[str, np.ndarray] = {}
-    baselines: dict[str, np.ndarray] = {}
-    clipped: dict[str, np.ndarray] = {}
+    celltv_delta: dict[str, np.ndarray] = {
+        "green": compute_channel_delta(F, Fneu, ops, neucoeff),
+        "red": compute_channel_delta(F2, Fneu2, ops, neucoeff),
+    }
+    ratio_baseline = baseline(signals["ratio"], ops)
+    celltv_delta["ratio"] = (signals["ratio"] - ratio_baseline).astype(np.float32)
     for name in ("green", "red", "ratio"):
-        dff[name], baselines[name], clipped[name] = normalized_dff(signals[name], ops)
-        celltv_delta[name] = (signals[name] - baselines[name]).astype(np.float32)
         if not np.all(np.isfinite(celltv_delta[name])):
             raise RuntimeError(f"Non-finite values found in CellTV-style {name} ΔF")
-        if not np.all(np.isfinite(dff[name])):
-            raise RuntimeError(f"Non-finite values found in {name} ΔF/F")
+    correction = fit_reference_correction(
+        celltv_delta["green"], celltv_delta["red"], float(ops["fs"])
+    )
+    if not np.all(np.isfinite(correction.corrected)):
+        raise RuntimeError("Non-finite values found in red-reference-corrected green ΔF")
+    reference_traces = {
+        "green": celltv_delta["green"],
+        "red": celltv_delta["red"],
+        "ratio": correction.corrected,
+    }
     selected = select_rois(iscell, celltv_delta["green"], n_cells)
-    metrics = metric_rows(signals, celltv_delta, dff, baselines, clipped, iscell)
+    metrics = metric_rows(signals, celltv_delta, correction, iscell)
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent))
@@ -444,9 +497,13 @@ def generate_two_channel_qc(
         zoom_frames = min(F.shape[1], int(round(2.0 * 60.0 * float(ops["fs"]))))
         zoom_start = max(0, (F.shape[1] - zoom_frames) // 2)
         zoom_stop = zoom_start + zoom_frames
-        for trace_kind, traces in (("celltv", celltv_delta), ("normalized", dff)):
-            stem = "celltv" if trace_kind == "celltv" else "dff"
-            label = "CellTV-style ΔF" if trace_kind == "celltv" else "normalized ΔF/F"
+        for trace_kind, traces in (("celltv", celltv_delta), ("reference", reference_traces)):
+            stem = "celltv" if trace_kind == "celltv" else "reference"
+            label = (
+                "CellTV-style ΔF"
+                if trace_kind == "celltv"
+                else "opt-in red-reference correction"
+            )
             plot_selected(
                 temporary / f"selected_cells_{stem}.png",
                 selected,
@@ -485,7 +542,23 @@ def generate_two_channel_qc(
             "zoom_frame_range": [zoom_start, zoom_stop],
             "selection_rule": "iscell first; descending cell probability, green robust sigma, ROI index",
             "celltv_formula": "signal - Suite2p baseline (matches dcnv.preprocess output)",
-            "dff_formula": "(signal - Suite2p baseline) / abs(Suite2p baseline)",
+            "reference_correction": {
+                "method": "Tukey-bisquare iteratively reweighted least squares",
+                "formula": "green_delta - beta * (smoothed_red_delta - median(smoothed_red_delta))",
+                "normalization": "median center and half of the 16th-to-84th percentile range",
+                "red_smoothing_seconds": 0.25,
+                "red_smoothing_kernel_frames": correction.smoothing_kernel_frames,
+                "red_smoothing_boundary": "nearest",
+                "tuning_constant": correction.tuning_constant,
+                "max_iterations": correction.max_iterations,
+                "tolerance": correction.tolerance,
+                "scale_epsilon": correction.scale_epsilon,
+                "application_rule": "apply positive standardized coupling clipped to [0, 1] after convergence",
+                "status_counts": {
+                    str(name): int(np.sum(correction.status == name))
+                    for name in np.unique(correction.status)
+                },
+            },
         }
         (temporary / "calculation.json").write_text(
             json.dumps(settings, indent=2) + "\n", encoding="utf-8"
@@ -505,7 +578,7 @@ def main() -> None:
     parser.add_argument("--trace-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, help="Default: TRACE_DIR/qc")
     parser.add_argument("--n-cells", type=int, default=6)
-    parser.add_argument("--neucoeff", type=float, help="Default: ops['neucoeff'], or 0.7")
+    parser.add_argument("--neucoeff", type=float, help="Default: coefficient stored in ops.npy")
     args = parser.parse_args()
     output_dir = (args.output_dir or args.trace_dir / "qc").resolve()
     generate_two_channel_qc(

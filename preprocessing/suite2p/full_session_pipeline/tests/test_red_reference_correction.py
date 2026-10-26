@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import numpy as np
+import pytest
+
+
+PIPELINE_DIR = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[4]
+for import_root in (REPOSITORY_ROOT, PIPELINE_DIR):
+    if str(import_root) not in sys.path:
+        sys.path.insert(0, str(import_root))
+
+import red_reference_correction  # noqa: E402
+
+
+def legacy_ops() -> dict[str, object]:
+    return {
+        "fs": 10.0,
+        "baseline": "maximin",
+        "win_baseline": 60.0,
+        "sig_baseline": 10.0,
+        "prctile_baseline": 8.0,
+        "neucoeff": 0.7,
+    }
+
+
+def test_channel_delta_matches_nwb_barcoding(monkeypatch: pytest.MonkeyPatch) -> None:
+    from nwb_barcoding import compute_dff
+
+    fluorescence = np.asarray([[5.0, 7.0, 11.0]], dtype=np.float32)
+    neuropil = np.asarray([[1.0, 2.0, 3.0]], dtype=np.float32)
+    ops = {
+        "fs": 2.0,
+        "dcnv_preprocess": {
+            "baseline": "constant_prctile",
+            "win_baseline": 60.0,
+            "sig_baseline": 10.0,
+            "prctile_baseline": 0.0,
+        },
+        "extraction": {"neuropil_coefficient": 0.55},
+    }
+
+    def fake_preprocess(values, baseline, window, sigma, fs, percentile):
+        del baseline, window, sigma, fs
+        return values - np.percentile(values, percentile, axis=1, keepdims=True)
+
+    monkeypatch.setattr(red_reference_correction, "_suite2p_preprocess", fake_preprocess)
+    monkeypatch.setattr(compute_dff, "_suite2p_preprocess", fake_preprocess)
+    observed = red_reference_correction.compute_channel_delta(fluorescence, neuropil, ops)
+    corrected = fluorescence - 0.55 * neuropil
+    baseline, window, sigma, percentile = compute_dff._get_baseline_params(ops)
+    expected = compute_dff._suite2p_preprocess(
+        corrected, baseline, window, sigma, ops["fs"], percentile
+    )
+    assert np.allclose(observed, expected)
+
+
+def test_channel_delta_supports_legacy_ops_and_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(red_reference_correction, "_suite2p_preprocess", lambda values, *_: values)
+    fluorescence = np.asarray([[5.0, 6.0]])
+    neuropil = np.asarray([[2.0, 2.0]])
+    observed = red_reference_correction.compute_channel_delta(
+        fluorescence, neuropil, legacy_ops(), neuropil_coefficient=0.25
+    )
+    assert np.allclose(observed, fluorescence - 0.25 * neuropil)
+
+
+def test_channel_delta_validates_shapes() -> None:
+    with pytest.raises(ValueError, match="equal shapes"):
+        red_reference_correction.compute_channel_delta(
+            np.ones((1, 3)), np.ones((1, 2)), legacy_ops()
+        )
+
+
+def test_tukey_correction_removes_shared_motion_and_preserves_transient() -> None:
+    rng = np.random.default_rng(7)
+    red = rng.normal(size=2000)
+    green = 2.0 * red + rng.normal(scale=0.05, size=red.size)
+    transient = red > np.percentile(red, 97)
+    green[transient] += 20.0
+
+    result = red_reference_correction.fit_reference_correction(
+        green[None, :], red[None, :], fs=20.0, smoothing_seconds=0.0
+    )
+    ordinary_slope = np.polyfit(red, green, 1)[0]
+
+    assert result.status[0] == "applied"
+    assert abs(result.beta[0] - 2.0) < abs(ordinary_slope - 2.0)
+    assert abs(np.corrcoef(result.corrected[0, ~transient], red[~transient])[0, 1]) < 0.1
+    assert np.median(result.corrected[0, transient]) > 10.0
+
+
+def test_correction_uses_nearest_edge_median_filter() -> None:
+    red = np.asarray([[100.0, 0.0, 0.0, 0.0, 0.0]])
+    result = red_reference_correction.fit_reference_correction(
+        red.copy(), red, fs=12.0, smoothing_seconds=0.25
+    )
+    assert result.smoothing_kernel_frames == 3
+    assert result.smoothed_red[0, 0] == 100.0
+
+
+@pytest.mark.parametrize(
+    ("green", "red", "kwargs", "expected_status"),
+    [
+        (np.arange(20.0), np.ones(20), {}, "flat_red"),
+        (-np.arange(20.0), np.arange(20.0), {"smoothing_seconds": 0.0}, "nonpositive_coupling"),
+        (np.arange(20.0), np.r_[np.arange(19.0), np.nan], {}, "nonfinite_red"),
+        (np.arange(20.0), np.arange(20.0), {"max_iterations": 0}, "nonconvergent"),
+    ],
+)
+def test_correction_safe_fallbacks(
+    green: np.ndarray,
+    red: np.ndarray,
+    kwargs: dict[str, object],
+    expected_status: str,
+) -> None:
+    result = red_reference_correction.fit_reference_correction(
+        green[None, :], red[None, :], fs=10.0, **kwargs
+    )
+    assert result.status[0] == expected_status
+    assert result.beta[0] == 0
+    assert np.allclose(result.corrected[0], green, equal_nan=True)

@@ -38,15 +38,20 @@ def read_json(path: Path) -> dict[str, Any]:
     return value
 
 
-def load_trace_metrics(path: Path) -> list[dict[str, float]]:
+def load_trace_metrics(path: Path) -> list[dict[str, Any]]:
     with path.open(newline="", encoding="utf-8") as handle:
-        return [
-            {
-                key: float(value) if key not in {"roi", "iscell"} else int(float(value))
-                for key, value in row.items()
-            }
-            for row in csv.DictReader(handle)
-        ]
+        rows: list[dict[str, Any]] = []
+        for raw in csv.DictReader(handle):
+            row: dict[str, Any] = {}
+            for key, value in raw.items():
+                if key in {"roi", "iscell"}:
+                    row[key] = int(float(value))
+                elif key == "reference_status":
+                    row[key] = value
+                else:
+                    row[key] = float(value)
+            rows.append(row)
+        return rows
 
 
 def save_registration_qc(
@@ -194,7 +199,8 @@ def main() -> None:
         "roi_diameter_median_pixels": float(np.median(diameters)),
         "additional_green_red_correlation_median": float(np.median([row["green_red_correlation"] for row in selected])),
         "additional_ratio_red_floor_fraction_median": float(np.median([row["ratio_red_floor_fraction"] for row in selected])),
-        "additional_green_dff_robust_sigma_median": float(np.median([row["green_dff_robust_sigma"] for row in selected])),
+        "additional_reference_corrected_robust_sigma_median": float(np.median([row["reference_corrected_robust_sigma"] for row in selected])),
+        "additional_reference_applied_fraction": float(np.mean([row["reference_applied_standardized_coupling"] > 0 for row in selected])),
         "elapsed_registration_seconds": float(read_json(workflow_dir / "registration_status.json")["elapsed_seconds"]),
         "elapsed_detection_seconds": float(detection_status["elapsed_seconds"]),
         "elapsed_trace_seconds": float(trace_status["elapsed_seconds"]),
@@ -230,7 +236,7 @@ th,td{{padding:.35rem .6rem;border:1px solid #ccc;text-align:right}} th{{text-al
 <h2>Additional two-channel/CellTV diagnostics</h2>
 <img src="traces/additional_two_channel/summary.png" alt="Additional two-channel summary">
 <h3>Full-session CellTV-style traces</h3><img src="traces/additional_two_channel/selected_cells_celltv.png" alt="Full-session CellTV traces">
-<h3>Full-session normalized traces</h3><img src="traces/additional_two_channel/selected_cells_dff.png" alt="Full-session normalized traces">
+<h3>Full-session opt-in red-reference correction</h3><img src="traces/additional_two_channel/selected_cells_reference.png" alt="Full-session red-reference-corrected traces">
 <p><a href="session_metrics.csv">Session metrics CSV</a> · <a href="traces/signal_quality_metrics.csv">Raw signal metrics CSV</a> · <a href="traces/additional_two_channel/trace_metrics.csv">Additional per-ROI metrics CSV</a> · <a href="calculation.json">Calculation settings</a></p>
 </body></html>"""
     (qc_dir / "index.html").write_text(document, encoding="utf-8")

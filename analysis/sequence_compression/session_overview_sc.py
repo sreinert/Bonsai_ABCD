@@ -1,16 +1,16 @@
 """Minimal overview plots for an aligned sequence-compression imaging session.
 
-Green activity is loaded from the barcode-aligned NWB. CellTV-style green, red, and G/R
-signals are loaded or extracted from the matching two-channel Suite2p traces and saved
-under the aligned session's ``funcimg`` folder. Landmark intervals are parsed only to
-keep reward-PSTH windows from overlapping other landmarks; no position-tuning or
-goal-progress analysis is performed.
+Imaging metadata is loaded from the barcode-aligned NWB. Green and red delta-fluorescence
+signals, plus Tukey red-reference-corrected green delta fluorescence, are loaded or
+extracted from the matching two-channel Suite2p traces and saved under the aligned
+session's ``funcimg`` folder. Landmark intervals are parsed only to keep reward-PSTH
+windows from overlapping other landmarks; no position-tuning or goal-progress analysis
+is performed.
 """
 
 from __future__ import annotations
 
 import argparse
-import inspect
 import math
 import os
 from pathlib import Path
@@ -22,6 +22,10 @@ from scipy import stats
 
 import era_brewer
 from nwb_barcoding.sequence_compression import resolve_raw_session, short_session_name
+from preprocessing.suite2p.full_session_pipeline.red_reference_correction import (
+    compute_channel_delta,
+    fit_reference_correction,
+)
 
 
 HEATMAP_CMAP = LinearSegmentedColormap.from_list(
@@ -39,6 +43,10 @@ LEGACY_OVERVIEW_PATTERNS = (
     "11_goal_progress*.png",
     "12_goal_progress*.png",
     "13_goal_progress*.png",
+    "6_gr_raw_traces.png",
+    "7_gr_reward_heatmap.png",
+    "8_gr_reward_heatmap_cv.png",
+    "9_gr_reward_psth_selected_cells.png",
 )
 
 
@@ -140,32 +148,6 @@ def _load_nwb_imaging(session_path):
     return dff, accepted, mean_img, image_mask, frame_rate
 
 
-def _suite2p_preprocess(signal, ops):
-    """Run Suite2p baseline subtraction on CPU across supported API versions."""
-    from suite2p.extraction import dcnv
-
-    nested = ops.get("dcnv_preprocess", {})
-    if not isinstance(nested, dict):
-        nested = {}
-
-    def setting(name, default):
-        return ops.get(name, nested.get(name, default))
-
-    arguments = (
-        np.asarray(signal, dtype=np.float32).copy(),
-        setting("baseline", "maximin"),
-        float(setting("win_baseline", 60.0)),
-        float(setting("sig_baseline", 10.0)),
-        float(ops["fs"]),
-        float(setting("prctile_baseline", 8.0)),
-    )
-    if "device" in inspect.signature(dcnv.preprocess).parameters:
-        import torch
-
-        return dcnv.preprocess(*arguments, device=torch.device("cpu"))
-    return dcnv.preprocess(*arguments)
-
-
 def _atomic_save_npy(path, values):
     """Atomically replace one NumPy output without exposing a partial file."""
     path = Path(path)
@@ -177,33 +159,45 @@ def _atomic_save_npy(path, values):
         temporary.unlink(missing_ok=True)
 
 
-def _neuropil_coefficient(ops):
-    """Read Suite2p's neuropil coefficient without assuming a fallback value."""
-    if "neucoeff" in ops:
-        return float(ops["neucoeff"])
-    extraction = ops.get("extraction", {})
-    if isinstance(extraction, dict) and "neuropil_coefficient" in extraction:
-        return float(extraction["neuropil_coefficient"])
-    raise KeyError(
-        "ops.npy has no 'neucoeff' or extraction['neuropil_coefficient']; "
-        "cannot reproduce CellTV neuropil correction"
-    )
+def _atomic_save_npz(path, **values):
+    """Atomically replace one compressed NumPy archive."""
+    path = Path(path)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.partial.npz")
+    try:
+        np.savez_compressed(temporary, **values)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
-def _load_or_extract_celltv_signals(
+def _load_or_extract_reference_signals(
     suite2p_plane_path, aligned_funcimg_path, accepted, valid_frames
 ):
-    """Load or create CellTV DF_F0, DF_F02, and DG_R aligned trace files."""
-    from preprocessing.suite2p.full_session_pipeline import two_channel_trace_qc
-
+    """Load or create aligned green, red, and red-reference-corrected traces."""
     suite2p_plane_path = Path(suite2p_plane_path)
     aligned_funcimg_path = Path(aligned_funcimg_path)
     output_paths = {
-        "dff": aligned_funcimg_path / "DF_F0.npy",
-        "dff2": aligned_funcimg_path / "DF_F02.npy",
-        "dg_r": aligned_funcimg_path / "DG_R.npy",
+        "green_delta": aligned_funcimg_path / "reference_green_delta_v1.npy",
+        "red_delta": aligned_funcimg_path / "reference_red_delta_v1.npy",
+        "corrected_green_delta": (
+            aligned_funcimg_path / "reference_corrected_green_delta_v1.npy"
+        ),
     }
-    if all(path.is_file() for path in output_paths.values()):
+    diagnostics_path = aligned_funcimg_path / "reference_correction_diagnostics_v1.npz"
+    valid_frames = np.asarray(valid_frames, dtype=int)
+    if valid_frames.ndim != 1 or valid_frames.size == 0:
+        raise ValueError("valid_frames must be a non-empty one-dimensional array")
+    cache_is_complete = diagnostics_path.is_file() and all(
+        path.is_file() for path in output_paths.values()
+    )
+    cache_matches_alignment = False
+    if cache_is_complete:
+        with np.load(diagnostics_path) as diagnostics:
+            cache_matches_alignment = (
+                "valid_frames" in diagnostics
+                and np.array_equal(diagnostics["valid_frames"], valid_frames)
+            )
+    if cache_matches_alignment:
         outputs = {
             name: np.load(path, mmap_mode="r") for name, path in output_paths.items()
         }
@@ -212,7 +206,7 @@ def _load_or_extract_celltv_signals(
         missing = [name for name in required if not (suite2p_plane_path / name).is_file()]
         if missing:
             raise FileNotFoundError(
-                f"CellTV extraction requires {missing} under {suite2p_plane_path}"
+                f"Red-reference extraction requires {missing} under {suite2p_plane_path}"
             )
         arrays = [
             np.load(suite2p_plane_path / name, mmap_mode="r")
@@ -221,48 +215,73 @@ def _load_or_extract_celltv_signals(
         shapes = {array.shape for array in arrays}
         if len(shapes) != 1:
             raise ValueError(
-                f"CellTV green/red Suite2p arrays have incompatible shapes: {shapes}"
+                f"Green/red Suite2p arrays have incompatible shapes: {shapes}"
             )
-        valid_frames = np.asarray(valid_frames, dtype=int)
-        aligned_arrays = [array[:, valid_frames] for array in arrays]
+        if valid_frames.min() < 0 or valid_frames.max() >= arrays[0].shape[1]:
+            raise IndexError(
+                f"valid_frames range [{valid_frames.min()}, {valid_frames.max()}] is "
+                f"incompatible with Suite2p trace shape {arrays[0].shape}"
+            )
         ops = np.load(
             suite2p_plane_path / "ops.npy", allow_pickle=True
         ).item()
-        coefficient = _neuropil_coefficient(ops)
-        signals = two_channel_trace_qc.channel_signals(
-            *aligned_arrays, ops, coefficient
+        green_delta_full = compute_channel_delta(arrays[0], arrays[1], ops)
+        red_delta_full = compute_channel_delta(arrays[2], arrays[3], ops)
+        correction = fit_reference_correction(
+            green_delta_full, red_delta_full, fs=float(ops["fs"])
         )
         outputs = {
-            "dff": _suite2p_preprocess(signals["green"], ops),
-            "dff2": _suite2p_preprocess(signals["red"], ops),
-            "dg_r": _suite2p_preprocess(signals["ratio"], ops),
+            "green_delta": green_delta_full[:, valid_frames],
+            "red_delta": red_delta_full[:, valid_frames],
+            "corrected_green_delta": correction.corrected[:, valid_frames],
         }
         aligned_funcimg_path.mkdir(parents=True, exist_ok=True)
+        diagnostics_path.unlink(missing_ok=True)
         for name, path in output_paths.items():
             _atomic_save_npy(path, np.asarray(outputs[name], dtype=np.float32))
+        _atomic_save_npz(
+            diagnostics_path,
+            beta=correction.beta,
+            raw_standardized_coupling=correction.raw_standardized_coupling,
+            applied_standardized_coupling=correction.applied_standardized_coupling,
+            green_scale=correction.green_scale,
+            red_scale=correction.red_scale,
+            converged=correction.converged,
+            iterations=correction.iterations,
+            status=correction.status,
+            smoothing_kernel_frames=correction.smoothing_kernel_frames,
+            tuning_constant=correction.tuning_constant,
+            max_iterations=correction.max_iterations,
+            tolerance=correction.tolerance,
+            scale_epsilon=correction.scale_epsilon,
+            valid_frames=valid_frames,
+        )
         print(
-            "Saved CellTV aligned signals: "
-            + ", ".join(str(path) for path in output_paths.values())
+            "Saved aligned red-reference signals: "
+            + ", ".join(
+                str(path) for path in (*output_paths.values(), diagnostics_path)
+            )
         )
 
     shapes = {name: tuple(values.shape) for name, values in outputs.items()}
     if len(set(shapes.values())) != 1:
-        raise ValueError(f"Saved CellTV signal shapes are incompatible: {shapes}")
+        raise ValueError(f"Saved red-reference signal shapes are incompatible: {shapes}")
     expected_frames = len(np.asarray(valid_frames))
     signal_shape = next(iter(shapes.values()))
     if signal_shape[1] != expected_frames:
         raise ValueError(
-            f"Saved CellTV signals have {signal_shape[1]} frames, but valid_frames "
-            f"contains {expected_frames}; remove the three saved signal files and rerun"
+            f"Saved red-reference signals have {signal_shape[1]} frames, but "
+            f"valid_frames contains {expected_frames}; remove the four "
+            "reference_*_v1 files and rerun"
         )
 
     accepted = np.asarray(accepted, dtype=int)
     if accepted.ndim != 1 or accepted.size == 0:
-        raise ValueError("CellTV signals require at least one accepted ROI")
+        raise ValueError("Red-reference signals require at least one accepted ROI")
     if accepted.min() < 0 or accepted.max() >= signal_shape[0]:
         raise IndexError(
             f"Accepted ROI range [{accepted.min()}, {accepted.max()}] is incompatible "
-            f"with CellTV signal shapes {shapes}"
+            f"with red-reference signal shapes {shapes}"
         )
     return {name: np.asarray(values[accepted]) for name, values in outputs.items()}
 
@@ -333,13 +352,13 @@ def _parse_landmark_intervals(raw_session, subject, position, reward_frames):
 
 
 def load_session_data(mouse, session_id, project_root):
-    """Load aligned green and CellTV G/R signals needed by the overview plots."""
+    """Load aligned green and robust red-reference signals for the overview."""
     project_root = Path(project_root).expanduser().resolve()
     subject = str(mouse) if str(mouse).startswith("sub-") else f"sub-{mouse}"
     aligned_subject = project_root / "BehaviourAligned_robust" / "cohort2" / subject
     session_path = resolve_raw_session(aligned_subject, session_id)
 
-    dff, accepted, mean_img, image_mask, frame_rate = _load_nwb_imaging(session_path)
+    nwb_dff, accepted, mean_img, image_mask, frame_rate = _load_nwb_imaging(session_path)
     with np.load(session_path / "valid_frames.npz") as valid_data:
         valid_frames = np.asarray(valid_data["valid_frames"], dtype=int)
     suite2p_plane = (
@@ -352,18 +371,36 @@ def load_session_data(mouse, session_id, project_root):
         / "plane0"
     )
     try:
-        celltv = _load_or_extract_celltv_signals(
+        reference = _load_or_extract_reference_signals(
             suite2p_plane, session_path / "funcimg", accepted, valid_frames
         )
     except FileNotFoundError as error:
-        print(f"CellTV signals unavailable; G/R plots will be skipped: {error}")
-        celltv = None
-    gr = None if celltv is None else celltv["dg_r"]
-    if gr is not None and gr.shape != dff.shape:
-        raise ValueError(
-            f"Aligned CellTV G/R shape {gr.shape} does not match green shape {dff.shape}"
+        print(
+            "Red-reference signals unavailable; corrected plots will be skipped: "
+            f"{error}"
         )
-    reward_frames, position = _load_aligned_behaviour(session_path, dff.shape[1])
+        reference = None
+    if reference is None:
+        green_delta = nwb_dff
+        red_delta = None
+        corrected_green_delta = None
+    else:
+        green_delta = reference["green_delta"]
+        red_delta = reference["red_delta"]
+        corrected_green_delta = reference["corrected_green_delta"]
+        reference_shapes = {
+            "NWB green": nwb_dff.shape,
+            "computed green": green_delta.shape,
+            "computed red": red_delta.shape,
+            "corrected green": corrected_green_delta.shape,
+        }
+        if len(set(reference_shapes.values())) != 1:
+            raise ValueError(
+                f"Aligned imaging signal shapes do not match: {reference_shapes}"
+            )
+    reward_frames, position = _load_aligned_behaviour(
+        session_path, green_delta.shape[1]
+    )
     raw_session = (
         project_root / "rawdata" / "cohort2" / subject / session_path.name
     )
@@ -373,10 +410,10 @@ def load_session_data(mouse, session_id, project_root):
         raw_session, subject, position, reward_frames
     )
     return {
-        "dF": dff,
-        "celltv_dF": None if celltv is None else celltv["dff"],
-        "celltv_dF2": None if celltv is None else celltv["dff2"],
-        "gr": gr,
+        "dF": green_delta,
+        "nwb_dF": nwb_dff,
+        "red_dF": red_delta,
+        "red_reference_corrected_dF": corrected_green_delta,
         "neurons": accepted,
         "mean_img": mean_img,
         "image_mask": image_mask,
@@ -739,7 +776,7 @@ def plot_selected_cell_reward_psths(
 
 
 def remove_legacy_overview_plots(save_dir):
-    """Remove only plots 5--13 created by the previous full overview."""
+    """Remove only known outputs from previous overview implementations."""
     save_dir = Path(save_dir)
     removed = []
     for pattern in LEGACY_OVERVIEW_PATTERNS:
@@ -748,7 +785,7 @@ def remove_legacy_overview_plots(save_dir):
                 path.unlink()
                 removed.append(path)
     if removed:
-        print(f"Removed {len(removed)} legacy position/goal-progress plot(s).")
+        print(f"Removed {len(removed)} legacy overview plot(s).")
     return removed
 
 
@@ -764,11 +801,12 @@ def run_overview(
     save_dir=None,
     show=True,
 ):
-    """Load one aligned session and produce green plus optional CellTV G/R plots."""
+    """Produce green and optional red-reference-corrected overview plots."""
     data = load_session_data(mouse, session_id, project_root)
     dff = data["dF"]
-    gr = data.get("gr")
-    n_plots = 9 if gr is not None else 5
+    corrected = data.get("red_reference_corrected_dF")
+    green_label = "Green ΔF"
+    n_plots = 9 if corrected is not None else 5
     print(
         f"Loaded {dff.shape[0]} accepted cells, {dff.shape[1]} frames, "
         f"{data['frame_rate']:.2f} Hz"
@@ -801,7 +839,7 @@ def run_overview(
         title=f"{data['subject']} {data['session_path'].name}",
         save_path=output_path("1_fov_masks"),
     )
-    print(f"Plot 2/{n_plots}: raw dF/F traces...")
+    print(f"Plot 2/{n_plots}: raw {green_label} traces...")
     figures["raw_traces"] = plot_raw_traces(
         dff,
         n_cells=n_trace_cells,
@@ -810,6 +848,7 @@ def run_overview(
         cell_indices=trace_cell_indices,
         cell_labels=data["neurons"][trace_cell_indices],
         frame_rate=data["frame_rate"],
+        signal_label=green_label,
         save_path=output_path("2_raw_traces"),
     )
 
@@ -828,6 +867,7 @@ def run_overview(
                 data["frame_rate"],
                 window_size=reward_window,
                 cross_validated=cross_validated,
+                signal_label=green_label,
                 save_path=output_path(filename),
             )
         except ValueError as error:
@@ -851,6 +891,7 @@ def run_overview(
             data["frame_rate"],
             window_size=reward_psth_window,
             cell_labels=data["neurons"][trace_cell_indices],
+            signal_label=green_label,
             save_path=output_path("5_reward_psth_selected_cells"),
         )
     except ValueError as error:
@@ -860,48 +901,60 @@ def run_overview(
         if skipped_output:
             Path(skipped_output).unlink(missing_ok=True)
 
-    gr_outputs = (
-        "6_gr_raw_traces",
-        "7_gr_reward_heatmap",
-        "8_gr_reward_heatmap_cv",
-        "9_gr_reward_psth_selected_cells",
+    corrected_outputs = (
+        "6_reference_corrected_raw_traces",
+        "7_reference_corrected_reward_heatmap",
+        "8_reference_corrected_reward_heatmap_cv",
+        "9_reference_corrected_reward_psth_selected_cells",
     )
-    if gr is None:
-        for filename in gr_outputs:
+    if corrected is None:
+        for filename in corrected_outputs:
             skipped_output = output_path(filename)
             if skipped_output:
                 Path(skipped_output).unlink(missing_ok=True)
     else:
-        gr_label = "CellTV Δ(G/R)"
-        print(f"Plot 6/{n_plots}: raw {gr_label} traces...")
-        figures["gr_raw_traces"] = plot_raw_traces(
-            gr,
+        corrected_label = "Red-reference-corrected green ΔF"
+        print(f"Plot 6/{n_plots}: raw {corrected_label} traces...")
+        figures["reference_corrected_raw_traces"] = plot_raw_traces(
+            corrected,
             n_cells=n_trace_cells,
             start_frame=trace_start_frame,
             n_frames=trace_n_frames,
             cell_indices=trace_cell_indices,
             cell_labels=data["neurons"][trace_cell_indices],
             frame_rate=data["frame_rate"],
-            signal_label=gr_label,
-            save_path=output_path(gr_outputs[0]),
+            signal_label=corrected_label,
+            save_path=output_path(corrected_outputs[0]),
         )
 
         for key, filename, cross_validated, plot_number, label in (
-            ("gr_reward", gr_outputs[1], False, 7, "all trials"),
-            ("gr_reward_cv", gr_outputs[2], True, 8, "even/odd cross-validated"),
+            (
+                "reference_corrected_reward",
+                corrected_outputs[1],
+                False,
+                7,
+                "all trials",
+            ),
+            (
+                "reference_corrected_reward_cv",
+                corrected_outputs[2],
+                True,
+                8,
+                "even/odd cross-validated",
+            ),
         ):
             print(
-                f"Plot {plot_number}/{n_plots}: {gr_label} peri-reward "
+                f"Plot {plot_number}/{n_plots}: {corrected_label} peri-reward "
                 f"heatmap ({label})..."
             )
             try:
                 figures[key] = plot_reward_heatmap(
-                    gr,
+                    corrected,
                     data["reward_frames"],
                     data["frame_rate"],
                     window_size=reward_window,
                     cross_validated=cross_validated,
-                    signal_label=gr_label,
+                    signal_label=corrected_label,
                     save_path=output_path(filename),
                 )
             except ValueError as error:
@@ -912,13 +965,13 @@ def run_overview(
                     Path(skipped_output).unlink(missing_ok=True)
 
         print(
-            f"Plot 9/{n_plots}: selected-cell {gr_label} reward PSTHs bounded "
+            f"Plot 9/{n_plots}: selected-cell {corrected_label} reward PSTHs bounded "
             "by neighboring landmarks..."
         )
         try:
-            figures["gr_reward_psth_selected_cells"] = (
+            figures["reference_corrected_reward_psth_selected_cells"] = (
                 plot_selected_cell_reward_psths(
-                    gr,
+                    corrected,
                     trace_cell_indices,
                     data["reward_frames"],
                     data["landmark_entries"],
@@ -926,14 +979,14 @@ def run_overview(
                     data["frame_rate"],
                     window_size=reward_psth_window,
                     cell_labels=data["neurons"][trace_cell_indices],
-                    signal_label=gr_label,
-                    save_path=output_path(gr_outputs[3]),
+                    signal_label=corrected_label,
+                    save_path=output_path(corrected_outputs[3]),
                 )
             )
         except ValueError as error:
             print(f"  skipping plot: {error}")
-            figures["gr_reward_psth_selected_cells"] = None
-            skipped_output = output_path(gr_outputs[3])
+            figures["reference_corrected_reward_psth_selected_cells"] = None
+            skipped_output = output_path(corrected_outputs[3])
             if skipped_output:
                 Path(skipped_output).unlink(missing_ok=True)
 

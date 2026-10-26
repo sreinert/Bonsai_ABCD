@@ -590,8 +590,8 @@ def test_combined_report_writes_html_png_and_metrics(
         additional_dir = output_dir / "additional_two_channel"
         additional_dir.mkdir()
         (additional_dir / "trace_metrics.csv").write_text(
-            "roi,iscell,green_red_correlation,ratio_red_floor_fraction,green_dff_robust_sigma\n"
-            "0,1,0.5,0.1,0.2\n1,0,0.1,0.3,0.4\n",
+            "roi,iscell,green_red_correlation,ratio_red_floor_fraction,reference_corrected_robust_sigma,reference_applied_standardized_coupling\n"
+            "0,1,0.5,0.1,0.2,0.4\n1,0,0.1,0.3,0.4,0.0\n",
             encoding="utf-8",
         )
         (output_dir / "signal_quality_metrics.json").write_text(
@@ -603,7 +603,7 @@ def test_combined_report_writes_html_png_and_metrics(
             "high_snr_traces.png",
         ):
             (output_dir / name).write_bytes(b"test")
-        for name in ("summary.png", "selected_cells_celltv.png", "selected_cells_dff.png"):
+        for name in ("summary.png", "selected_cells_celltv.png", "selected_cells_reference.png"):
             (additional_dir / name).write_bytes(b"test")
 
     monkeypatch.setattr(generate_full_session_qc.subprocess, "run", fake_trace_qc)
@@ -665,6 +665,16 @@ def test_trace_qc_channel_calculation_matches_green_red_method() -> None:
     assert np.allclose(result["green"], expected_green)
     assert np.allclose(result["red_smoothed"], expected_red)
     assert np.allclose(result["ratio"], expected_green / np.maximum(expected_red, expected_floor))
+
+
+def test_trace_qc_reads_neuropil_coefficient_from_ops() -> None:
+    assert two_channel_trace_qc.neuropil_coefficient({"neucoeff": 0.35}) == 0.35
+    assert two_channel_trace_qc.neuropil_coefficient(
+        {"extraction": {"neuropil_coefficient": 0.55}}
+    ) == 0.55
+
+    with pytest.raises(KeyError, match="cannot reproduce CellTV"):
+        two_channel_trace_qc.neuropil_coefficient({})
 
 
 def test_trace_qc_normalizes_by_baseline() -> None:
