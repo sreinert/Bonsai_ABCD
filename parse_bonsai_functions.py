@@ -139,8 +139,6 @@ def load_settings(base_path):
             # fallback to 10 LMs
             ses_settings['n_landmarks'] = 10
     
-    print(ses_settings.keys())
-    print(ses_settings)
     return ses_settings, rig_settings
 
 
@@ -165,7 +163,8 @@ def load_data(base_path):
 
     if os.path.exists(Path(base_path) / "behav/current-landmark/"):
         
-        lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited"])
+        lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited","RewDel","IsGap","Boundary"])
+        # lm_reader = Csv("behav/current-landmark/*", ["Seconds","Count","Size","Texture","Odour","SequencePosition","Position","Visited"])
         # lm_reader = Csv("behav/current-landmark/*", ["Seconds","Size","Texture","Odour","SequencePosition","Position","Visited","Unknown"])
         lm_data = aeon.load(Path(base_path), lm_reader)
         #if datatype of 'Odour' is not string, reload the file
@@ -174,6 +173,7 @@ def load_data(base_path):
             lm_data = aeon.load(Path(base_path), lm_reader)
         lm_data = lm_data[lm_data['Visited'] == False]
         sess_lm_data = lm_data.drop_duplicates(subset=['Position'], keep='first')
+        sess_lm_data = sess_lm_data[~sess_lm_data.index.duplicated(keep='first')]
 
     sess_events_data = events_data[~events_data.index.duplicated(keep='first')]
     sess_lick_data = lick_data[~lick_data.index.duplicated(keep='first')]
@@ -687,22 +687,21 @@ def plot_conditional_matrix(sess_dataframe,ses_settings):
         x_labels = [str(i) for i in range(n_lms)]
 
     plt.figure(figsize=(12, 5))
-
     plt.subplot(1, 3, 1)
-    plt.imshow(control_prob, cmap='viridis', interpolation='none')
+    plt.imshow(transition_prob, cmap='viridis', interpolation='none')
     plt.colorbar()
     plt.clim(0, max_val)
-    plt.title('Control Probability Matrix (All Targets)')
+    plt.title('Transition Probability Matrix (Licked)')
     plt.xlabel('Next Landmark ID')
     plt.xticks([i for i in range(n_lms)], x_labels)
     plt.yticks([i for i in range(n_goals)], y_labels)
     plt.ylabel('Goal ID')
 
     plt.subplot(1, 3, 2)
-    plt.imshow(transition_prob, cmap='viridis', interpolation='none')
+    plt.imshow(control_prob, cmap='viridis', interpolation='none')
     plt.colorbar()
     plt.clim(0, max_val)
-    plt.title('Transition Probability Matrix (Licked)')
+    plt.title('Control Probability Matrix (All Targets)')
     plt.xlabel('Next Landmark ID')
     plt.xticks([i for i in range(n_lms)], x_labels)
     plt.yticks([i for i in range(n_goals)], y_labels)
@@ -858,38 +857,24 @@ def calc_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
     return performance, perf_a, perf_b, perf_c
 
-def plot_seq_fraction(sess_dataframe, ses_settings, test='transition'):
+def plot_seq_fraction(sess_dataframe,ses_settings,test='transition'):
 
-    perf_results = calc_seq_fraction(sess_dataframe, ses_settings, test='transition')
-    performance = perf_results[0]
-    perf_a, perf_b, perf_c = perf_results[1], perf_results[2], perf_results[3]
-    perf_individual = perf_results[1:]
+    performance, perf_a, perf_b, perf_c = calc_seq_fraction(sess_dataframe,ses_settings,test='transition')
+    perf_ctrl, perf_a_ctrl, perf_b_ctrl, perf_c_ctrl = calc_seq_fraction(sess_dataframe,ses_settings,test='control')
 
-    perf_ctrl_results = calc_seq_fraction(sess_dataframe, ses_settings, test='control')
-    perf_ctrl = perf_ctrl_results[0]
-    perf_a_ctrl, perf_b_ctrl, perf_c_ctrl = perf_ctrl_results[1], perf_ctrl_results[2], perf_ctrl_results[3]
-    perf_ctrl_individual = perf_ctrl_results[1:]
-
-    labels = ['A→B', 'B→C', 'C→A']          
-    colors = ['blue', 'orange', 'green']
-    x_pos = np.arange(3)
-
-    plt.figure(figsize=(7, 4))               
-    
-    plt.bar(x_pos, [perf_a, perf_b, perf_c], color=colors, label='Licked')
-    plt.bar(x_pos, [perf_a_ctrl, perf_b_ctrl, perf_c_ctrl], 
-            color=colors, alpha=0.3, hatch='//', label='Control')    
-    
-    plt.xticks(x_pos, labels)                
+    plt.figure(figsize=(6, 4))
+    plt.bar(['A->B', 'B->C', 'C->A'], [perf_a, perf_b, perf_c], color=['blue', 'orange', 'green'])
+    #add a dashed bar plot for control
+    plt.bar(['A->B', 'B->C', 'C->A'], [perf_a_ctrl, perf_b_ctrl, perf_c_ctrl], color=['blue', 'orange', 'green'], alpha=0.3, hatch='//')
     plt.ylim(0, 1)
     plt.ylabel('Fraction of Correct Transitions')
     plt.title('Sequencing Performance per Transition')
     plt.show()
 
-    perf_str = ', '.join([f'{p*100:.2f}%' for p in perf_individual])
-    ctrl_str = ', '.join([f'{p*100:.2f}%' for p in perf_ctrl_individual])
-    print(f'True Sequencing Performance: {performance*100:.2f}% ({perf_str})')
-    print(f'Control Performance: {perf_ctrl*100:.2f}% ({ctrl_str})')
+    print(f'Sequencing Performance: {performance*100:.2f}%')
+    print(f'Control Performance: {perf_ctrl*100:.2f}%')
+
+    return performance
 
 def safe_divide(a, b):
     a = np.asarray(a, dtype=float)
@@ -1315,6 +1300,9 @@ def identify_probe_laps(sess_dataframe, ses_settings):
     
     return lap_type
 
+            
+
+
 def plot_sw_hit_fa(sess_dataframe,ses_settings,window=10):
 
     target_positions, distractor_positions, target_id, distractor_id, was_target, lm_id = find_targets_distractors(sess_dataframe,ses_settings)
@@ -1358,8 +1346,38 @@ def divide_laps(sess_dataframe, ses_settings):
     corridor_length = calculate_corr_length(ses_settings)
     num_laps = int(np.ceil(sess_dataframe['Position'].max() / corridor_length))
 
-    #for each position, determine which lap it belongs to
-    sess_dataframe['Lap'] = (sess_dataframe['Position'] // corridor_length).astype(int)
+    #for each position, determine which lap it belongs to - does not work because position is shorter than corridor length should be.. 
+    # sess_dataframe['Lap'] = (sess_dataframe['Position'] // corridor_length).astype(int)
+
+    #find indices where the first odour of the next lap is reached
+    release_indices = sess_dataframe.index[sess_dataframe['Events'] == 'release: odour14'].tolist()
+    sess_dataframe['Lap'] = np.zeros(len(sess_dataframe), dtype=int)
+    if len(release_indices) < num_laps:
+        print(f"Warning: Number of release events ({len(release_indices)}) is less than expected number of laps ({num_laps}). Some release is missing - CHECK.")
+
+
+    corridor_flips = []
+    for i in range(1, int((sess_dataframe['Position'].max() / corridor_length)) + 1):
+        flip_index = sess_dataframe.index[sess_dataframe['Position'] >= i * corridor_length][0]
+        corridor_flips.append(flip_index)
+    corridor_flips = sess_dataframe.index[0:1].tolist() + corridor_flips  # Add the starting index for the first corridor flip
+    select_indices = []
+    count = 0
+    for i in range(1, num_laps):
+        if i - count >= len(release_indices):
+            min_index = corridor_flips[i]
+        else:
+            #select the smaller index either release_indices or corridor_flips for each corridor flip
+            min_index = min(release_indices[i-count], corridor_flips[i]) 
+            if min_index == corridor_flips[i]:
+                count += 1
+        select_indices.append(min_index)
+
+    for i in range(1,num_laps):
+        if i < num_laps - 1:
+            sess_dataframe.loc[select_indices[i-1]:select_indices[i], 'Lap'] = i
+        else:
+            sess_dataframe.loc[select_indices[i-1]:, 'Lap'] = i
 
     return num_laps, sess_dataframe
 
@@ -1405,7 +1423,7 @@ def give_state_id(sess_dataframe,ses_settings):
             else:
                 defining_goal_2 = goals[2]
 
-        for i in range(0,num_laps-1):
+        for i in range(0,len(rewarded_all_reshaped)-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
             if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
@@ -1427,7 +1445,7 @@ def give_state_id(sess_dataframe,ses_settings):
             else:
                 defining_goal_3 = goals[2]
 
-        for i in range(0,num_laps-1):
+        for i in range(0,len(rewarded_all_reshaped)-1):
             if rewarded_all_reshaped[i,defining_goal_1] == 1:
                 state_id[i+1] = 1
             if state_id[i]==1 and rewarded_all_reshaped[i,defining_goal_2] == 1:
@@ -1442,57 +1460,29 @@ def give_state_id(sess_dataframe,ses_settings):
     return state_id
 
 def plot_licks_per_trialtype(sess_dataframe, ses_settings):
-    n_landmarks = ses_settings.get('n_landmarks', 10)
-    goal_letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-    goal_colors = ['#7B2D5E', '#B5547A', '#E091B0', '#F5D0E3']
+    n_landmarks = ses_settings.get('n_landmarks', 10)  
     
     lap_id = identify_probe_laps(sess_dataframe, ses_settings)
-    state_id = give_state_id(sess_dataframe, ses_settings)
-    hit_rate, fa_rate, d_prime, licked_target, licked_distractor, licked_all, rewarded_all = calc_hit_fa(sess_dataframe, ses_settings)
+    state_id = give_state_id(sess_dataframe,ses_settings)
+    hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
-
+    
+    # Replaced instances harcoded for 10 LMs with n_landmarks
     if licked_all.shape[0] % n_landmarks != 0:
         licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
     licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
 
-    for i in range(int(np.max(lap_id)) + 1):
-        fig, ax = plt.subplots(figsize=(10, 3))
-
-        n_total = np.sum(lap_id == i)
-
-        for j in range(int(np.max(state_id)) + 1):
-            licks_per_state = licked_all_reshaped[np.where((lap_id == i) & (state_id == j))[0], :]
-            state_hist = np.sum(licks_per_state, axis=0) / licks_per_state.shape[0]
-            ax.plot(state_hist, label=f'Lap {i+1} State {j+1}')
-
-        trial_landmarks = ses_settings['trial'][i]['trial']['landmarks']
-        goals = {}  
-        for lm_idx, lm in enumerate(trial_landmarks):
-            for item in lm:
-                rsp = item.get('rewardSequencePosition', -1)
-                if rsp >= 0:
-                    goals[rsp] = lm_idx
-
-        ax.set_ylim(-0.35, 1.05)  # extends y to add space for goal id badges
-
-        for seq_pos, lm_idx in goals.items():
-            letter = goal_letters[seq_pos]
-            color = goal_colors[seq_pos % len(goal_colors)]
-            text_color = 'white' 
-            ax.plot(lm_idx, -0.18, marker='o', markersize=16,
-                    color=color, markeredgecolor='none',
-                    clip_on=False, zorder=5)
-            ax.text(lm_idx, -0.18, letter,
-                    ha='center', va='center', fontsize=7,
-                    fontweight='bold', color=text_color,
-                    clip_on=False, zorder=6)
-
-        ax.legend()
-        ax.set_xlabel('Landmark')
-        ax.set_ylabel('Fraction of Licks')
-        ax.set_title(f'Licks per State/Lap for Trial Type {i+1}\nn={n_total}', fontsize=10)
-
-        plt.tight_layout()
+ 
+    for i in range(int(np.max(lap_id))+1):
+        plt.figure(figsize=(10,2))
+        for j in range(int(np.max(state_id))+1):
+            licks_per_state = licked_all_reshaped[np.where((lap_id == i) & (state_id == j))[0],:]
+            state_hist = np.sum(licks_per_state,axis=0)/licks_per_state.shape[0]
+            plt.plot(state_hist, label=f'Lap {i+1} State {j+1}')
+            plt.legend()
+            plt.xlabel('Landmark')
+            plt.ylabel('Fraction of Licks')
+            plt.title(f'Licks per State/Lap for Trial Type {i+1}')
         plt.show()
 
 def plot_licks_per_state(sess_dataframe, ses_settings):
@@ -1532,7 +1522,7 @@ def plot_licks_per_state(sess_dataframe, ses_settings):
     plt.show()
 
 def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
-    n_landmarks = ses_settings.get('n_landmarks', 10)  
+    n_landmarks = ses_settings.get('n_landmarks', 10)  # ADD THIS LINE
     
     state_id = give_state_id(sess_dataframe,ses_settings)
     hit_rate, fa_rate,d_prime, licked_target, licked_distractor, licked_all,rewarded_all = calc_hit_fa(sess_dataframe,ses_settings)
@@ -1540,7 +1530,7 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
 
     state_output = {}
     
-    
+    # Replaced instances harcoded for 10 LMs with n_landmarks
     if licked_all.shape[0] % n_landmarks != 0:
         licked_all = np.pad(licked_all, (0, n_landmarks - (licked_all.shape[0] % n_landmarks)), 'constant')
     licked_all_reshaped = licked_all.reshape(np.round(licked_all.shape[0] / n_landmarks).astype(int), n_landmarks)
@@ -1573,7 +1563,7 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
         state_output['Lap2'] = state2_hist
         state_output['Lap3'] = state3_hist
 
-   
+    # Replaced instances harcoded for 10 LMs with n_landmarks
     angles = np.linspace(0, 2 * np.pi, len(state1_hist)-1, endpoint=False)
     angles = np.concatenate((angles, [angles[0]]))
     
@@ -1598,7 +1588,7 @@ def plot_polar_licks_per_state(sess_dataframe, ses_settings,plot=True):
 def calc_speed_per_lap(sess_dataframe, ses_settings):
     num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
     laps_needed = calc_laps_needed(ses_settings)
-    
+    #max position is the max of all positions where lap id is 0
     max_position = sess_dataframe['Position'][sess_dataframe['Lap'] == 0].max()
     max_position = np.round(max_position).astype(int)
 
@@ -1618,6 +1608,26 @@ def calc_speed_per_lap(sess_dataframe, ses_settings):
     sem_speed_per_bin = std_speed_per_bin/np.sqrt(num_laps)
 
     return speed_per_bin
+
+def calc_lick_rate_per_lap(sess_dataframe, ses_settings):
+    num_laps, sess_dataframe = divide_laps(sess_dataframe, ses_settings)
+    laps_needed = calc_laps_needed(ses_settings)
+    #max position is the max of all positions where lap id is 0
+    max_position = sess_dataframe['Position'][sess_dataframe['Lap'] == 0].max()
+    max_position = np.round(max_position).astype(int)
+
+    bins = 160
+    licks_per_bin = np.zeros((num_laps, bins))
+    bin_edges = np.linspace(0, max_position, bins+1)
+    #save lap_number as a variable with the same length as the position log
+    for i in range(num_laps):
+        lap_idx = np.where(sess_dataframe['Lap']==i)[0]
+        #find overlapping values in lick_idx and lap_idx -> changed to thresholded_lick_idx
+        overlap = np.intersect1d(np.where(sess_dataframe['Licks']), lap_idx)
+        licks_per_lap = np.array(sess_dataframe['Position'].iloc[overlap] - sess_dataframe['Position'].iloc[lap_idx].min())
+        licks_per_bin[i], _ = np.histogram(licks_per_lap, bins=bin_edges)
+
+    return licks_per_bin
 
 def plot_speed_per_state(sess_dataframe, ses_settings):
 
@@ -2021,7 +2031,7 @@ def estimate_lm_events(sess_dataframe, ses_settings):
         'Odour': lm_odour
     }).set_index('time')
 
-    if lm_df['Position'].iloc[0] != 0:
+    if lm_df['Position'].iloc[0] != 0 and not 'initialCorridorOffset' in ses_settings:
         # Add initial landmark at position 0 if not present
         initial_lm = pd.DataFrame({
             'time': [sess_dataframe.index[0]], #set the index to the first time point to make alignment work
