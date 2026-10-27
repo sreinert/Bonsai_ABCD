@@ -50,6 +50,13 @@ rawdata/cohort2/<mouse>/<full-session-id>/funcimg
 processed/cohort2/<mouse>/<short-session-id>/suite2p
 ```
 
+When one or more direct TIFF files whose names end in `_cropped.tif` or
+`_cropped.tiff` are present in the raw `funcimg` directory, the pipeline uses
+only those cropped files. If none are present, it retains the existing behavior
+and uses all direct TIFF files in `funcimg`. Registration records the selected
+files in its manifest, and every downstream stage uses the binaries produced
+from that registration.
+
 Standard Suite2p arrays are saved in `suite2p/plane0`. The combined HTML and
 PNG report is saved in `suite2p/qc`, and logs and provenance are saved in
 `suite2p/.workflow`.

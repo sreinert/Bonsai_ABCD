@@ -323,6 +323,26 @@ def test_full_pipeline_uses_standard_plane0_layout(tmp_path: Path) -> None:
         prepare_full_session_pipeline.build_pipeline(tmp_path, "../sub-02", session)
 
 
+def test_full_pipeline_prefers_cropped_tiff(tmp_path: Path) -> None:
+    mouse = "sub-02"
+    session = "ses-abab-random-001_date-20260824T120630"
+    funcimg = tmp_path / "rawdata/cohort2" / mouse / session / "funcimg"
+    funcimg.mkdir(parents=True)
+    tifffile.imwrite(funcimg / "full.tif", np.zeros((4, 5), dtype=np.uint16))
+    cropped = funcimg / "full_cropped.tif"
+    tifffile.imwrite(cropped, np.zeros((2, 3), dtype=np.uint16))
+    tifffile.imwrite(funcimg / "other.tiff", np.zeros((4, 5), dtype=np.uint16))
+
+    row, paths = prepare_full_session_pipeline.build_pipeline(
+        tmp_path, mouse, session
+    )
+
+    assert json.loads(str(row["tiff_files_json"])) == [str(cropped.resolve())]
+    assert paths["input_selection"] == "cropped"
+    assert paths["selected_tiffs"] == [str(cropped.resolve())]
+    assert paths["tiff_count"] == 1
+
+
 def test_full_pipeline_overwrite_removes_only_suite2p(tmp_path: Path) -> None:
     mouse = "sub-02"
     session = "ses-full002_date-20260818T134310"

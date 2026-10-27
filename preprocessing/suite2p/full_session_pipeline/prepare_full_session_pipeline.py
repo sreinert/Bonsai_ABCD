@@ -60,6 +60,23 @@ DOWNSTREAM_PLANE_OUTPUTS = (
 )
 
 
+def select_input_tiffs(funcimg: Path) -> tuple[list[Path], str]:
+    """Select direct TIFF inputs, preferring cropped recordings when present."""
+    tiffs = sorted(
+        path.resolve()
+        for path in funcimg.iterdir()
+        if path.is_file()
+        and not path.name.startswith("._")
+        and path.suffix.lower() in TIFF_SUFFIXES
+    )
+    cropped_tiffs = [
+        path for path in tiffs if path.stem.lower().endswith("_cropped")
+    ]
+    if cropped_tiffs:
+        return cropped_tiffs, "cropped"
+    return tiffs, "all-direct-tiffs"
+
+
 def file_snapshot(paths: list[Path]) -> dict[str, dict[str, int]]:
     return {
         str(path): {"size": path.stat().st_size, "mtime_ns": path.stat().st_mtime_ns}
@@ -187,13 +204,7 @@ def build_pipeline(
     funcimg = raw_session / "funcimg"
     if not funcimg.is_dir():
         raise NotADirectoryError(f"Raw funcimg directory not found: {funcimg}")
-    tiffs = sorted(
-        path.resolve()
-        for path in funcimg.iterdir()
-        if path.is_file()
-        and not path.name.startswith("._")
-        and path.suffix.lower() in TIFF_SUFFIXES
-    )
+    tiffs, input_selection = select_input_tiffs(funcimg)
     if not tiffs:
         raise FileNotFoundError(f"No direct TIFF files found in {funcimg}")
     for path in tiffs:
@@ -275,6 +286,8 @@ def build_pipeline(
         "workflow_dir": str(workflow_dir),
         "report": str(qc_dir / "index.html"),
         "tiff_count": len(tiffs),
+        "input_selection": input_selection,
+        "selected_tiffs": [str(path) for path in tiffs],
         "overwrote_existing": bool(existing_output and overwrite),
         "resume": bool(resume_validation),
         "rerun_detection": rerun_detection,
