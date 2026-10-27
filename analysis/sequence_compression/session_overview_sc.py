@@ -1,11 +1,13 @@
-"""Minimal overview plots for an aligned sequence-compression imaging session.
+"""Overview plots for an aligned sequence-compression imaging session.
 
 Imaging metadata is loaded from the barcode-aligned NWB. Green and red delta-fluorescence
 signals, plus Tukey red-reference-corrected green delta fluorescence, are loaded or
 extracted from the matching two-channel Suite2p traces and saved under the aligned
 session's ``funcimg`` folder. Landmark intervals are parsed only to keep reward-PSTH
 windows from overlapping other landmarks; no position-tuning or goal-progress analysis
-is performed.
+is performed. Raw VR behaviour is mapped onto the functional-imaging clock and compared
+with ``behaviour_data.npz``. The established Cohort1SC speed/lick PSTH, transition-matrix,
+and sliding-performance calculations are also shown side by side for raw and aligned data.
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import numpy as np
+import pandas as pd
 from scipy import stats
 
 import era_brewer
@@ -47,6 +50,13 @@ LEGACY_OVERVIEW_PATTERNS = (
     "7_gr_reward_heatmap.png",
     "8_gr_reward_heatmap_cv.png",
     "9_gr_reward_psth_selected_cells.png",
+)
+
+BEHAVIOUR_OUTPUT_NAMES = (
+    "behaviour_raw_vs_aligned.png",
+    "behaviour_speed_lick_rate_psth_raw_vs_aligned.png",
+    "behaviour_transition_matrix_raw_vs_aligned.png",
+    "behaviour_sw_hit_fa_split_raw_vs_aligned.png",
 )
 
 
@@ -130,7 +140,10 @@ def _load_nwb_imaging(session_path):
 
         n_rois = len(plane_seg)
         dff_frames_by_roi = _orient_dff(dff_on_disk, n_rois)
-        timestamps = nwb.acquisition["vDAQ_TTLsTable"][:]["timestamp"].values
+        timestamps = np.asarray(
+            nwb.acquisition["vDAQ_TTLsTable"][:]["timestamp"].values,
+            dtype=float,
+        )
         frame_rate = _empirical_frame_rate(timestamps)
 
     with np.load(session_path / "valid_frames.npz") as valid_data:
@@ -145,7 +158,7 @@ def _load_nwb_imaging(session_path):
     image_mask_all = plane_seg["image_mask"]
     dff = dff_valid[:, accepted].T
     image_mask = image_mask_all.iloc[accepted].reset_index(drop=True)
-    return dff, accepted, mean_img, image_mask, frame_rate
+    return dff, accepted, mean_img, image_mask, frame_rate, timestamps
 
 
 def _atomic_save_npy(path, values):
@@ -287,25 +300,145 @@ def _load_or_extract_reference_signals(
 
 
 def _load_aligned_behaviour(session_path, n_frames):
-    """Load aligned rewards and position, verifying their imaging-frame lengths."""
+    """Load aligned behaviour, verifying every array against the imaging frames."""
+    required = ("position", "speed", "licks", "rewards")
     with np.load(Path(session_path) / "behaviour_data.npz") as aligned:
-        if "rewards" not in aligned:
-            raise KeyError("behaviour_data.npz has no 'rewards' array")
-        if "position" not in aligned:
-            raise KeyError("behaviour_data.npz has no 'position' array")
-        rewards = np.asarray(aligned["rewards"])
-        position = np.asarray(aligned["position"], dtype=float)
-    if rewards.ndim != 1:
-        raise ValueError(f"Expected a one-dimensional rewards array, got {rewards.shape}")
-    if rewards.size != n_frames:
-        raise ValueError(
-            f"Aligned dF/F has {n_frames} frames but rewards has {rewards.size}"
+        missing = [name for name in required if name not in aligned]
+        if missing:
+            raise KeyError(f"behaviour_data.npz is missing arrays: {missing}")
+        values = {
+            name: np.asarray(aligned[name], dtype=float) for name in required
+        }
+    for name, array in values.items():
+        if array.ndim != 1:
+            raise ValueError(
+                f"Expected a one-dimensional {name} array, got {array.shape}"
+            )
+        if array.size != n_frames:
+            raise ValueError(
+                f"Aligned dF/F has {n_frames} frames but {name} has {array.size}"
+            )
+    values["position"] = np.nan_to_num(values["position"], nan=0.0)
+    values["speed"] = np.nan_to_num(values["speed"], nan=0.0)
+    return values
+
+
+def _aligned_frame_midpoints(frame_timestamps, valid_frames):
+    """Return the clock time at the midpoint of every aligned behaviour bin."""
+    frame_timestamps = np.asarray(frame_timestamps, dtype=float)
+    valid_frames = np.asarray(valid_frames, dtype=int)
+    if frame_timestamps.ndim != 1 or frame_timestamps.size < 2:
+        raise ValueError("Frame timestamps must be a one-dimensional array of length >= 2")
+    if valid_frames.ndim != 1 or valid_frames.size == 0:
+        raise ValueError("valid_frames must be a non-empty one-dimensional array")
+    if valid_frames.min() < 0 or valid_frames.max() + 1 >= frame_timestamps.size:
+        raise IndexError(
+            "Every aligned behaviour bin requires its starting and following frame "
+            "timestamp"
         )
-    if position.ndim != 1 or position.size != n_frames:
+    starts = frame_timestamps[valid_frames]
+    ends = frame_timestamps[valid_frames + 1]
+    if np.any(ends <= starts):
+        raise ValueError("Aligned behaviour bins do not have positive durations")
+    return starts + (ends - starts) / 2
+
+
+def _datetime_seconds(index):
+    """Convert a pandas datetime-like index to floating seconds without precision loss."""
+    converted = pd.DatetimeIndex(index)
+    if converted.hasnans:
+        raise ValueError("Behaviour timestamps contain NaT values")
+    return converted.asi8.astype(float) / 1e9
+
+
+def _map_raw_times_to_imaging_clock(raw_index, analog_index, analog_imaging_times):
+    """Map Bonsai/Harp timestamps onto the barcode-aligned imaging clock."""
+    raw_seconds = _datetime_seconds(raw_index)
+    analog_seconds = _datetime_seconds(analog_index)
+    analog_imaging_times = np.asarray(analog_imaging_times, dtype=float)
+    if analog_seconds.size != analog_imaging_times.size or analog_seconds.size < 2:
         raise ValueError(
-            f"Aligned dF/F has {n_frames} frames but position has {position.shape}"
+            "Analog timestamps and imaging-clock samples must have equal length >= 2"
         )
-    return np.flatnonzero(rewards), np.nan_to_num(position, nan=0.0)
+    if np.any(np.diff(analog_seconds) <= 0):
+        raise ValueError("Remapped analog timestamps must be strictly increasing")
+    origin = analog_seconds[0]
+    return np.interp(
+        raw_seconds - origin,
+        analog_seconds - origin,
+        analog_imaging_times,
+    )
+
+
+def _nearest_frame_indices(event_times, frame_times):
+    """Map ordered event times to unique nearest aligned imaging frames."""
+    event_times = np.asarray(event_times, dtype=float)
+    frame_times = np.asarray(frame_times, dtype=float)
+    if event_times.ndim != 1 or frame_times.ndim != 1 or frame_times.size == 0:
+        raise ValueError("Event and frame times must be one-dimensional")
+    insertion = np.searchsorted(frame_times, event_times)
+    insertion = np.clip(insertion, 0, frame_times.size - 1)
+    previous = np.clip(insertion - 1, 0, frame_times.size - 1)
+    choose_previous = np.abs(event_times - frame_times[previous]) <= np.abs(
+        event_times - frame_times[insertion]
+    )
+    mapped = np.where(choose_previous, previous, insertion).astype(int)
+    if mapped.size and (np.any(np.diff(mapped) <= 0) or np.unique(mapped).size != mapped.size):
+        raise ValueError(
+            "Raw landmark events do not map to distinct, strictly ordered imaging frames"
+        )
+    return mapped
+
+
+def _build_aligned_task_dataframe(aligned, frame_times, raw_dataframe, raw_times):
+    """Build the frame-indexed dataframe expected by Cohort1SC task metrics."""
+    frame_times = np.asarray(frame_times, dtype=float)
+    raw_times = np.asarray(raw_times, dtype=float)
+    if len(frame_times) != len(aligned["position"]):
+        raise ValueError("Aligned frame timestamps do not match behaviour arrays")
+    index = pd.to_datetime(frame_times, unit="s", origin="unix")
+    dataframe = pd.DataFrame(
+        {
+            "Position": aligned["position"],
+            "Treadmill": aligned["speed"],
+            "Licks": aligned["licks"],
+            "Rewards": np.where(aligned["rewards"] > 0, aligned["rewards"], np.nan),
+            "Buffer": np.arange(len(frame_times), dtype=float),
+        },
+        index=index,
+    )
+
+    if "LM_Count" in raw_dataframe.columns:
+        event_mask = raw_dataframe["LM_Count"].notna() & (
+            raw_dataframe["LM_Count"] >= 0
+        )
+        event_rows = raw_dataframe.loc[event_mask]
+        mapped = _nearest_frame_indices(raw_times[event_mask.to_numpy()], frame_times)
+        for column in ("LM_Count", "LM_Position", "LM_Odour", "Sequence_Position"):
+            if column in raw_dataframe.columns:
+                if pd.api.types.is_numeric_dtype(raw_dataframe[column].dtype):
+                    dataframe[column] = np.nan
+                else:
+                    dataframe[column] = pd.Series(
+                        [None] * len(dataframe), index=dataframe.index, dtype=object
+                    )
+                dataframe.iloc[
+                    mapped, dataframe.columns.get_loc(column)
+                ] = event_rows[column].to_numpy()
+    else:
+        if "Events" not in raw_dataframe.columns:
+            raise KeyError("Raw behaviour has neither LM_Count nor Events")
+        event_text = raw_dataframe["Events"].fillna("").astype(str)
+        event_mask = event_text.str.startswith("release") & ~event_text.str.contains(
+            "odour0"
+        )
+        mapped = _nearest_frame_indices(raw_times[event_mask.to_numpy()], frame_times)
+        dataframe["Events"] = np.nan
+        dataframe.iloc[mapped, dataframe.columns.get_loc("Events")] = event_text.loc[
+            event_mask
+        ].to_numpy()
+
+    return dataframe
 
 
 def _parse_landmark_intervals(raw_session, subject, position, reward_frames):
@@ -351,6 +484,84 @@ def _parse_landmark_intervals(raw_session, subject, position, reward_frames):
     return entries, exits
 
 
+def _load_behaviour_analysis(raw_session, subject, aligned, frame_times, session_path):
+    """Load raw VR data and build parallel raw/aligned task-analysis objects."""
+    from pynwb import NWBHDF5IO
+
+    from analysis.sequence_compression.session_functions import behaviour as behaviour_models
+    from analysis.sequence_compression.session_functions import io as session_io
+    from analysis.sequence_compression.session_functions import performance as performance_models
+    from analysis.sequence_compression.session_functions import session as session_models
+    from nwb_barcoding.build_behaviour_data import (
+        align_analog_to_events,
+        fit_analog_clock,
+        get_ttl,
+        load_analog_data,
+    )
+
+    settings, rig_settings = session_io.load_settings(raw_session)
+    raw_dataframe = session_io.load_data(raw_session)
+    analog_data = load_analog_data(raw_session, rig_settings)
+    remapped_analog = align_analog_to_events(analog_data, raw_dataframe)
+
+    nwb_paths = sorted(Path(session_path).glob("*.nwb"))
+    if len(nwb_paths) != 1:
+        raise ValueError(
+            f"Expected exactly one merged NWB in {session_path}, found {nwb_paths}"
+        )
+    with NWBHDF5IO(str(nwb_paths[0]), mode="r") as io:
+        camera_timestamps = get_ttl(io.read(), "CameraFrameTTL")
+    clock_fit = fit_analog_clock(
+        remapped_analog["camera"].to_numpy(), camera_timestamps
+    )
+    raw_times = _map_raw_times_to_imaging_clock(
+        raw_dataframe.index,
+        remapped_analog.index,
+        clock_fit["sample_times"],
+    )
+
+    frame_times = np.asarray(frame_times, dtype=float)
+    half_frame = np.median(np.diff(frame_times)) / 2
+    overlap = (raw_times >= frame_times[0] - half_frame) & (
+        raw_times <= frame_times[-1] + half_frame
+    )
+    if not np.any(overlap):
+        raise ValueError("Raw VR data do not overlap the aligned imaging frames")
+    raw_dataframe = raw_dataframe.loc[overlap].copy()
+    raw_times = raw_times[overlap]
+    # Session's landmark parser treats Buffer as a positional row index. Cropping to
+    # the imaging overlap therefore requires re-indexing this column from zero.
+    raw_dataframe["Buffer"] = np.arange(len(raw_dataframe), dtype=float)
+
+    aligned_dataframe = _build_aligned_task_dataframe(
+        aligned, frame_times, raw_dataframe, raw_times
+    )
+    mouse_id = subject.removeprefix("sub-")
+    stage = short_session_name(Path(raw_session).name)
+    raw_task_session = session_models.Session(
+        settings, raw_dataframe, raw_session, mouse_id, 2, stage
+    )
+    aligned_task_session = session_models.Session(
+        settings, aligned_dataframe, raw_session, mouse_id, 2, stage
+    )
+    raw_performance = performance_models.Performance(raw_task_session)
+    aligned_performance = performance_models.Performance(aligned_task_session)
+    return {
+        "raw_dataframe": raw_dataframe,
+        "raw_times": raw_times,
+        "raw_session": raw_task_session,
+        "aligned_session": aligned_task_session,
+        "raw_behaviour": behaviour_models.Behaviour(
+            raw_task_session, raw_performance
+        ),
+        "aligned_behaviour": behaviour_models.Behaviour(
+            aligned_task_session, aligned_performance
+        ),
+        "raw_performance": raw_performance,
+        "aligned_performance": aligned_performance,
+    }
+
+
 def load_session_data(mouse, session_id, project_root):
     """Load aligned green and robust red-reference signals for the overview."""
     project_root = Path(project_root).expanduser().resolve()
@@ -358,7 +569,14 @@ def load_session_data(mouse, session_id, project_root):
     aligned_subject = project_root / "BehaviourAligned_robust" / "cohort2" / subject
     session_path = resolve_raw_session(aligned_subject, session_id)
 
-    nwb_dff, accepted, mean_img, image_mask, frame_rate = _load_nwb_imaging(session_path)
+    (
+        nwb_dff,
+        accepted,
+        mean_img,
+        image_mask,
+        frame_rate,
+        frame_timestamps,
+    ) = _load_nwb_imaging(session_path)
     with np.load(session_path / "valid_frames.npz") as valid_data:
         valid_frames = np.asarray(valid_data["valid_frames"], dtype=int)
     suite2p_plane = (
@@ -398,9 +616,10 @@ def load_session_data(mouse, session_id, project_root):
             raise ValueError(
                 f"Aligned imaging signal shapes do not match: {reference_shapes}"
             )
-    reward_frames, position = _load_aligned_behaviour(
-        session_path, green_delta.shape[1]
-    )
+    aligned_behaviour = _load_aligned_behaviour(session_path, green_delta.shape[1])
+    reward_frames = np.flatnonzero(aligned_behaviour["rewards"])
+    position = aligned_behaviour["position"]
+    frame_times = _aligned_frame_midpoints(frame_timestamps, valid_frames)
     raw_session = (
         project_root / "rawdata" / "cohort2" / subject / session_path.name
     )
@@ -408,6 +627,9 @@ def load_session_data(mouse, session_id, project_root):
         raise FileNotFoundError(f"Matching raw session does not exist: {raw_session}")
     landmark_entries, landmark_exits = _parse_landmark_intervals(
         raw_session, subject, position, reward_frames
+    )
+    behaviour_analysis = _load_behaviour_analysis(
+        raw_session, subject, aligned_behaviour, frame_times, session_path
     )
     return {
         "dF": green_delta,
@@ -418,11 +640,14 @@ def load_session_data(mouse, session_id, project_root):
         "mean_img": mean_img,
         "image_mask": image_mask,
         "frame_rate": frame_rate,
+        "frame_times": frame_times,
+        "aligned_behaviour": aligned_behaviour,
         "reward_frames": reward_frames,
         "landmark_entries": landmark_entries,
         "landmark_exits": landmark_exits,
         "session_path": session_path,
         "subject": subject,
+        "behaviour_analysis": behaviour_analysis,
     }
 
 
@@ -775,6 +1000,167 @@ def plot_selected_cell_reward_psths(
     return fig
 
 
+def plot_behaviour_alignment(data, save_path=None):
+    """Compare raw VR signals with the frame-binned aligned NPZ arrays."""
+    context = data["behaviour_analysis"]
+    raw = context["raw_dataframe"]
+    raw_times = np.asarray(context["raw_times"], dtype=float)
+    aligned = data["aligned_behaviour"]
+    frame_times = np.asarray(data["frame_times"], dtype=float)
+    time_origin = frame_times[0]
+    raw_elapsed = raw_times - time_origin
+    aligned_elapsed = frame_times - time_origin
+
+    fig, axes = plt.subplots(4, 1, figsize=(15, 10), sharex=True)
+    axes[0].plot(raw_elapsed, raw["Position"], color="0.25", lw=0.8, label="Raw VR")
+    axes[0].plot(
+        aligned_elapsed,
+        aligned["position"],
+        color="#4478ac",
+        lw=0.9,
+        alpha=0.9,
+        label="Aligned NPZ",
+    )
+    axes[0].set_ylabel("Position")
+    axes[0].legend(frameon=False, loc="upper right")
+
+    axes[1].plot(raw_elapsed, raw["Treadmill"], color="0.25", lw=0.8)
+    axes[1].plot(
+        aligned_elapsed,
+        aligned["speed"],
+        color="#4478ac",
+        lw=0.9,
+        alpha=0.9,
+    )
+    axes[1].set_ylabel("Speed")
+
+    raw_lick_mask = raw["Licks"].to_numpy(dtype=float) > 0
+    aligned_lick_mask = aligned["licks"] > 0
+    raw_lick_count = int(np.nansum(raw["Licks"].to_numpy(dtype=float)))
+    aligned_lick_count = int(np.nansum(aligned["licks"]))
+    axes[2].scatter(
+        raw_elapsed[raw_lick_mask],
+        np.ones(np.sum(raw_lick_mask)),
+        s=9,
+        color="0.25",
+        label=f"Raw VR (n={raw_lick_count})",
+    )
+    axes[2].scatter(
+        aligned_elapsed[aligned_lick_mask],
+        np.zeros(np.sum(aligned_lick_mask)),
+        s=9,
+        color="#d97706",
+        label=f"Aligned NPZ (n={aligned_lick_count})",
+    )
+    axes[2].set_yticks([0, 1], labels=["Aligned", "Raw"])
+    axes[2].set_ylabel("Licks")
+    axes[2].legend(frameon=False, loc="upper right")
+
+    raw_reward_mask = raw["Rewards"].notna().to_numpy()
+    aligned_reward_mask = aligned["rewards"] > 0
+    aligned_reward_count = int(np.nansum(aligned["rewards"]))
+    axes[3].scatter(
+        raw_elapsed[raw_reward_mask],
+        np.ones(np.sum(raw_reward_mask)),
+        s=12,
+        color="0.25",
+        label=f"Raw VR (n={int(np.sum(raw_reward_mask))})",
+    )
+    axes[3].scatter(
+        aligned_elapsed[aligned_reward_mask],
+        np.zeros(np.sum(aligned_reward_mask)),
+        s=12,
+        color="#2f855a",
+        label=f"Aligned NPZ (n={aligned_reward_count})",
+    )
+    axes[3].set_yticks([0, 1], labels=["Aligned", "Raw"])
+    axes[3].set_ylabel("Rewards")
+    axes[3].set_xlabel("Time from first aligned frame (s)")
+    axes[3].legend(frameon=False, loc="upper right")
+
+    for axis in axes:
+        axis.spines[["top", "right"]].set_visible(False)
+        axis.set_xlim(aligned_elapsed[0], aligned_elapsed[-1])
+    fig.suptitle("Raw VR versus behaviour_data.npz")
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_behaviour_psth_comparison(context, save_path=None):
+    """Plot the established speed/lick PSTHs for raw and aligned behaviour."""
+    from analysis.sequence_compression.session_functions import plotting
+
+    fig, axes = plt.subplots(2, 2, figsize=(12, 8), squeeze=False)
+    for row, (label, session, behaviour) in enumerate(
+        (
+            ("Raw VR", context["raw_session"], context["raw_behaviour"]),
+            (
+                "Aligned NPZ",
+                context["aligned_session"],
+                context["aligned_behaviour"],
+            ),
+        )
+    ):
+        plotting.plot_speed_lick_rate_psth(
+            session, behaviour, bins=None, axes=axes[row]
+        )
+        axes[row, 0].set_title(f"{label} — speed")
+        axes[row, 1].set_title(f"{label} — lick rate")
+    fig.suptitle("Landmark-aligned speed and lick-rate PSTHs")
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_behaviour_transition_comparison(context, save_path=None):
+    """Plot raw and aligned versions of the established transition matrices."""
+    from analysis.sequence_compression.session_functions import plotting
+
+    fig, axes = plt.subplots(2, 3, figsize=(15, 9), squeeze=False)
+    for row, (label, session, performance) in enumerate(
+        (
+            ("Raw VR", context["raw_session"], context["raw_performance"]),
+            (
+                "Aligned NPZ",
+                context["aligned_session"],
+                context["aligned_performance"],
+            ),
+        )
+    ):
+        plotting.plot_transition_matrix(session, performance, axes=axes[row])
+        for axis in axes[row]:
+            axis.set_title(f"{label} — {axis.get_title()}")
+    fig.suptitle("Task transition matrices")
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
+def plot_behaviour_sliding_performance(context, save_path=None):
+    """Plot split landmark hit/false-alarm rates for raw and aligned behaviour."""
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4), sharey=True)
+    for axis, (label, performance) in zip(
+        axes,
+        (
+            ("Raw VR", context["raw_performance"]),
+            ("Aligned NPZ", context["aligned_performance"]),
+        ),
+    ):
+        performance.calc_sw_hit_fa(
+            split_lms=True, window=24, plot=True, ax=axis
+        )
+        axis.set_title(label)
+    fig.suptitle("Sliding task performance (24-landmark window)")
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+    return fig
+
+
 def remove_legacy_overview_plots(save_dir):
     """Remove only known outputs from previous overview implementations."""
     save_dir = Path(save_dir)
@@ -801,24 +1187,20 @@ def run_overview(
     save_dir=None,
     show=True,
 ):
-    """Produce green and optional red-reference-corrected overview plots."""
-    data = load_session_data(mouse, session_id, project_root)
-    dff = data["dF"]
-    corrected = data.get("red_reference_corrected_dF")
-    green_label = "Green ΔF"
-    n_plots = 9 if corrected is not None else 5
-    print(
-        f"Loaded {dff.shape[0]} accepted cells, {dff.shape[1]} frames, "
-        f"{data['frame_rate']:.2f} Hz"
-    )
-
+    """Produce imaging plus strict raw/aligned behavioural overview plots."""
     if save_dir is None:
+        project_root_path = Path(project_root).expanduser().resolve()
+        subject = str(mouse) if str(mouse).startswith("sub-") else f"sub-{mouse}"
+        aligned_subject = (
+            project_root_path / "BehaviourAligned_robust" / "cohort2" / subject
+        )
+        resolved_session = resolve_raw_session(aligned_subject, session_id)
         save_dir = (
-            Path(project_root)
+            project_root_path
             / "analysis"
             / "cohort2"
-            / data["subject"]
-            / data["session_path"].name
+            / subject
+            / resolved_session.name
         )
     elif save_dir is False:
         save_dir = None
@@ -826,6 +1208,19 @@ def run_overview(
         save_dir = Path(save_dir)
     if save_dir:
         save_dir.mkdir(parents=True, exist_ok=True)
+        for filename in BEHAVIOUR_OUTPUT_NAMES:
+            (save_dir / filename).unlink(missing_ok=True)
+
+    data = load_session_data(mouse, session_id, project_root)
+    dff = data["dF"]
+    corrected = data.get("red_reference_corrected_dF")
+    green_label = "Green ΔF"
+    n_imaging_plots = 9 if corrected is not None else 5
+    n_plots = n_imaging_plots + len(BEHAVIOUR_OUTPUT_NAMES)
+    print(
+        f"Loaded {dff.shape[0]} accepted cells, {dff.shape[1]} frames, "
+        f"{data['frame_rate']:.2f} Hz"
+    )
 
     def output_path(name):
         return str(save_dir / f"{name}.png") if save_dir else None
@@ -989,6 +1384,36 @@ def run_overview(
             skipped_output = output_path(corrected_outputs[3])
             if skipped_output:
                 Path(skipped_output).unlink(missing_ok=True)
+
+    behaviour_start = n_imaging_plots + 1
+    context = data["behaviour_analysis"]
+    print(
+        f"Plot {behaviour_start}/{n_plots}: raw VR versus aligned behaviour QC..."
+    )
+    figures["behaviour_alignment"] = plot_behaviour_alignment(
+        data, save_path=output_path(BEHAVIOUR_OUTPUT_NAMES[0][:-4])
+    )
+    print(
+        f"Plot {behaviour_start + 1}/{n_plots}: "
+        "raw/aligned speed and lick-rate PSTHs..."
+    )
+    figures["behaviour_speed_lick_psth"] = plot_behaviour_psth_comparison(
+        context, save_path=output_path(BEHAVIOUR_OUTPUT_NAMES[1][:-4])
+    )
+    print(
+        f"Plot {behaviour_start + 2}/{n_plots}: raw/aligned transition matrices..."
+    )
+    figures["behaviour_transition_matrix"] = (
+        plot_behaviour_transition_comparison(
+            context, save_path=output_path(BEHAVIOUR_OUTPUT_NAMES[2][:-4])
+        )
+    )
+    print(
+        f"Plot {behaviour_start + 3}/{n_plots}: raw/aligned sliding performance..."
+    )
+    figures["behaviour_sliding_performance"] = plot_behaviour_sliding_performance(
+        context, save_path=output_path(BEHAVIOUR_OUTPUT_NAMES[3][:-4])
+    )
 
     if save_dir:
         remove_legacy_overview_plots(save_dir)

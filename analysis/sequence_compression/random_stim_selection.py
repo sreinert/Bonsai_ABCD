@@ -1,7 +1,7 @@
 import random
 import numpy as np
 
-previous_random_number = 2
+previous_random_number = 3
 
 available_numbers = [n for n in range(1, 5) if n != previous_random_number]
 session_number = random.choice(available_numbers)

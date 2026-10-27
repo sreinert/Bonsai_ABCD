@@ -122,6 +122,22 @@ DG_R.npy
 Existing complete files are reused. The overview adds raw-trace, peri-reward,
 cross-validated peri-reward, and selected-cell reward-PSTH plots for `DG_R.npy`.
 
+The overview stage uses the existing `suite2p-reg-1.1.0` conda environment rather
+than the barcode-alignment uv environment. Install its small set of additional
+analysis dependencies once:
+
+```bash
+module load mamba
+source activate suite2p-reg-1.1.0
+python -m pip install -r \
+  analysis/sequence_compression/requirements-session-overview.txt
+```
+
+The submission launcher activates `suite2p-reg-1.1.0` automatically and validates
+Python 3.11, Suite2p 1.1.0, and all overview imports before submitting jobs. Set
+`SESSION_OVERVIEW_ENV` to override the conda environment name, or pass an explicit
+Python executable as the optional third positional argument.
+
 Submit overviews independently after alignment jobs have finished:
 
 ```bash

@@ -113,7 +113,7 @@ def run_session(
     subject: str,
     session: str,
 ) -> Path:
-    """Generate the five-plot overview for one already-aligned session."""
+    """Generate the imaging and behavioural overview for one aligned session."""
     project_root = Path(project_root).expanduser().resolve()
     subject = normalize_subject(subject)
     aligned_subject = project_root / "BehaviourAligned_robust" / "cohort2" / subject

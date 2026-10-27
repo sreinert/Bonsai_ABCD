@@ -140,13 +140,168 @@ def test_load_aligned_behaviour_checks_alignment(tmp_path):
         tmp_path / "behaviour_data.npz",
         rewards=[0, 1, 0, 2],
         position=[0.0, 1.0, np.nan, 3.0],
+        speed=[1.0, np.nan, 3.0, 4.0],
+        licks=[0, 0, 2, 0],
     )
 
-    rewards, position = overview._load_aligned_behaviour(tmp_path, 4)
-    np.testing.assert_array_equal(rewards, [1, 3])
-    np.testing.assert_array_equal(position, [0, 1, 0, 3])
-    with pytest.raises(ValueError, match="rewards has 4"):
+    aligned = overview._load_aligned_behaviour(tmp_path, 4)
+    assert set(aligned) == {"position", "speed", "licks", "rewards"}
+    np.testing.assert_array_equal(aligned["position"], [0, 1, 0, 3])
+    np.testing.assert_array_equal(aligned["speed"], [1, 0, 3, 4])
+    np.testing.assert_array_equal(aligned["licks"], [0, 0, 2, 0])
+    np.testing.assert_array_equal(aligned["rewards"], [0, 1, 0, 2])
+    with pytest.raises(ValueError, match="has 4"):
         overview._load_aligned_behaviour(tmp_path, 3)
+
+
+def test_aligned_frame_midpoints_and_raw_clock_mapping():
+    midpoints = overview._aligned_frame_midpoints(
+        [10.0, 10.2, 10.4, 10.6, 10.8], [1, 2, 3]
+    )
+    np.testing.assert_allclose(midpoints, [10.3, 10.5, 10.7])
+
+    analog_index = pd.to_datetime([100.0, 101.0, 102.0], unit="s")
+    raw_index = pd.to_datetime([100.5, 101.5], unit="s")
+    mapped = overview._map_raw_times_to_imaging_clock(
+        raw_index, analog_index, [5.0, 7.0, 9.0]
+    )
+    np.testing.assert_allclose(mapped, [6.0, 8.0])
+
+
+def test_aligned_task_dataframe_maps_landmarks_to_distinct_frames():
+    aligned = {
+        "position": np.array([0.0, 10.0, 20.0, 30.0]),
+        "speed": np.array([1.0, 2.0, 3.0, 4.0]),
+        "licks": np.array([0.0, 1.0, 0.0, 0.0]),
+        "rewards": np.array([0.0, 0.0, 1.0, 0.0]),
+    }
+    raw = pd.DataFrame(
+        {
+            "LM_Count": [np.nan, 0, 1],
+            "LM_Position": [np.nan, 10.0, 30.0],
+            "LM_Odour": [np.nan, "odour1", "odour2"],
+        },
+        index=pd.to_datetime([0.0, 1.0, 3.0], unit="s"),
+    )
+
+    dataframe = overview._build_aligned_task_dataframe(
+        aligned, [0.0, 1.0, 2.0, 3.0], raw, [0.0, 1.0, 3.0]
+    )
+
+    np.testing.assert_array_equal(
+        np.flatnonzero(dataframe["LM_Count"].notna()), [1, 3]
+    )
+    assert dataframe["Licks"].iloc[1] == 1
+    assert dataframe["Rewards"].notna().to_numpy().tolist() == [False, False, True, False]
+
+    with pytest.raises(ValueError, match="distinct, strictly ordered"):
+        overview._nearest_frame_indices([0.9, 1.1], [0.0, 1.0, 2.0])
+
+
+def test_paired_behaviour_figures_use_raw_and_aligned_calculations(
+    tmp_path, monkeypatch
+):
+    from analysis.sequence_compression.session_functions import plotting
+
+    calls = []
+
+    def fake_psth(session, behaviour, bins=None, axes=None, **kwargs):
+        calls.append(("psth", session, behaviour, bins, len(axes)))
+        axes[0].set_title("Speed")
+        axes[1].set_title("Lick rate")
+        return axes[0].figure
+
+    def fake_transition(session, performance, axes=None):
+        calls.append(("transition", session, performance, len(axes)))
+        for axis, title in zip(axes, ("Stimulus", "Lick", "Ideal")):
+            axis.set_title(title)
+        return axes[0].figure
+
+    class FakePerformance:
+        def __init__(self, name):
+            self.name = name
+
+        def calc_sw_hit_fa(self, **kwargs):
+            calls.append(("sliding", self.name, kwargs["window"], kwargs["split_lms"]))
+            kwargs["ax"].plot([0, 1], [0.2, 0.8])
+            return {}, {}, kwargs["ax"].figure
+
+    monkeypatch.setattr(plotting, "plot_speed_lick_rate_psth", fake_psth)
+    monkeypatch.setattr(plotting, "plot_transition_matrix", fake_transition)
+    context = {
+        "raw_session": "raw-session",
+        "aligned_session": "aligned-session",
+        "raw_behaviour": "raw-behaviour",
+        "aligned_behaviour": "aligned-behaviour",
+        "raw_performance": FakePerformance("raw"),
+        "aligned_performance": FakePerformance("aligned"),
+    }
+
+    psth = overview.plot_behaviour_psth_comparison(
+        context, tmp_path / "psth.png"
+    )
+    transition = overview.plot_behaviour_transition_comparison(
+        context, tmp_path / "transition.png"
+    )
+    sliding = overview.plot_behaviour_sliding_performance(
+        context, tmp_path / "sliding.png"
+    )
+
+    assert [call[0] for call in calls] == [
+        "psth",
+        "psth",
+        "transition",
+        "transition",
+        "sliding",
+        "sliding",
+    ]
+    assert calls[0][1:4] == ("raw-session", "raw-behaviour", None)
+    assert calls[1][1:4] == ("aligned-session", "aligned-behaviour", None)
+    assert calls[-2][2:] == (24, True)
+    assert calls[-1][2:] == (24, True)
+    assert (tmp_path / "psth.png").is_file()
+    assert (tmp_path / "transition.png").is_file()
+    assert (tmp_path / "sliding.png").is_file()
+    plt.close(psth)
+    plt.close(transition)
+    plt.close(sliding)
+
+
+def test_behaviour_alignment_plot_contains_four_comparison_panels(tmp_path):
+    raw = pd.DataFrame(
+        {
+            "Position": [0.0, 5.0, 10.0],
+            "Treadmill": [1.0, 2.0, 3.0],
+            "Licks": [False, True, False],
+            "Rewards": [np.nan, np.nan, "Reward"],
+        }
+    )
+    data = {
+        "frame_times": np.array([10.0, 11.0, 12.0]),
+        "aligned_behaviour": {
+            "position": np.array([0.0, 5.0, 10.0]),
+            "speed": np.array([1.0, 2.0, 3.0]),
+            "licks": np.array([0.0, 1.0, 0.0]),
+            "rewards": np.array([0.0, 0.0, 1.0]),
+        },
+        "behaviour_analysis": {
+            "raw_dataframe": raw,
+            "raw_times": np.array([10.0, 11.0, 12.0]),
+        },
+    }
+    output = tmp_path / "behaviour_raw_vs_aligned.png"
+
+    figure = overview.plot_behaviour_alignment(data, output)
+
+    assert len(figure.axes) == 4
+    assert [axis.get_ylabel() for axis in figure.axes] == [
+        "Position",
+        "Speed",
+        "Licks",
+        "Rewards",
+    ]
+    assert output.is_file()
+    plt.close(figure)
 
 
 def test_reward_tuning_uses_complete_separated_windows_without_mutating_rewards():
@@ -233,6 +388,7 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
             "landmark_exits": np.array([14, 29]),
             "session_path": session_path,
             "subject": "sub-07",
+            "behaviour_analysis": {},
         },
     )
 
@@ -283,6 +439,32 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
     monkeypatch.setattr(overview, "plot_reward_heatmap", fake_reward)
     monkeypatch.setattr(overview, "plot_selected_cell_reward_psths", fake_reward_psth)
 
+    def fake_behaviour(name):
+        def plot(*args, **kwargs):
+            calls.append((name, kwargs["save_path"]))
+            return plt.figure()
+
+        return plot
+
+    monkeypatch.setattr(
+        overview, "plot_behaviour_alignment", fake_behaviour("behaviour_alignment")
+    )
+    monkeypatch.setattr(
+        overview,
+        "plot_behaviour_psth_comparison",
+        fake_behaviour("behaviour_speed_lick_psth"),
+    )
+    monkeypatch.setattr(
+        overview,
+        "plot_behaviour_transition_comparison",
+        fake_behaviour("behaviour_transition_matrix"),
+    )
+    monkeypatch.setattr(
+        overview,
+        "plot_behaviour_sliding_performance",
+        fake_behaviour("behaviour_sliding_performance"),
+    )
+
     _, figures = overview.run_overview(
         "sub-07", "full001", tmp_path, save_dir=save_dir, show=False
     )
@@ -297,6 +479,10 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
         "corrected_reward",
         "corrected_reward_cv",
         "corrected_reward_psth",
+        "behaviour_alignment",
+        "behaviour_speed_lick_psth",
+        "behaviour_transition_matrix",
+        "behaviour_sliding_performance",
     ]
     assert set(figures) == {
         "fov",
@@ -308,6 +494,10 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
         "reference_corrected_reward",
         "reference_corrected_reward_cv",
         "reference_corrected_reward_psth_selected_cells",
+        "behaviour_alignment",
+        "behaviour_speed_lick_psth",
+        "behaviour_transition_matrix",
+        "behaviour_sliding_performance",
     }
     assert not legacy.exists()
     assert unrelated.exists()
@@ -332,6 +522,7 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
             "landmark_exits": np.array([], dtype=int),
             "session_path": session_path,
             "subject": "sub-07",
+            "behaviour_analysis": {},
         },
     )
     monkeypatch.setattr(overview, "plot_fov_masks", lambda *a, **k: plt.figure())
@@ -345,6 +536,18 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
         overview,
         "plot_selected_cell_reward_psths",
         lambda *a, **k: (_ for _ in ()).throw(ValueError("not enough clean rewards")),
+    )
+    monkeypatch.setattr(
+        overview, "plot_behaviour_alignment", lambda *a, **k: plt.figure()
+    )
+    monkeypatch.setattr(
+        overview, "plot_behaviour_psth_comparison", lambda *a, **k: plt.figure()
+    )
+    monkeypatch.setattr(
+        overview, "plot_behaviour_transition_comparison", lambda *a, **k: plt.figure()
+    )
+    monkeypatch.setattr(
+        overview, "plot_behaviour_sliding_performance", lambda *a, **k: plt.figure()
     )
 
     save_dir = tmp_path / "plots"
@@ -371,6 +574,56 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
     assert all(not path.exists() for path in stale_reward_plots)
     plt.close(figures["fov"])
     plt.close(figures["raw_traces"])
+
+
+def test_behaviour_failure_propagates_and_stale_outputs_are_removed(
+    tmp_path, monkeypatch
+):
+    session_path = tmp_path / "ses-full001_date-test"
+    session_path.mkdir()
+    monkeypatch.setattr(
+        overview,
+        "load_session_data",
+        lambda *args, **kwargs: {
+            "dF": np.ones((2, 40)),
+            "neurons": np.array([1, 4]),
+            "mean_img": np.zeros((2, 2)),
+            "image_mask": [np.eye(2, dtype=bool)],
+            "frame_rate": 2.0,
+            "reward_frames": np.array([10, 25]),
+            "landmark_entries": np.array([8, 23]),
+            "landmark_exits": np.array([14, 29]),
+            "session_path": session_path,
+            "subject": "sub-07",
+            "behaviour_analysis": {},
+        },
+    )
+    monkeypatch.setattr(overview, "plot_fov_masks", lambda *a, **k: plt.figure())
+    monkeypatch.setattr(overview, "plot_raw_traces", lambda *a, **k: plt.figure())
+    monkeypatch.setattr(overview, "plot_reward_heatmap", lambda *a, **k: plt.figure())
+    monkeypatch.setattr(
+        overview, "plot_selected_cell_reward_psths", lambda *a, **k: plt.figure()
+    )
+    monkeypatch.setattr(
+        overview,
+        "plot_behaviour_alignment",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("raw mapping failed")),
+    )
+    save_dir = tmp_path / "plots"
+    save_dir.mkdir()
+    for filename in overview.BEHAVIOUR_OUTPUT_NAMES:
+        (save_dir / filename).touch()
+
+    with pytest.raises(RuntimeError, match="raw mapping failed"):
+        overview.run_overview(
+            "sub-07", "full001", tmp_path, save_dir=save_dir, show=False
+        )
+
+    assert all(
+        not (save_dir / filename).exists()
+        for filename in overview.BEHAVIOUR_OUTPUT_NAMES
+    )
+    plt.close("all")
 
 
 def test_legacy_cleanup_is_limited_to_known_overview_files(tmp_path):
