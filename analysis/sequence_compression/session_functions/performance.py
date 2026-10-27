@@ -2,8 +2,12 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
 import numpy as np
-from session_functions.utils import *
-from session_functions.plotting import *
+try:
+    from .utils import *
+    from .plotting import *
+except ImportError:  # Support legacy direct imports from sequence_compression/.
+    from session_functions.utils import *
+    from session_functions.plotting import *
 
 np.set_printoptions(suppress=True, precision=2)
 
@@ -103,7 +107,7 @@ class Performance():
             }
         return events
 
-    def calc_sw_hit_fa(self, window=12, split_lms=False, plot=True):
+    def calc_sw_hit_fa(self, window=12, split_lms=False, plot=True, ax=None):
         '''Calculate hit and false alarm rates as a sliding window across the session'''
 
         target_id, distractor_id, target_positions, distractor_positions, lm_id, lm_id_sequence = self.session.find_targets_distractors()
@@ -227,31 +231,36 @@ class Performance():
                 fa_rate_sw["B1"][idx] = np.clip(fa_rate_sw["B1"][idx], 0.01, 0.99)
 
         if plot:
-            fig = plt.figure(figsize=(6,3))
+            if ax is None:
+                fig, ax = plt.subplots(figsize=(6, 3))
+                owns_figure = True
+            else:
+                fig = ax.figure
+                owns_figure = False
 
             if not split_lms:
-                plt.plot(hit_rate_sw, c='darkblue', linewidth=2, label='hit rate')
-                plt.plot(fa_rate_sw, c='orange', linewidth=2, label='fa rate')
+                ax.plot(hit_rate_sw, c='darkblue', linewidth=2, label='hit rate')
+                ax.plot(fa_rate_sw, c='orange', linewidth=2, label='fa rate')
 
             else:
-                plt.plot(hit_rate_sw["A1"], c='darkblue', linewidth=2, label='Hit A1')
+                ax.plot(hit_rate_sw["A1"], c='darkblue', linewidth=2, label='Hit A1')
                 if "A2" in hit_rate_sw:
-                    plt.plot(hit_rate_sw["A2"], c='blue', linewidth=2, label='Hit A2')
-                plt.plot(fa_rate_sw["B1"], c='orange', linewidth=2, label='FA B1')
+                    ax.plot(hit_rate_sw["A2"], c='blue', linewidth=2, label='Hit A2')
+                ax.plot(fa_rate_sw["B1"], c='orange', linewidth=2, label='FA B1')
                 if "B2" in fa_rate_sw:
-                    plt.plot(fa_rate_sw["B2"], c='gold', linewidth=2, label='FA B2')
+                    ax.plot(fa_rate_sw["B2"], c='gold', linewidth=2, label='FA B2')
                 if "B3" in fa_rate_sw:
-                    plt.plot(fa_rate_sw["B3"], c='brown', linewidth=2, label='FA B3')
+                    ax.plot(fa_rate_sw["B3"], c='brown', linewidth=2, label='FA B3')
 
-            plt.ylim([0,1.1])
-            plt.yticks([0,0.5,1])
-            plt.xlabel(f'Landmark window (n={window} lms)')
-            ax = plt.gca()
+            ax.set_ylim([0,1.1])
+            ax.set_yticks([0,0.5,1])
+            ax.set_xlabel(f'Landmark window (n={window} lms)')
             ax.yaxis.set_major_formatter(mticker.PercentFormatter(xmax=1.0))
             ax.spines['top'].set_visible(False)
             ax.spines['right'].set_visible(False)
-            plt.legend(frameon=False)
-            plt.tight_layout()
+            ax.legend(frameon=False)
+            if owns_figure:
+                fig.tight_layout()
 
             return hit_rate_sw, fa_rate_sw, fig
         

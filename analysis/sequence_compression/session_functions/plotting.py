@@ -4,13 +4,13 @@ import matplotlib.ticker as mticker
 from matplotlib.lines import Line2D
 import numpy as np
 import re, os, sys
-from session_functions.utils import *
+try:
+    from .utils import *
+except ImportError:  # Support legacy direct imports from sequence_compression/.
+    from session_functions.utils import *
 
 np.set_printoptions(suppress=True, precision=2)
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..', '..')))
-
-import palettes
-import seaborn as sns
 
 def plot_ethogram(session):
     sess_dataframe = session.dataframe 
@@ -53,7 +53,9 @@ def compute_psth_pair(behaviour, events, bins):
     licks = behaviour.get_lick_rate_psth(events=events, bins=bins)
     return speed, licks
 
-def plot_speed_lick_rate_psth(session, behaviour, bins=None, sess=None, session_type=None):
+def plot_speed_lick_rate_psth(
+    session, behaviour, bins=None, sess=None, session_type=None, axes=None
+):
 
     # --- Determine PSTH window size ---
     if "LM_Count" in session.dataframe.columns:
@@ -83,7 +85,14 @@ def plot_speed_lick_rate_psth(session, behaviour, bins=None, sess=None, session_
         window_seconds = np.round(seconds_per_bin[0] * bins, 1)
 
     # --- Create plot ---
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    owns_figure = axes is None
+    if owns_figure:
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+    else:
+        axes = np.asarray(axes, dtype=object).reshape(-1)
+        if axes.size != 2:
+            raise ValueError("plot_speed_lick_rate_psth requires exactly two axes")
+        fig = axes[0].figure
     ax_speed, ax_lick = axes
 
     # --- Define PSTH event groups ---
@@ -189,7 +198,8 @@ def plot_speed_lick_rate_psth(session, behaviour, bins=None, sess=None, session_
     ax_speed.set_title("Speed")
     ax_lick.set_title("Lick rate")
 
-    plt.tight_layout()
+    if owns_figure:
+        fig.tight_layout()
 
     return fig
 
@@ -275,7 +285,7 @@ def plot_speed_psth_distance_groups(session, psth_A, psth_B, distance_groups, bi
     # plt.tight_layout()
     return fig
 
-def plot_transition_matrix(session, performance):
+def plot_transition_matrix(session, performance, axes=None):
     from matplotlib.colors import Normalize
 
     target_id, distractor_id, target_positions, distractor_positions, lm_ids, lm_id_sequence = session.find_targets_distractors()
@@ -313,7 +323,14 @@ def plot_transition_matrix(session, performance):
         'ytick.labelsize': 15,
         'legend.fontsize': 10,
     }):
-        fig, axes = plt.subplots(1, 3, figsize=(12, 5))
+        owns_figure = axes is None
+        if owns_figure:
+            fig, axes = plt.subplots(1, 3, figsize=(12, 5))
+        else:
+            axes = np.asarray(axes, dtype=object).reshape(-1)
+            if axes.size != 3:
+                raise ValueError("plot_transition_matrix requires exactly three axes")
+            fig = axes[0].figure
 
         ims = []
         ims.append(axes[0].imshow(transition_matrix, cmap='viridis', interpolation='none',
@@ -341,7 +358,8 @@ def plot_transition_matrix(session, performance):
             cbar = fig.colorbar(im, ax=ax, shrink=0.5, aspect=20, pad=0.05)
             cbar.set_ticks([im.norm.vmin, im.norm.vmax])
 
-        plt.tight_layout()
+        if owns_figure:
+            fig.tight_layout()
 
     return fig
 
@@ -610,6 +628,9 @@ def plot_data(x, y, all_distances, ylabel):
 
 def plot_lick_maps(session, behaviour):
     '''Plots binary and lick rate maps in the 10LM corridor'''
+    import palettes
+    import seaborn as sns
+
     # Load data
     if not hasattr(session, 'sess'):
         sess = session.analyse_session_pre7_behav(plot=False)
