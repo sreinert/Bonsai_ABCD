@@ -8,6 +8,7 @@ by robust reference-channel regression.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Any
 
@@ -134,7 +135,7 @@ def _suite2p_preprocess(
         else:
             raise ValueError(f"Unsupported Suite2p baseline method: {baseline!r}")
         return fluorescence - low
-    return dcnv.preprocess(
+    arguments = (
         fluorescence,
         baseline,
         win_baseline,
@@ -142,6 +143,11 @@ def _suite2p_preprocess(
         fs,
         prctile_baseline,
     )
+    if "device" in inspect.signature(dcnv.preprocess).parameters:
+        import torch
+
+        return dcnv.preprocess(*arguments, device=torch.device("cpu"))
+    return dcnv.preprocess(*arguments)
 
 
 def compute_channel_delta(

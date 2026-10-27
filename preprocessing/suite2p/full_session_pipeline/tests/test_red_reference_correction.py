@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -75,6 +76,37 @@ def test_channel_delta_validates_shapes() -> None:
         red_reference_correction.compute_channel_delta(
             np.ones((1, 3)), np.ones((1, 2)), legacy_ops()
         )
+
+
+def test_suite2p_preprocess_explicitly_uses_cpu_when_device_is_supported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    dcnv = ModuleType("suite2p.extraction.dcnv")
+
+    def fake_preprocess(*arguments, device=None):
+        observed["device"] = device
+        return arguments[0]
+
+    dcnv.preprocess = fake_preprocess
+    extraction = ModuleType("suite2p.extraction")
+    extraction.dcnv = dcnv
+    suite2p = ModuleType("suite2p")
+    suite2p.extraction = extraction
+    torch = ModuleType("torch")
+    torch.device = lambda name: name
+    monkeypatch.setitem(sys.modules, "suite2p", suite2p)
+    monkeypatch.setitem(sys.modules, "suite2p.extraction", extraction)
+    monkeypatch.setitem(sys.modules, "suite2p.extraction.dcnv", dcnv)
+    monkeypatch.setitem(sys.modules, "torch", torch)
+
+    values = np.ones((1, 3), dtype=np.float32)
+    result = red_reference_correction._suite2p_preprocess(
+        values, "maximin", 60.0, 10.0, 30.0, 8.0
+    )
+
+    assert result is values
+    assert observed["device"] == "cpu"
 
 
 def test_tukey_correction_removes_shared_motion_and_preserves_transient() -> None:
