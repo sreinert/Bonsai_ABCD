@@ -1,8 +1,8 @@
 """Overview plots for an aligned sequence-compression imaging session.
 
 Imaging metadata is loaded from the barcode-aligned NWB. Green and red delta-fluorescence
-signals, plus Tukey red-reference-corrected green delta fluorescence, are loaded or
-extracted from the matching two-channel Suite2p traces and saved under the aligned
+signals, plus denominator-guarded CellTV-style G/R, are loaded or extracted from the
+matching two-channel Suite2p traces and saved under the aligned
 session's ``funcimg`` folder. Landmark intervals are parsed only to keep reward-PSTH
 windows from overlapping other landmarks; no position-tuning or goal-progress analysis
 is performed. Raw VR behaviour is mapped onto the functional-imaging clock and compared
@@ -27,7 +27,7 @@ import era_brewer
 from nwb_barcoding.sequence_compression import resolve_raw_session, short_session_name
 from preprocessing.suite2p.full_session_pipeline.red_reference_correction import (
     compute_channel_delta,
-    fit_reference_correction,
+    compute_safe_ratio_delta,
 )
 
 
@@ -50,6 +50,10 @@ LEGACY_OVERVIEW_PATTERNS = (
     "7_gr_reward_heatmap.png",
     "8_gr_reward_heatmap_cv.png",
     "9_gr_reward_psth_selected_cells.png",
+    "6_reference_corrected_raw_traces.png",
+    "7_reference_corrected_reward_heatmap.png",
+    "8_reference_corrected_reward_heatmap_cv.png",
+    "9_reference_corrected_reward_psth_selected_cells.png",
 )
 
 BEHAVIOUR_OUTPUT_NAMES = (
@@ -183,20 +187,18 @@ def _atomic_save_npz(path, **values):
         temporary.unlink(missing_ok=True)
 
 
-def _load_or_extract_reference_signals(
+def _load_or_extract_ratio_signals(
     suite2p_plane_path, aligned_funcimg_path, accepted, valid_frames
 ):
-    """Load or create aligned green, red, and red-reference-corrected traces."""
+    """Load or create aligned green, red, and safely guarded G/R traces."""
     suite2p_plane_path = Path(suite2p_plane_path)
     aligned_funcimg_path = Path(aligned_funcimg_path)
     output_paths = {
-        "green_delta": aligned_funcimg_path / "reference_green_delta_v1.npy",
-        "red_delta": aligned_funcimg_path / "reference_red_delta_v1.npy",
-        "corrected_green_delta": (
-            aligned_funcimg_path / "reference_corrected_green_delta_v1.npy"
-        ),
+        "green_delta": aligned_funcimg_path / "safe_ratio_green_delta_v2.npy",
+        "red_delta": aligned_funcimg_path / "safe_ratio_red_delta_v2.npy",
+        "ratio_delta": aligned_funcimg_path / "safe_green_red_ratio_delta_v2.npy",
     }
-    diagnostics_path = aligned_funcimg_path / "reference_correction_diagnostics_v1.npz"
+    diagnostics_path = aligned_funcimg_path / "safe_green_red_ratio_diagnostics_v2.npz"
     valid_frames = np.asarray(valid_frames, dtype=int)
     if valid_frames.ndim != 1 or valid_frames.size == 0:
         raise ValueError("valid_frames must be a non-empty one-dimensional array")
@@ -219,7 +221,7 @@ def _load_or_extract_reference_signals(
         missing = [name for name in required if not (suite2p_plane_path / name).is_file()]
         if missing:
             raise FileNotFoundError(
-                f"Red-reference extraction requires {missing} under {suite2p_plane_path}"
+                f"Safe G/R extraction requires {missing} under {suite2p_plane_path}"
             )
         arrays = [
             np.load(suite2p_plane_path / name, mmap_mode="r")
@@ -240,13 +242,13 @@ def _load_or_extract_reference_signals(
         ).item()
         green_delta_full = compute_channel_delta(arrays[0], arrays[1], ops)
         red_delta_full = compute_channel_delta(arrays[2], arrays[3], ops)
-        correction = fit_reference_correction(
-            green_delta_full, red_delta_full, fs=float(ops["fs"])
+        safe_ratio = compute_safe_ratio_delta(
+            arrays[0], arrays[1], arrays[2], arrays[3], ops
         )
         outputs = {
             "green_delta": green_delta_full[:, valid_frames],
             "red_delta": red_delta_full[:, valid_frames],
-            "corrected_green_delta": correction.corrected[:, valid_frames],
+            "ratio_delta": safe_ratio.delta_ratio[:, valid_frames],
         }
         aligned_funcimg_path.mkdir(parents=True, exist_ok=True)
         diagnostics_path.unlink(missing_ok=True)
@@ -254,23 +256,19 @@ def _load_or_extract_reference_signals(
             _atomic_save_npy(path, np.asarray(outputs[name], dtype=np.float32))
         _atomic_save_npz(
             diagnostics_path,
-            beta=correction.beta,
-            raw_standardized_coupling=correction.raw_standardized_coupling,
-            applied_standardized_coupling=correction.applied_standardized_coupling,
-            green_scale=correction.green_scale,
-            red_scale=correction.red_scale,
-            converged=correction.converged,
-            iterations=correction.iterations,
-            status=correction.status,
-            smoothing_kernel_frames=correction.smoothing_kernel_frames,
-            tuning_constant=correction.tuning_constant,
-            max_iterations=correction.max_iterations,
-            tolerance=correction.tolerance,
-            scale_epsilon=correction.scale_epsilon,
+            denominator_floor=safe_ratio.denominator_floor,
+            floor_fraction=safe_ratio.floor_fraction,
+            typical_red=safe_ratio.typical_red,
+            status=safe_ratio.status,
+            smoothing_kernel_frames=safe_ratio.smoothing_kernel_frames,
+            floor_percentile=safe_ratio.floor_percentile,
+            relative_floor=safe_ratio.relative_floor,
+            absolute_floor=safe_ratio.absolute_floor,
+            maximum_floor_fraction=safe_ratio.maximum_floor_fraction,
             valid_frames=valid_frames,
         )
         print(
-            "Saved aligned red-reference signals: "
+            "Saved aligned safe G/R signals: "
             + ", ".join(
                 str(path) for path in (*output_paths.values(), diagnostics_path)
             )
@@ -278,24 +276,32 @@ def _load_or_extract_reference_signals(
 
     shapes = {name: tuple(values.shape) for name, values in outputs.items()}
     if len(set(shapes.values())) != 1:
-        raise ValueError(f"Saved red-reference signal shapes are incompatible: {shapes}")
+        raise ValueError(f"Saved safe G/R signal shapes are incompatible: {shapes}")
     expected_frames = len(np.asarray(valid_frames))
     signal_shape = next(iter(shapes.values()))
     if signal_shape[1] != expected_frames:
         raise ValueError(
-            f"Saved red-reference signals have {signal_shape[1]} frames, but "
+            f"Saved safe G/R signals have {signal_shape[1]} frames, but "
             f"valid_frames contains {expected_frames}; remove the four "
-            "reference_*_v1 files and rerun"
+            "safe_*_v2 files and rerun"
         )
 
     accepted = np.asarray(accepted, dtype=int)
     if accepted.ndim != 1 or accepted.size == 0:
-        raise ValueError("Red-reference signals require at least one accepted ROI")
+        raise ValueError("Safe G/R signals require at least one accepted ROI")
     if accepted.min() < 0 or accepted.max() >= signal_shape[0]:
         raise IndexError(
             f"Accepted ROI range [{accepted.min()}, {accepted.max()}] is incompatible "
-            f"with red-reference signal shapes {shapes}"
+            f"with safe G/R signal shapes {shapes}"
         )
+    with np.load(diagnostics_path) as diagnostics:
+        statuses = np.asarray(diagnostics["status"])
+    accepted_statuses = statuses[accepted]
+    status_counts = {
+        str(name): int(np.sum(accepted_statuses == name))
+        for name in np.unique(accepted_statuses)
+    }
+    print(f"Safe G/R denominator status for accepted ROIs: {status_counts}")
     return {name: np.asarray(values[accepted]) for name, values in outputs.items()}
 
 
@@ -563,7 +569,7 @@ def _load_behaviour_analysis(raw_session, subject, aligned, frame_times, session
 
 
 def load_session_data(mouse, session_id, project_root):
-    """Load aligned green and robust red-reference signals for the overview."""
+    """Load aligned green, red, and denominator-guarded G/R signals."""
     project_root = Path(project_root).expanduser().resolve()
     subject = str(mouse) if str(mouse).startswith("sub-") else f"sub-{mouse}"
     aligned_subject = project_root / "BehaviourAligned_robust" / "cohort2" / subject
@@ -589,32 +595,32 @@ def load_session_data(mouse, session_id, project_root):
         / "plane0"
     )
     try:
-        reference = _load_or_extract_reference_signals(
+        ratio_signals = _load_or_extract_ratio_signals(
             suite2p_plane, session_path / "funcimg", accepted, valid_frames
         )
     except FileNotFoundError as error:
         print(
-            "Red-reference signals unavailable; corrected plots will be skipped: "
+            "Safe G/R signals unavailable; ratio plots will be skipped: "
             f"{error}"
         )
-        reference = None
-    if reference is None:
+        ratio_signals = None
+    if ratio_signals is None:
         green_delta = nwb_dff
         red_delta = None
-        corrected_green_delta = None
+        ratio_delta = None
     else:
-        green_delta = reference["green_delta"]
-        red_delta = reference["red_delta"]
-        corrected_green_delta = reference["corrected_green_delta"]
-        reference_shapes = {
+        green_delta = ratio_signals["green_delta"]
+        red_delta = ratio_signals["red_delta"]
+        ratio_delta = ratio_signals["ratio_delta"]
+        signal_shapes = {
             "NWB green": nwb_dff.shape,
             "computed green": green_delta.shape,
             "computed red": red_delta.shape,
-            "corrected green": corrected_green_delta.shape,
+            "safe G/R": ratio_delta.shape,
         }
-        if len(set(reference_shapes.values())) != 1:
+        if len(set(signal_shapes.values())) != 1:
             raise ValueError(
-                f"Aligned imaging signal shapes do not match: {reference_shapes}"
+                f"Aligned imaging signal shapes do not match: {signal_shapes}"
             )
     aligned_behaviour = _load_aligned_behaviour(session_path, green_delta.shape[1])
     reward_frames = np.flatnonzero(aligned_behaviour["rewards"])
@@ -635,7 +641,7 @@ def load_session_data(mouse, session_id, project_root):
         "dF": green_delta,
         "nwb_dF": nwb_dff,
         "red_dF": red_delta,
-        "red_reference_corrected_dF": corrected_green_delta,
+        "green_red_ratio_dF": ratio_delta,
         "neurons": accepted,
         "mean_img": mean_img,
         "image_mask": image_mask,
@@ -1213,9 +1219,9 @@ def run_overview(
 
     data = load_session_data(mouse, session_id, project_root)
     dff = data["dF"]
-    corrected = data.get("red_reference_corrected_dF")
+    ratio = data.get("green_red_ratio_dF")
     green_label = "Green ΔF"
-    n_imaging_plots = 9 if corrected is not None else 5
+    n_imaging_plots = 9 if ratio is not None else 5
     n_plots = n_imaging_plots + len(BEHAVIOUR_OUTPUT_NAMES)
     print(
         f"Loaded {dff.shape[0]} accepted cells, {dff.shape[1]} frames, "
@@ -1296,60 +1302,60 @@ def run_overview(
         if skipped_output:
             Path(skipped_output).unlink(missing_ok=True)
 
-    corrected_outputs = (
-        "6_reference_corrected_raw_traces",
-        "7_reference_corrected_reward_heatmap",
-        "8_reference_corrected_reward_heatmap_cv",
-        "9_reference_corrected_reward_psth_selected_cells",
+    ratio_outputs = (
+        "6_safe_gr_raw_traces",
+        "7_safe_gr_reward_heatmap",
+        "8_safe_gr_reward_heatmap_cv",
+        "9_safe_gr_reward_psth_selected_cells",
     )
-    if corrected is None:
-        for filename in corrected_outputs:
+    if ratio is None:
+        for filename in ratio_outputs:
             skipped_output = output_path(filename)
             if skipped_output:
                 Path(skipped_output).unlink(missing_ok=True)
     else:
-        corrected_label = "Red-reference-corrected green ΔF"
-        print(f"Plot 6/{n_plots}: raw {corrected_label} traces...")
-        figures["reference_corrected_raw_traces"] = plot_raw_traces(
-            corrected,
+        ratio_label = "Safe Δ(G/R)"
+        print(f"Plot 6/{n_plots}: raw {ratio_label} traces...")
+        figures["safe_gr_raw_traces"] = plot_raw_traces(
+            ratio,
             n_cells=n_trace_cells,
             start_frame=trace_start_frame,
             n_frames=trace_n_frames,
             cell_indices=trace_cell_indices,
             cell_labels=data["neurons"][trace_cell_indices],
             frame_rate=data["frame_rate"],
-            signal_label=corrected_label,
-            save_path=output_path(corrected_outputs[0]),
+            signal_label=ratio_label,
+            save_path=output_path(ratio_outputs[0]),
         )
 
         for key, filename, cross_validated, plot_number, label in (
             (
-                "reference_corrected_reward",
-                corrected_outputs[1],
+                "safe_gr_reward",
+                ratio_outputs[1],
                 False,
                 7,
                 "all trials",
             ),
             (
-                "reference_corrected_reward_cv",
-                corrected_outputs[2],
+                "safe_gr_reward_cv",
+                ratio_outputs[2],
                 True,
                 8,
                 "even/odd cross-validated",
             ),
         ):
             print(
-                f"Plot {plot_number}/{n_plots}: {corrected_label} peri-reward "
+                f"Plot {plot_number}/{n_plots}: {ratio_label} peri-reward "
                 f"heatmap ({label})..."
             )
             try:
                 figures[key] = plot_reward_heatmap(
-                    corrected,
+                    ratio,
                     data["reward_frames"],
                     data["frame_rate"],
                     window_size=reward_window,
                     cross_validated=cross_validated,
-                    signal_label=corrected_label,
+                    signal_label=ratio_label,
                     save_path=output_path(filename),
                 )
             except ValueError as error:
@@ -1360,13 +1366,13 @@ def run_overview(
                     Path(skipped_output).unlink(missing_ok=True)
 
         print(
-            f"Plot 9/{n_plots}: selected-cell {corrected_label} reward PSTHs bounded "
+            f"Plot 9/{n_plots}: selected-cell {ratio_label} reward PSTHs bounded "
             "by neighboring landmarks..."
         )
         try:
-            figures["reference_corrected_reward_psth_selected_cells"] = (
+            figures["safe_gr_reward_psth_selected_cells"] = (
                 plot_selected_cell_reward_psths(
-                    corrected,
+                    ratio,
                     trace_cell_indices,
                     data["reward_frames"],
                     data["landmark_entries"],
@@ -1374,14 +1380,14 @@ def run_overview(
                     data["frame_rate"],
                     window_size=reward_psth_window,
                     cell_labels=data["neurons"][trace_cell_indices],
-                    signal_label=corrected_label,
-                    save_path=output_path(corrected_outputs[3]),
+                    signal_label=ratio_label,
+                    save_path=output_path(ratio_outputs[3]),
                 )
             )
         except ValueError as error:
             print(f"  skipping plot: {error}")
-            figures["reference_corrected_reward_psth_selected_cells"] = None
-            skipped_output = output_path(corrected_outputs[3])
+            figures["safe_gr_reward_psth_selected_cells"] = None
+            skipped_output = output_path(ratio_outputs[3])
             if skipped_output:
                 Path(skipped_output).unlink(missing_ok=True)
 

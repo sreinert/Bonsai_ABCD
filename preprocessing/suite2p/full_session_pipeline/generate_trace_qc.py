@@ -82,7 +82,7 @@ separately below.</div>
 <h2>Additional two-channel/CellTV diagnostics</h2>
 <img src="additional_two_channel/summary.png" alt="Additional two-channel summary">
 <h3>CellTV-style traces</h3><img src="additional_two_channel/selected_cells_celltv.png" alt="CellTV traces">
-<h3>Opt-in red-reference correction</h3><img src="additional_two_channel/selected_cells_reference.png" alt="Red-reference-corrected traces">
+<h3>Guarded CellTV-style G/R</h3><img src="additional_two_channel/selected_cells_safe_ratio.png" alt="Safely guarded G/R traces">
 <p><a href="signal_quality_metrics.csv">Raw session metrics CSV</a> ·
 <a href="additional_two_channel/trace_metrics.csv">Additional per-ROI metrics CSV</a> ·
 <a href="calculation.json">Calculation settings and provenance</a></p>

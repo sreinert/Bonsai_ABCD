@@ -610,8 +610,8 @@ def test_combined_report_writes_html_png_and_metrics(
         additional_dir = output_dir / "additional_two_channel"
         additional_dir.mkdir()
         (additional_dir / "trace_metrics.csv").write_text(
-            "roi,iscell,green_red_correlation,ratio_red_floor_fraction,reference_corrected_robust_sigma,reference_applied_standardized_coupling\n"
-            "0,1,0.5,0.1,0.2,0.4\n1,0,0.1,0.3,0.4,0.0\n",
+            "roi,iscell,green_red_correlation,ratio_red_floor_fraction,safe_ratio_robust_sigma,safe_ratio_status\n"
+            "0,1,0.5,0.1,0.2,ok\n1,0,0.1,0.3,0.4,frequent_flooring\n",
             encoding="utf-8",
         )
         (output_dir / "signal_quality_metrics.json").write_text(
@@ -623,7 +623,7 @@ def test_combined_report_writes_html_png_and_metrics(
             "high_snr_traces.png",
         ):
             (output_dir / name).write_bytes(b"test")
-        for name in ("summary.png", "selected_cells_celltv.png", "selected_cells_reference.png"):
+        for name in ("summary.png", "selected_cells_celltv.png", "selected_cells_safe_ratio.png"):
             (additional_dir / name).write_bytes(b"test")
 
     monkeypatch.setattr(generate_full_session_qc.subprocess, "run", fake_trace_qc)

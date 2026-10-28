@@ -23,15 +23,15 @@ from scipy.signal import medfilt
 
 try:
     from .red_reference_correction import (
-        ReferenceCorrectionResult,
+        SafeRatioResult,
         compute_channel_delta,
-        fit_reference_correction,
+        compute_safe_ratio_delta,
     )
 except ImportError:  # Direct script execution on the HPC.
     from red_reference_correction import (
-        ReferenceCorrectionResult,
+        SafeRatioResult,
         compute_channel_delta,
-        fit_reference_correction,
+        compute_safe_ratio_delta,
     )
 
 
@@ -204,11 +204,11 @@ def plot_selected(
             "red": "Red ΔF (channel 2; CellTV)",
             "ratio": "Δ(G/R) (CellTV)",
         }
-    elif trace_kind == "reference":
+    elif trace_kind == "safe_ratio":
         column_titles = {
             "green": "Green ΔF (channel 1)",
             "red": "Red ΔF (channel 2)",
-            "ratio": "Red-reference-corrected green ΔF",
+            "ratio": "Safe Δ(G/R)",
         }
     else:
         raise ValueError(f"Unknown trace kind: {trace_kind!r}")
@@ -274,12 +274,14 @@ def plot_summary(
         title=f"Channel coupling ({classified.sum()} classified cells)",
     )
 
-    floor_fraction = np.asarray([row["ratio_red_floor_fraction"] for row in metrics])
+    floor_fraction = np.asarray(
+        [row["safe_ratio_red_floor_fraction"] for row in metrics]
+    )
     axes[1, 1].hist(floor_fraction, bins=np.linspace(0, 1, 21), color="#e07a2f")
     axes[1, 1].set(
         xlabel="Fraction of frames using red denominator floor",
         ylabel="ROIs",
-        title="G/R denominator stability",
+        title="Guarded G/R denominator stability",
     )
     figure.tight_layout()
     figure.savefig(path, dpi=160)
@@ -289,17 +291,12 @@ def plot_summary(
 def metric_rows(
     signals: dict[str, np.ndarray],
     celltv_delta: dict[str, np.ndarray],
-    correction: ReferenceCorrectionResult,
+    safe_ratio: SafeRatioResult,
     iscell: np.ndarray,
 ) -> list[dict[str, Any]]:
     correlation_before = row_correlation(celltv_delta["green"], celltv_delta["red"])
-    correlation_after = row_correlation(correction.corrected, celltv_delta["red"])
-    fitted_scale = robust_sigma(correction.fitted_reference)
-    variance_fraction = np.divide(
-        fitted_scale**2,
-        correction.green_scale**2,
-        out=np.zeros_like(fitted_scale),
-        where=correction.green_scale > 0,
+    ratio_red_correlation = row_correlation(
+        safe_ratio.delta_ratio, celltv_delta["red"]
     )
     rows: list[dict[str, Any]] = []
     for roi in range(len(iscell)):
@@ -308,28 +305,17 @@ def metric_rows(
             "iscell": int(iscell[roi, 0] > 0.5),
             "cell_probability": float(iscell[roi, 1]),
             "green_red_correlation": float(correlation_before[roi]),
-            "green_red_correlation_after": float(correlation_after[roi]),
+            "safe_ratio_red_correlation": float(ratio_red_correlation[roi]),
             "ratio_red_floor": float(signals["red_floor"][roi, 0]),
             "ratio_red_floor_fraction": float(np.mean(signals["ratio_floor_mask"][roi])),
-            "reference_raw_standardized_coupling": float(
-                correction.raw_standardized_coupling[roi]
+            "safe_ratio_red_floor": float(safe_ratio.denominator_floor[roi]),
+            "safe_ratio_red_floor_fraction": float(safe_ratio.floor_fraction[roi]),
+            "safe_ratio_typical_red": float(safe_ratio.typical_red[roi]),
+            "safe_ratio_status": str(safe_ratio.status[roi]),
+            "safe_ratio_robust_sigma": float(
+                robust_sigma(safe_ratio.delta_ratio[roi : roi + 1])[0]
             ),
-            "reference_applied_standardized_coupling": float(
-                correction.applied_standardized_coupling[roi]
-            ),
-            "reference_beta": float(correction.beta[roi]),
-            "reference_green_scale": float(correction.green_scale[roi]),
-            "reference_red_scale": float(correction.red_scale[roi]),
-            "reference_variance_fraction": float(variance_fraction[roi]),
-            "reference_converged": int(correction.converged[roi]),
-            "reference_iterations": int(correction.iterations[roi]),
-            "reference_status": str(correction.status[roi]),
-            "reference_corrected_robust_sigma": float(
-                robust_sigma(correction.corrected[roi : roi + 1])[0]
-            ),
-            "reference_corrected_p99": float(
-                np.percentile(correction.corrected[roi], 99)
-            ),
+            "safe_ratio_p99": float(np.percentile(safe_ratio.delta_ratio[roi], 99)),
         }
         for name in ("green", "red", "ratio"):
             row[f"{name}_corrected_median"] = float(np.median(signals[name][roi]))
@@ -366,10 +352,10 @@ def report_html(
         f"<td>{selected_rows[int(roi)]['green_celltv_delta_robust_sigma']:.3g}</td>"
         f"<td>{selected_rows[int(roi)]['red_celltv_delta_robust_sigma']:.3g}</td>"
         f"<td>{selected_rows[int(roi)]['ratio_celltv_delta_robust_sigma']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['reference_raw_standardized_coupling']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['reference_applied_standardized_coupling']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['reference_beta']:.3g}</td>"
-        f"<td>{html.escape(str(selected_rows[int(roi)]['reference_status']))}</td>"
+        f"<td>{selected_rows[int(roi)]['safe_ratio_red_floor']:.3g}</td>"
+        f"<td>{selected_rows[int(roi)]['safe_ratio_red_floor_fraction']:.3g}</td>"
+        f"<td>{selected_rows[int(roi)]['safe_ratio_robust_sigma']:.3g}</td>"
+        f"<td>{html.escape(str(selected_rows[int(roi)]['safe_ratio_status']))}</td>"
         "</tr>"
         for roi in selected
     )
@@ -377,8 +363,12 @@ def report_html(
     classified_rows = [row for row in metrics if row["iscell"]]
     summary_rows = classified_rows or metrics
     median_correlation = float(np.median([row["green_red_correlation"] for row in summary_rows]))
-    applied_count = sum(
-        row["reference_applied_standardized_coupling"] > 0 for row in summary_rows
+    safe_count = sum(
+        row["safe_ratio_status"] in {"ok", "frequent_flooring"}
+        for row in summary_rows
+    )
+    frequent_floor_count = sum(
+        row["safe_ratio_status"] == "frequent_flooring" for row in summary_rows
     )
     unstable_ratio_count = sum(row["ratio_red_floor_fraction"] > 0.05 for row in summary_rows)
     return f"""<!doctype html>
@@ -397,29 +387,31 @@ The red trace alone is median-filtered over {settings['red_kernel_frames']} fram
 <code>get_dff_GR</code>. Its denominator is floored at each ROI's fifth percentile or 1e−3, whichever is larger.
 The <b>CellTV-style</b> plots show <code>signal − F0</code>, exactly matching the baseline-subtracted output
 of Suite2p <code>preprocess</code> used by <code>get_dff</code> and <code>get_dff_GR</code>; despite historical
-naming, these are ΔF and are not divided by F0. The opt-in correction fits the smoothed red ΔF to green
-ΔF using Tukey-bisquare IRLS and subtracts only the fitted component. It never divides by red fluorescence.
-An applied coupling of zero means the reference did not provide safe positive evidence of shared motion.</div>
+naming, these are ΔF and are not divided by F0. The safe ratio follows the original CellTV order:
+neuropil-correct G and R, smooth R, divide G by a guarded R denominator, then baseline-subtract G/R.
+The denominator floor is the largest of the fifth percentile, 5% of typical absolute red fluorescence,
+and 1e−3. Weak or non-finite red references produce a zero ratio with an explicit status.</div>
 <h2>Overview</h2><img src="summary.png" alt="QC summary">
 <h2>Example classified cells</h2><p>Selected reproducibly by descending Suite2p cell probability,
 then green-trace robust activity—not by manual choice. Plot limits use each panel's 0.5–99.5th percentiles;
 traces are non-overlapping mean-binned to at most 1,500 points for display, and the CSV metrics use the
 unbinned traces. Classified-cell median G/R channel correlation is
-{median_correlation:.3f}. The reference correction was applied to {applied_count}/{len(summary_rows)}
-classified cells; {unstable_ratio_count}/{len(summary_rows)} used the legacy ratio denominator floor in
-more than 5% of frames.</p>
+{median_correlation:.3f}. A finite guarded ratio was produced for {safe_count}/{len(summary_rows)}
+classified cells; {frequent_floor_count}/{len(summary_rows)} required frequent safe-denominator flooring.
+The legacy ratio used its denominator floor in more than 5% of frames for
+{unstable_ratio_count}/{len(summary_rows)} cells.</p>
 <h3>Exact CellTV-style baseline-subtracted traces</h3>
 <p>These reproduce what the current CellTV functions return, although those functions call the result dF/F.</p>
 <img src="selected_cells_celltv_zoom.png" alt="CellTV-style selected cell trace zoom">
 <details><summary>Show full CellTV-style traces</summary><img src="selected_cells_celltv.png" alt="Full CellTV-style selected cell traces"></details>
-<h3>Opt-in red-reference correction</h3>
-<p>Green and red use the same Suite2p baseline-subtracted ΔF calculation as the NWB-barcoding pipeline.
-The third column is corrected green ΔF; current CellTV outputs and cached arrays are not changed.</p>
-<img src="selected_cells_reference_zoom.png" alt="Reference-corrected selected cell trace zoom">
-<details><summary>Show full reference-corrected traces</summary><img src="selected_cells_reference.png" alt="Full reference-corrected selected cell traces"></details>
+<h3>Guarded CellTV-style G/R</h3>
+<p>Green and red use the Suite2p baseline-subtracted ΔF calculation for comparison. The third column is
+the safely floored, baseline-subtracted G/R ratio.</p>
+<img src="selected_cells_safe_ratio_zoom.png" alt="Safe G/R selected cell trace zoom">
+<details><summary>Show full safe G/R traces</summary><img src="selected_cells_safe_ratio.png" alt="Full safe G/R selected cell traces"></details>
 <h2>Selected-cell metrics</h2><table><thead><tr><th>ROI</th><th>p(cell)</th><th>corr(G,R)</th>
 <th>red floor fraction</th><th>CellTV green σ</th><th>CellTV red σ</th><th>CellTV ratio σ</th>
-<th>raw coupling</th><th>applied coupling</th><th>β</th><th>status</th></tr></thead><tbody>
+<th>safe red floor</th><th>safe floor fraction</th><th>safe ratio σ</th><th>status</th></tr></thead><tbody>
 {table_rows}</tbody></table>
 <h2>Files</h2><ul><li><a href="trace_metrics.csv">trace_metrics.csv</a>: metrics for every ROI</li>
 <li><a href="calculation.json">calculation.json</a>: exact calculation settings and selected ROI indices</li></ul>
@@ -478,18 +470,18 @@ def generate_two_channel_qc(
     for name in ("green", "red", "ratio"):
         if not np.all(np.isfinite(celltv_delta[name])):
             raise RuntimeError(f"Non-finite values found in CellTV-style {name} ΔF")
-    correction = fit_reference_correction(
-        celltv_delta["green"], celltv_delta["red"], float(ops["fs"])
+    safe_ratio = compute_safe_ratio_delta(
+        F, Fneu, F2, Fneu2, ops, neuropil_coefficient=neucoeff
     )
-    if not np.all(np.isfinite(correction.corrected)):
-        raise RuntimeError("Non-finite values found in red-reference-corrected green ΔF")
-    reference_traces = {
+    if not np.all(np.isfinite(safe_ratio.delta_ratio)):
+        raise RuntimeError("Non-finite values found in guarded G/R ΔF")
+    safe_ratio_traces = {
         "green": celltv_delta["green"],
         "red": celltv_delta["red"],
-        "ratio": correction.corrected,
+        "ratio": safe_ratio.delta_ratio,
     }
     selected = select_rois(iscell, celltv_delta["green"], n_cells)
-    metrics = metric_rows(signals, celltv_delta, correction, iscell)
+    metrics = metric_rows(signals, celltv_delta, safe_ratio, iscell)
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent))
@@ -497,12 +489,12 @@ def generate_two_channel_qc(
         zoom_frames = min(F.shape[1], int(round(2.0 * 60.0 * float(ops["fs"]))))
         zoom_start = max(0, (F.shape[1] - zoom_frames) // 2)
         zoom_stop = zoom_start + zoom_frames
-        for trace_kind, traces in (("celltv", celltv_delta), ("reference", reference_traces)):
-            stem = "celltv" if trace_kind == "celltv" else "reference"
+        for trace_kind, traces in (("celltv", celltv_delta), ("safe_ratio", safe_ratio_traces)):
+            stem = "celltv" if trace_kind == "celltv" else "safe_ratio"
             label = (
                 "CellTV-style ΔF"
                 if trace_kind == "celltv"
-                else "opt-in red-reference correction"
+                else "guarded CellTV-style G/R"
             )
             plot_selected(
                 temporary / f"selected_cells_{stem}.png",
@@ -542,21 +534,19 @@ def generate_two_channel_qc(
             "zoom_frame_range": [zoom_start, zoom_stop],
             "selection_rule": "iscell first; descending cell probability, green robust sigma, ROI index",
             "celltv_formula": "signal - Suite2p baseline (matches dcnv.preprocess output)",
-            "reference_correction": {
-                "method": "Tukey-bisquare iteratively reweighted least squares",
-                "formula": "green_delta - beta * (smoothed_red_delta - median(smoothed_red_delta))",
-                "normalization": "median center and half of the 16th-to-84th percentile range",
+            "safe_ratio": {
+                "method": "CellTV-style G/R with adaptive denominator guard",
+                "formula": "baseline_subtract((G - alpha*Gneu) / guarded_median_filter(R - alpha*Rneu))",
                 "red_smoothing_seconds": 0.25,
-                "red_smoothing_kernel_frames": correction.smoothing_kernel_frames,
+                "red_smoothing_kernel_frames": safe_ratio.smoothing_kernel_frames,
                 "red_smoothing_boundary": "nearest",
-                "tuning_constant": correction.tuning_constant,
-                "max_iterations": correction.max_iterations,
-                "tolerance": correction.tolerance,
-                "scale_epsilon": correction.scale_epsilon,
-                "application_rule": "apply positive standardized coupling clipped to [0, 1] after convergence",
+                "floor_percentile": safe_ratio.floor_percentile,
+                "relative_floor": safe_ratio.relative_floor,
+                "absolute_floor": safe_ratio.absolute_floor,
+                "maximum_floor_fraction": safe_ratio.maximum_floor_fraction,
                 "status_counts": {
-                    str(name): int(np.sum(correction.status == name))
-                    for name in np.unique(correction.status)
+                    str(name): int(np.sum(safe_ratio.status == name))
+                    for name in np.unique(safe_ratio.status)
                 },
             },
         }

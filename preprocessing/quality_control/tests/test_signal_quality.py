@@ -151,7 +151,7 @@ def test_integrated_trace_qc_outputs(tmp_path: Path) -> None:
         "high_snr_traces.png",
         "additional_two_channel/summary.png",
         "additional_two_channel/selected_cells_celltv.png",
-        "additional_two_channel/selected_cells_reference.png",
+        "additional_two_channel/selected_cells_safe_ratio.png",
         "additional_two_channel/trace_metrics.csv",
         "calculation.json",
         "index.html",
