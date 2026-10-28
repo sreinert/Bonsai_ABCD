@@ -31,7 +31,7 @@ def test_valid_frames_are_checked_before_selection():
         overview._select_valid_frames(dff, [])
 
 
-def test_reference_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypatch):
+def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypatch):
     plane = tmp_path / "suite2p" / "plane0"
     plane.mkdir(parents=True)
     F = np.array([[10, 12, 14, 16], [20, 23, 26, 29]], dtype=float)
@@ -62,35 +62,30 @@ def test_reference_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypat
         corrected = signal - ops["neucoeff"] * neuropil
         return corrected - np.min(corrected, axis=1, keepdims=True)
 
-    def fake_reference_correction(green, red, fs):
-        corrected = green - 0.5 * (red - np.median(red, axis=1, keepdims=True))
+    def fake_safe_ratio(green, green_neuropil, red, red_neuropil, ops):
+        del green_neuropil, red_neuropil, ops
+        ratio = green / red
         n_rois = green.shape[0]
         return SimpleNamespace(
-            corrected=corrected,
-            beta=np.full(n_rois, 0.5),
-            raw_standardized_coupling=np.full(n_rois, 0.6),
-            applied_standardized_coupling=np.full(n_rois, 0.6),
-            green_scale=np.ones(n_rois),
-            red_scale=np.ones(n_rois),
-            converged=np.ones(n_rois, dtype=bool),
-            iterations=np.ones(n_rois, dtype=int),
-            status=np.full(n_rois, "applied"),
+            delta_ratio=ratio,
+            denominator_floor=np.ones(n_rois),
+            floor_fraction=np.zeros(n_rois),
+            typical_red=np.ones(n_rois),
+            status=np.full(n_rois, "ok"),
             smoothing_kernel_frames=1,
-            tuning_constant=3.0,
-            max_iterations=50,
-            tolerance=1e-6,
-            scale_epsilon=1e-6,
+            floor_percentile=5.0,
+            relative_floor=0.05,
+            absolute_floor=1e-3,
+            maximum_floor_fraction=0.1,
         )
 
     monkeypatch.setattr(overview, "compute_channel_delta", fake_channel_delta)
-    monkeypatch.setattr(
-        overview, "fit_reference_correction", fake_reference_correction
-    )
+    monkeypatch.setattr(overview, "compute_safe_ratio_delta", fake_safe_ratio)
     aligned_funcimg = tmp_path / "aligned" / "funcimg"
     aligned_funcimg.mkdir(parents=True)
     for legacy_name in ("DF_F0.npy", "DF_F02.npy", "DG_R.npy"):
         np.save(aligned_funcimg / legacy_name, np.full((2, 2), 999))
-    result = overview._load_or_extract_reference_signals(
+    result = overview._load_or_extract_ratio_signals(
         plane, aligned_funcimg, accepted=[1], valid_frames=[1, 3]
     )
 
@@ -100,16 +95,13 @@ def test_reference_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypat
         green_full, axis=1, keepdims=True
     )
     expected_red_full = red_full - np.min(red_full, axis=1, keepdims=True)
-    expected_corrected_full = expected_green_full - 0.5 * (
-        expected_red_full - np.median(expected_red_full, axis=1, keepdims=True)
-    )
     expected_green = expected_green_full[:, [1, 3]]
     expected_red = expected_red_full[:, [1, 3]]
-    expected_corrected = expected_corrected_full[:, [1, 3]]
+    expected_ratio = (F / F2)[:, [1, 3]]
     np.testing.assert_allclose(result["green_delta"], expected_green[[1]])
     np.testing.assert_allclose(result["red_delta"], expected_red[[1]])
     np.testing.assert_allclose(
-        result["corrected_green_delta"], expected_corrected[[1]]
+        result["ratio_delta"], expected_ratio[[1]]
     )
     assert len(delta_calls) == 2
     np.testing.assert_array_equal(delta_calls[0][0], F)
@@ -118,11 +110,11 @@ def test_reference_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypat
         "DF_F0.npy",
         "DF_F02.npy",
         "DG_R.npy",
-        "reference_green_delta_v1.npy",
-        "reference_red_delta_v1.npy",
-        "reference_corrected_green_delta_v1.npy",
+        "safe_ratio_green_delta_v2.npy",
+        "safe_ratio_red_delta_v2.npy",
+        "safe_green_red_ratio_delta_v2.npy",
     }
-    assert (aligned_funcimg / "reference_correction_diagnostics_v1.npz").is_file()
+    assert (aligned_funcimg / "safe_green_red_ratio_diagnostics_v2.npz").is_file()
 
 
 def test_accepted_cells_and_empirical_frame_rate():
@@ -360,7 +352,7 @@ def test_reward_psth_subplots_only_tick_window_limits_and_reward():
     plt.close(figure)
 
 
-def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monkeypatch):
+def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, monkeypatch):
     session_path = tmp_path / "aligned" / "sub-07" / "ses-full001_date-test"
     session_path.mkdir(parents=True)
     save_dir = tmp_path / "analysis"
@@ -376,7 +368,7 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
         "load_session_data",
         lambda *args, **kwargs: {
             "dF": np.arange(120, dtype=float).reshape(3, 40),
-            "red_reference_corrected_dF": (
+            "green_red_ratio_dF": (
                 np.arange(120, dtype=float).reshape(3, 40) / 10
             ),
             "neurons": np.array([2, 5, 9]),
@@ -398,8 +390,8 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
 
     def fake_traces(*args, **kwargs):
         name = (
-            "corrected_traces"
-            if kwargs.get("signal_label", "").startswith("Red-reference")
+            "ratio_traces"
+            if kwargs.get("signal_label", "").startswith("Safe")
             else "traces"
         )
         calls.append((name, kwargs["save_path"]))
@@ -410,8 +402,8 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
 
     def fake_reward(*args, **kwargs):
         prefix = (
-            "corrected_"
-            if kwargs.get("signal_label", "").startswith("Red-reference")
+            "ratio_"
+            if kwargs.get("signal_label", "").startswith("Safe")
             else ""
         )
         calls.append(
@@ -424,8 +416,8 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
 
     def fake_reward_psth(*args, **kwargs):
         prefix = (
-            "corrected_"
-            if kwargs.get("signal_label", "").startswith("Red-reference")
+            "ratio_"
+            if kwargs.get("signal_label", "").startswith("Safe")
             else ""
         )
         calls.append((prefix + "reward_psth", kwargs["save_path"]))
@@ -475,10 +467,10 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
         "reward",
         "reward_cv",
         "reward_psth",
-        "corrected_traces",
-        "corrected_reward",
-        "corrected_reward_cv",
-        "corrected_reward_psth",
+        "ratio_traces",
+        "ratio_reward",
+        "ratio_reward_cv",
+        "ratio_reward_psth",
         "behaviour_alignment",
         "behaviour_speed_lick_psth",
         "behaviour_transition_matrix",
@@ -490,10 +482,10 @@ def test_run_overview_adds_four_corrected_plots_and_cleans_legacy(tmp_path, monk
         "reward",
         "reward_cv",
         "reward_psth_selected_cells",
-        "reference_corrected_raw_traces",
-        "reference_corrected_reward",
-        "reference_corrected_reward_cv",
-        "reference_corrected_reward_psth_selected_cells",
+        "safe_gr_raw_traces",
+        "safe_gr_reward",
+        "safe_gr_reward_cv",
+        "safe_gr_reward_psth_selected_cells",
         "behaviour_alignment",
         "behaviour_speed_lick_psth",
         "behaviour_transition_matrix",
@@ -556,10 +548,10 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
         save_dir / "3_reward_heatmap.png",
         save_dir / "4_reward_heatmap_cv.png",
         save_dir / "5_reward_psth_selected_cells.png",
-        save_dir / "6_reference_corrected_raw_traces.png",
-        save_dir / "7_reference_corrected_reward_heatmap.png",
-        save_dir / "8_reference_corrected_reward_heatmap_cv.png",
-        save_dir / "9_reference_corrected_reward_psth_selected_cells.png",
+        save_dir / "6_safe_gr_raw_traces.png",
+        save_dir / "7_safe_gr_reward_heatmap.png",
+        save_dir / "8_safe_gr_reward_heatmap_cv.png",
+        save_dir / "9_safe_gr_reward_psth_selected_cells.png",
     ]
     for path in stale_reward_plots:
         path.touch()
