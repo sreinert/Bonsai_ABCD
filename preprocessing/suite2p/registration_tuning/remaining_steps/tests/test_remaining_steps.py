@@ -611,7 +611,7 @@ def test_combined_report_writes_html_png_and_metrics(
         additional_dir.mkdir()
         (additional_dir / "trace_metrics.csv").write_text(
             "roi,iscell,green_red_correlation,ratio_red_floor_fraction,safe_ratio_robust_sigma,safe_ratio_status\n"
-            "0,1,0.5,0.1,0.2,ok\n1,0,0.1,0.3,0.4,frequent_flooring\n",
+            "0,1,0.5,0.1,0.2,ok\n1,0,0.1,0.3,0.4,excessive_low_red\n",
             encoding="utf-8",
         )
         (output_dir / "signal_quality_metrics.json").write_text(

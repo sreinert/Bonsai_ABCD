@@ -364,11 +364,11 @@ def report_html(
     summary_rows = classified_rows or metrics
     median_correlation = float(np.median([row["green_red_correlation"] for row in summary_rows]))
     safe_count = sum(
-        row["safe_ratio_status"] in {"ok", "frequent_flooring"}
+        row["safe_ratio_status"] in {"ok", "interpolated_low_red"}
         for row in summary_rows
     )
-    frequent_floor_count = sum(
-        row["safe_ratio_status"] == "frequent_flooring" for row in summary_rows
+    rejected_count = sum(
+        row["safe_ratio_status"] == "excessive_low_red" for row in summary_rows
     )
     unstable_ratio_count = sum(row["ratio_red_floor_fraction"] > 0.05 for row in summary_rows)
     return f"""<!doctype html>
@@ -390,14 +390,15 @@ of Suite2p <code>preprocess</code> used by <code>get_dff</code> and <code>get_df
 naming, these are ΔF and are not divided by F0. The safe ratio follows the original CellTV order:
 neuropil-correct G and R, smooth R, divide G by a guarded R denominator, then baseline-subtract G/R.
 The denominator floor is the largest of the fifth percentile, 5% of typical absolute red fluorescence,
-and 1e−3. Weak or non-finite red references produce a zero ratio with an explicit status.</div>
+and 1e−3. Frames below that threshold are interpolated from neighboring valid ratio samples; ROIs with
+more than 10% low-red frames, or weak/non-finite red references, produce zero with an explicit status.</div>
 <h2>Overview</h2><img src="summary.png" alt="QC summary">
 <h2>Example classified cells</h2><p>Selected reproducibly by descending Suite2p cell probability,
 then green-trace robust activity—not by manual choice. Plot limits use each panel's 0.5–99.5th percentiles;
 traces are non-overlapping mean-binned to at most 1,500 points for display, and the CSV metrics use the
 unbinned traces. Classified-cell median G/R channel correlation is
 {median_correlation:.3f}. A finite guarded ratio was produced for {safe_count}/{len(summary_rows)}
-classified cells; {frequent_floor_count}/{len(summary_rows)} required frequent safe-denominator flooring.
+classified cells; {rejected_count}/{len(summary_rows)} were rejected because red was low too often.
 The legacy ratio used its denominator floor in more than 5% of frames for
 {unstable_ratio_count}/{len(summary_rows)} cells.</p>
 <h3>Exact CellTV-style baseline-subtracted traces</h3>

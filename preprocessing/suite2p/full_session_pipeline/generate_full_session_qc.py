@@ -200,7 +200,7 @@ def main() -> None:
         "additional_green_red_correlation_median": float(np.median([row["green_red_correlation"] for row in selected])),
         "additional_ratio_red_floor_fraction_median": float(np.median([row["ratio_red_floor_fraction"] for row in selected])),
         "additional_safe_ratio_robust_sigma_median": float(np.median([row["safe_ratio_robust_sigma"] for row in selected])),
-        "additional_safe_ratio_frequent_floor_fraction": float(np.mean([row["safe_ratio_status"] == "frequent_flooring" for row in selected])),
+        "additional_safe_ratio_rejected_fraction": float(np.mean([row["safe_ratio_status"] == "excessive_low_red" for row in selected])),
         "elapsed_registration_seconds": float(read_json(workflow_dir / "registration_status.json")["elapsed_seconds"]),
         "elapsed_detection_seconds": float(detection_status["elapsed_seconds"]),
         "elapsed_trace_seconds": float(trace_status["elapsed_seconds"]),

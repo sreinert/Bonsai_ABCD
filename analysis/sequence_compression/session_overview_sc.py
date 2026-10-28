@@ -54,6 +54,10 @@ LEGACY_OVERVIEW_PATTERNS = (
     "7_reference_corrected_reward_heatmap.png",
     "8_reference_corrected_reward_heatmap_cv.png",
     "9_reference_corrected_reward_psth_selected_cells.png",
+    "2_raw_traces.png",
+    "5_reward_psth_selected_cells.png",
+    "6_safe_gr_raw_traces.png",
+    "9_safe_gr_reward_psth_selected_cells.png",
 )
 
 BEHAVIOUR_OUTPUT_NAMES = (
@@ -194,11 +198,11 @@ def _load_or_extract_ratio_signals(
     suite2p_plane_path = Path(suite2p_plane_path)
     aligned_funcimg_path = Path(aligned_funcimg_path)
     output_paths = {
-        "green_delta": aligned_funcimg_path / "safe_ratio_green_delta_v2.npy",
-        "red_delta": aligned_funcimg_path / "safe_ratio_red_delta_v2.npy",
-        "ratio_delta": aligned_funcimg_path / "safe_green_red_ratio_delta_v2.npy",
+        "green_delta": aligned_funcimg_path / "safe_ratio_green_delta_v3.npy",
+        "red_delta": aligned_funcimg_path / "safe_ratio_red_delta_v3.npy",
+        "ratio_delta": aligned_funcimg_path / "safe_green_red_ratio_delta_v3.npy",
     }
-    diagnostics_path = aligned_funcimg_path / "safe_green_red_ratio_diagnostics_v2.npz"
+    diagnostics_path = aligned_funcimg_path / "safe_green_red_ratio_diagnostics_v3.npz"
     valid_frames = np.asarray(valid_frames, dtype=int)
     if valid_frames.ndim != 1 or valid_frames.size == 0:
         raise ValueError("valid_frames must be a non-empty one-dimensional array")
@@ -283,7 +287,7 @@ def _load_or_extract_ratio_signals(
         raise ValueError(
             f"Saved safe G/R signals have {signal_shape[1]} frames, but "
             f"valid_frames contains {expected_frames}; remove the four "
-            "safe_*_v2 files and rerun"
+            "safe_*_v3 files and rerun"
         )
 
     accepted = np.asarray(accepted, dtype=int)
@@ -608,6 +612,8 @@ def load_session_data(mouse, session_id, project_root):
         green_delta = nwb_dff
         red_delta = None
         ratio_delta = None
+        ratio_status = None
+        ratio_floor_fraction = None
     else:
         green_delta = ratio_signals["green_delta"]
         red_delta = ratio_signals["red_delta"]
@@ -622,6 +628,11 @@ def load_session_data(mouse, session_id, project_root):
             raise ValueError(
                 f"Aligned imaging signal shapes do not match: {signal_shapes}"
             )
+        with np.load(
+            session_path / "funcimg" / "safe_green_red_ratio_diagnostics_v3.npz"
+        ) as diagnostics:
+            ratio_status = np.asarray(diagnostics["status"])[accepted]
+            ratio_floor_fraction = np.asarray(diagnostics["floor_fraction"])[accepted]
     aligned_behaviour = _load_aligned_behaviour(session_path, green_delta.shape[1])
     reward_frames = np.flatnonzero(aligned_behaviour["rewards"])
     position = aligned_behaviour["position"]
@@ -642,6 +653,8 @@ def load_session_data(mouse, session_id, project_root):
         "nwb_dF": nwb_dff,
         "red_dF": red_delta,
         "green_red_ratio_dF": ratio_delta,
+        "green_red_ratio_status": ratio_status,
+        "green_red_ratio_floor_fraction": ratio_floor_fraction,
         "neurons": accepted,
         "mean_img": mean_img,
         "image_mask": image_mask,
@@ -739,13 +752,64 @@ def plot_raw_traces(
     return fig
 
 
-def select_trace_cells(n_total_cells, n_cells=20):
-    """Select evenly spaced accepted-cell indices for plots 2 and 5."""
+def select_trace_cells(
+    n_total_cells,
+    n_cells=20,
+    *,
+    traces=None,
+    eligible=None,
+    snr_threshold=5.0,
+):
+    """Select accepted cells, preferring high-SNR cells when traces are supplied."""
     if n_total_cells <= 0:
         raise ValueError("At least one accepted cell is required")
+    if traces is not None:
+        traces = np.asarray(traces, dtype=float)
+        if traces.ndim != 2 or traces.shape[0] != n_total_cells:
+            raise ValueError("traces must have shape (n_total_cells, n_frames)")
+        differences = np.diff(traces, axis=1)
+        difference_center = np.nanmedian(differences, axis=1, keepdims=True)
+        noise = (
+            1.4826
+            * np.nanmedian(np.abs(differences - difference_center), axis=1)
+            / np.sqrt(2.0)
+        )
+        signal = np.nanpercentile(traces, 99, axis=1) - np.nanmedian(
+            traces, axis=1
+        )
+        snr = np.divide(
+            signal,
+            noise,
+            out=np.full(n_total_cells, np.nan),
+            where=np.isfinite(noise) & (noise > 0),
+        )
+        allowed = np.ones(n_total_cells, dtype=bool)
+        if eligible is not None:
+            allowed = np.asarray(eligible, dtype=bool)
+            if allowed.shape != (n_total_cells,):
+                raise ValueError("eligible must have one value per accepted cell")
+        candidates = np.flatnonzero(allowed & np.isfinite(snr) & (snr >= snr_threshold))
+        if candidates.size == 0:
+            candidates = np.flatnonzero(allowed & np.isfinite(snr))
+        if candidates.size:
+            order = np.lexsort((candidates, -snr[candidates]))
+            return candidates[order[: min(n_cells, candidates.size)]]
     return np.unique(
         np.linspace(0, n_total_cells - 1, min(n_cells, n_total_cells)).astype(int)
     )
+
+
+def select_random_trace_cells(n_total_cells, n_cells=20, *, seed=0):
+    """Return a reproducible random sample of accepted-cell row indices."""
+    if n_total_cells <= 0:
+        raise ValueError("At least one accepted cell is required")
+    if n_cells <= 0:
+        raise ValueError("n_cells must be positive")
+    rng = np.random.default_rng(seed)
+    selected = rng.choice(
+        n_total_cells, size=min(n_cells, n_total_cells), replace=False
+    )
+    return np.sort(selected)
 
 
 def _window_offsets(frame_rate, window_size):
@@ -1190,6 +1254,7 @@ def run_overview(
     trace_n_frames=20000,
     reward_window=(-5, 5),
     reward_psth_window=(-2, 2),
+    random_seed=0,
     save_dir=None,
     show=True,
 ):
@@ -1221,7 +1286,7 @@ def run_overview(
     dff = data["dF"]
     ratio = data.get("green_red_ratio_dF")
     green_label = "Green ΔF"
-    n_imaging_plots = 9 if ratio is not None else 5
+    n_imaging_plots = 13 if ratio is not None else 7
     n_plots = n_imaging_plots + len(BEHAVIOUR_OUTPUT_NAMES)
     print(
         f"Loaded {dff.shape[0]} accepted cells, {dff.shape[1]} frames, "
@@ -1231,7 +1296,22 @@ def run_overview(
     def output_path(name):
         return str(save_dir / f"{name}.png") if save_dir else None
 
-    trace_cell_indices = select_trace_cells(dff.shape[0], n_trace_cells)
+    high_snr_indices = select_trace_cells(
+        dff.shape[0],
+        n_trace_cells,
+        traces=dff,
+    )
+    random_indices = select_random_trace_cells(
+        dff.shape[0], n_trace_cells, seed=random_seed
+    )
+    trace_groups = (
+        ("high_snr", "high green SNR", high_snr_indices),
+        ("random", f"random sample (seed={random_seed})", random_indices),
+    )
+    print(
+        f"Selected {len(high_snr_indices)} high-green-SNR cell(s) and "
+        f"{len(random_indices)} reproducibly random cell(s)."
+    )
     figures = {}
     print(f"Plot 1/{n_plots}: FOV with accepted-cell masks...")
     figures["fov"] = plot_fov_masks(
@@ -1240,18 +1320,19 @@ def run_overview(
         title=f"{data['subject']} {data['session_path'].name}",
         save_path=output_path("1_fov_masks"),
     )
-    print(f"Plot 2/{n_plots}: raw {green_label} traces...")
-    figures["raw_traces"] = plot_raw_traces(
-        dff,
-        n_cells=n_trace_cells,
-        start_frame=trace_start_frame,
-        n_frames=trace_n_frames,
-        cell_indices=trace_cell_indices,
-        cell_labels=data["neurons"][trace_cell_indices],
-        frame_rate=data["frame_rate"],
-        signal_label=green_label,
-        save_path=output_path("2_raw_traces"),
-    )
+    for suffix, group_label, cell_indices in trace_groups:
+        print(f"Plot 2{suffix[0]}/{n_plots}: raw {green_label}, {group_label}...")
+        figures[f"raw_traces_{suffix}"] = plot_raw_traces(
+            dff,
+            n_cells=n_trace_cells,
+            start_frame=trace_start_frame,
+            n_frames=trace_n_frames,
+            cell_indices=cell_indices,
+            cell_labels=data["neurons"][cell_indices],
+            frame_rate=data["frame_rate"],
+            signal_label=f"{green_label} — {group_label}",
+            save_path=output_path(f"2{suffix[0]}_{suffix}_raw_traces"),
+        )
 
     for key, filename, cross_validated, label in (
         ("reward", "3_reward_heatmap", False, "all trials"),
@@ -1278,35 +1359,39 @@ def run_overview(
             if skipped_output:
                 Path(skipped_output).unlink(missing_ok=True)
 
-    print(
-        f"Plot 5/{n_plots}: selected-cell reward PSTHs bounded by "
-        "neighboring landmarks..."
-    )
-    try:
-        figures["reward_psth_selected_cells"] = plot_selected_cell_reward_psths(
-            dff,
-            trace_cell_indices,
-            data["reward_frames"],
-            data["landmark_entries"],
-            data["landmark_exits"],
-            data["frame_rate"],
-            window_size=reward_psth_window,
-            cell_labels=data["neurons"][trace_cell_indices],
-            signal_label=green_label,
-            save_path=output_path("5_reward_psth_selected_cells"),
+    for suffix, group_label, cell_indices in trace_groups:
+        filename = f"5{suffix[0]}_{suffix}_reward_psth_selected_cells"
+        print(
+            f"Plot 5{suffix[0]}/{n_plots}: {group_label} reward PSTHs bounded "
+            "by neighboring landmarks..."
         )
-    except ValueError as error:
-        print(f"  skipping plot: {error}")
-        figures["reward_psth_selected_cells"] = None
-        skipped_output = output_path("5_reward_psth_selected_cells")
-        if skipped_output:
-            Path(skipped_output).unlink(missing_ok=True)
+        try:
+            figures[f"reward_psth_{suffix}"] = plot_selected_cell_reward_psths(
+                dff,
+                cell_indices,
+                data["reward_frames"],
+                data["landmark_entries"],
+                data["landmark_exits"],
+                data["frame_rate"],
+                window_size=reward_psth_window,
+                cell_labels=data["neurons"][cell_indices],
+                signal_label=f"{green_label} — {group_label}",
+                save_path=output_path(filename),
+            )
+        except ValueError as error:
+            print(f"  skipping plot: {error}")
+            figures[f"reward_psth_{suffix}"] = None
+            skipped_output = output_path(filename)
+            if skipped_output:
+                Path(skipped_output).unlink(missing_ok=True)
 
     ratio_outputs = (
-        "6_safe_gr_raw_traces",
+        "6h_high_snr_safe_gr_raw_traces",
+        "6r_random_safe_gr_raw_traces",
         "7_safe_gr_reward_heatmap",
         "8_safe_gr_reward_heatmap_cv",
-        "9_safe_gr_reward_psth_selected_cells",
+        "9h_high_snr_safe_gr_reward_psth",
+        "9r_random_safe_gr_reward_psth",
     )
     if ratio is None:
         for filename in ratio_outputs:
@@ -1315,30 +1400,31 @@ def run_overview(
                 Path(skipped_output).unlink(missing_ok=True)
     else:
         ratio_label = "Safe Δ(G/R)"
-        print(f"Plot 6/{n_plots}: raw {ratio_label} traces...")
-        figures["safe_gr_raw_traces"] = plot_raw_traces(
-            ratio,
-            n_cells=n_trace_cells,
-            start_frame=trace_start_frame,
-            n_frames=trace_n_frames,
-            cell_indices=trace_cell_indices,
-            cell_labels=data["neurons"][trace_cell_indices],
-            frame_rate=data["frame_rate"],
-            signal_label=ratio_label,
-            save_path=output_path(ratio_outputs[0]),
-        )
+        for group_index, (suffix, group_label, cell_indices) in enumerate(trace_groups):
+            print(f"Plot 6{suffix[0]}/{n_plots}: raw {ratio_label}, {group_label}...")
+            figures[f"safe_gr_raw_traces_{suffix}"] = plot_raw_traces(
+                ratio,
+                n_cells=n_trace_cells,
+                start_frame=trace_start_frame,
+                n_frames=trace_n_frames,
+                cell_indices=cell_indices,
+                cell_labels=data["neurons"][cell_indices],
+                frame_rate=data["frame_rate"],
+                signal_label=f"{ratio_label} — {group_label}",
+                save_path=output_path(ratio_outputs[group_index]),
+            )
 
         for key, filename, cross_validated, plot_number, label in (
             (
                 "safe_gr_reward",
-                ratio_outputs[1],
+                ratio_outputs[2],
                 False,
                 7,
                 "all trials",
             ),
             (
                 "safe_gr_reward_cv",
-                ratio_outputs[2],
+                ratio_outputs[3],
                 True,
                 8,
                 "even/odd cross-validated",
@@ -1365,31 +1451,32 @@ def run_overview(
                 if skipped_output:
                     Path(skipped_output).unlink(missing_ok=True)
 
-        print(
-            f"Plot 9/{n_plots}: selected-cell {ratio_label} reward PSTHs bounded "
-            "by neighboring landmarks..."
-        )
-        try:
-            figures["safe_gr_reward_psth_selected_cells"] = (
-                plot_selected_cell_reward_psths(
-                    ratio,
-                    trace_cell_indices,
-                    data["reward_frames"],
-                    data["landmark_entries"],
-                    data["landmark_exits"],
-                    data["frame_rate"],
-                    window_size=reward_psth_window,
-                    cell_labels=data["neurons"][trace_cell_indices],
-                    signal_label=ratio_label,
-                    save_path=output_path(ratio_outputs[3]),
-                )
+        for group_index, (suffix, group_label, cell_indices) in enumerate(trace_groups):
+            print(
+                f"Plot 9{suffix[0]}/{n_plots}: {group_label} {ratio_label} reward "
+                "PSTHs bounded by neighboring landmarks..."
             )
-        except ValueError as error:
-            print(f"  skipping plot: {error}")
-            figures["safe_gr_reward_psth_selected_cells"] = None
-            skipped_output = output_path(ratio_outputs[3])
-            if skipped_output:
-                Path(skipped_output).unlink(missing_ok=True)
+            try:
+                figures[f"safe_gr_reward_psth_{suffix}"] = (
+                    plot_selected_cell_reward_psths(
+                        ratio,
+                        cell_indices,
+                        data["reward_frames"],
+                        data["landmark_entries"],
+                        data["landmark_exits"],
+                        data["frame_rate"],
+                        window_size=reward_psth_window,
+                        cell_labels=data["neurons"][cell_indices],
+                        signal_label=f"{ratio_label} — {group_label}",
+                        save_path=output_path(ratio_outputs[4 + group_index]),
+                    )
+                )
+            except ValueError as error:
+                print(f"  skipping plot: {error}")
+                figures[f"safe_gr_reward_psth_{suffix}"] = None
+                skipped_output = output_path(ratio_outputs[4 + group_index])
+                if skipped_output:
+                    Path(skipped_output).unlink(missing_ok=True)
 
     behaviour_start = n_imaging_plots + 1
     context = data["behaviour_analysis"]
@@ -1438,11 +1525,18 @@ def _cli():
         action="store_true",
         help="display figures interactively (default off for unattended runs)",
     )
+    parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=0,
+        help="seed for the reproducible random-cell overview (default: 0)",
+    )
     args = parser.parse_args()
     run_overview(
         args.mouse,
         args.session_id,
         args.project_root,
+        random_seed=args.random_seed,
         show=args.show,
     )
 

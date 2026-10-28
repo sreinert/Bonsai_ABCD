@@ -221,9 +221,10 @@ def compute_safe_ratio_delta(
     denominator is never smaller than the largest of its per-ROI percentile,
     ``relative_floor * median(abs(red))``, and ``absolute_floor``.
 
-    A weak or non-finite red reference produces a zero trace with an explicit
-    status.  Frequent denominator flooring is retained but flagged because the
-    resulting finite ratio may still be biologically unreliable.
+    Frames below the denominator threshold are not divided: their ratio values
+    are linearly interpolated from neighboring valid frames. A weak/non-finite
+    red reference, or an ROI with more than ``maximum_floor_fraction`` invalid
+    frames, produces a zero trace with an explicit status.
     """
 
     green_fluorescence, green_neuropil = _validate_trace_pair(
@@ -269,8 +270,8 @@ def compute_safe_ratio_delta(
             np.full_like(typical_red, absolute_floor),
         )
     )
-    denominator = np.maximum(smoothed_red, denominator_floor[:, None])
-    floor_fraction = np.mean(smoothed_red < denominator_floor[:, None], axis=1)
+    low_red = smoothed_red < denominator_floor[:, None]
+    floor_fraction = np.mean(low_red, axis=1)
 
     n_rois = green.shape[0]
     ratio = np.zeros_like(green, dtype=np.float32)
@@ -285,10 +286,22 @@ def compute_safe_ratio_delta(
     # Otherwise a near-zero red channel could still turn ordinary green values
     # into a very large but technically finite ratio.
     usable = finite & (typical_red > absolute_floor / relative_floor)
-    ratio[usable] = green[usable] / denominator[usable]
     status[~finite] = "nonfinite_input"
     status[finite & ~usable] = "weak_red_reference"
-    status[usable & (floor_fraction > maximum_floor_fraction)] = "frequent_flooring"
+    for roi in np.flatnonzero(usable):
+        valid_frames = ~low_red[roi]
+        if floor_fraction[roi] > maximum_floor_fraction or np.count_nonzero(valid_frames) < 2:
+            status[roi] = "excessive_low_red"
+            continue
+        ratio[roi, valid_frames] = green[roi, valid_frames] / smoothed_red[roi, valid_frames]
+        if np.any(~valid_frames):
+            frame_index = np.arange(green.shape[1])
+            ratio[roi, ~valid_frames] = np.interp(
+                frame_index[~valid_frames],
+                frame_index[valid_frames],
+                ratio[roi, valid_frames],
+            )
+            status[roi] = "interpolated_low_red"
 
     baseline_method, window, sigma, _, percentile = _baseline_parameters(ops)
     delta_ratio = np.asarray(

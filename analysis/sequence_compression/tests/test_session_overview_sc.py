@@ -31,6 +31,25 @@ def test_valid_frames_are_checked_before_selection():
         overview._select_valid_frames(dff, [])
 
 
+def test_trace_selection_prefers_high_snr_and_respects_ratio_eligibility():
+    rng = np.random.default_rng(4)
+    traces = rng.normal(scale=1.0, size=(3, 1000))
+    traces[1, 400:430] += 20.0
+    traces[2] = 0.0
+
+    selected = overview.select_trace_cells(3, 1, traces=traces, snr_threshold=5.0)
+    np.testing.assert_array_equal(selected, [1])
+
+    selected = overview.select_trace_cells(
+        3,
+        1,
+        traces=traces,
+        eligible=[True, False, False],
+        snr_threshold=5.0,
+    )
+    np.testing.assert_array_equal(selected, [0])
+
+
 def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypatch):
     plane = tmp_path / "suite2p" / "plane0"
     plane.mkdir(parents=True)
@@ -110,11 +129,11 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
         "DF_F0.npy",
         "DF_F02.npy",
         "DG_R.npy",
-        "safe_ratio_green_delta_v2.npy",
-        "safe_ratio_red_delta_v2.npy",
-        "safe_green_red_ratio_delta_v2.npy",
+        "safe_ratio_green_delta_v3.npy",
+        "safe_ratio_red_delta_v3.npy",
+        "safe_green_red_ratio_delta_v3.npy",
     }
-    assert (aligned_funcimg / "safe_green_red_ratio_diagnostics_v2.npz").is_file()
+    assert (aligned_funcimg / "safe_green_red_ratio_diagnostics_v3.npz").is_file()
 
 
 def test_accepted_cells_and_empirical_frame_rate():
@@ -464,12 +483,16 @@ def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, mon
     assert [name for name, _ in calls] == [
         "fov",
         "traces",
+        "traces",
         "reward",
         "reward_cv",
         "reward_psth",
+        "reward_psth",
+        "ratio_traces",
         "ratio_traces",
         "ratio_reward",
         "ratio_reward_cv",
+        "ratio_reward_psth",
         "ratio_reward_psth",
         "behaviour_alignment",
         "behaviour_speed_lick_psth",
@@ -478,14 +501,18 @@ def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, mon
     ]
     assert set(figures) == {
         "fov",
-        "raw_traces",
+        "raw_traces_high_snr",
+        "raw_traces_random",
         "reward",
         "reward_cv",
-        "reward_psth_selected_cells",
-        "safe_gr_raw_traces",
+        "reward_psth_high_snr",
+        "reward_psth_random",
+        "safe_gr_raw_traces_high_snr",
+        "safe_gr_raw_traces_random",
         "safe_gr_reward",
         "safe_gr_reward_cv",
-        "safe_gr_reward_psth_selected_cells",
+        "safe_gr_reward_psth_high_snr",
+        "safe_gr_reward_psth_random",
         "behaviour_alignment",
         "behaviour_speed_lick_psth",
         "behaviour_transition_matrix",
@@ -547,11 +574,14 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
     stale_reward_plots = [
         save_dir / "3_reward_heatmap.png",
         save_dir / "4_reward_heatmap_cv.png",
-        save_dir / "5_reward_psth_selected_cells.png",
-        save_dir / "6_safe_gr_raw_traces.png",
+        save_dir / "5h_high_snr_reward_psth_selected_cells.png",
+        save_dir / "5r_random_reward_psth_selected_cells.png",
+        save_dir / "6h_high_snr_safe_gr_raw_traces.png",
+        save_dir / "6r_random_safe_gr_raw_traces.png",
         save_dir / "7_safe_gr_reward_heatmap.png",
         save_dir / "8_safe_gr_reward_heatmap_cv.png",
-        save_dir / "9_safe_gr_reward_psth_selected_cells.png",
+        save_dir / "9h_high_snr_safe_gr_reward_psth.png",
+        save_dir / "9r_random_safe_gr_reward_psth.png",
     ]
     for path in stale_reward_plots:
         path.touch()
@@ -562,10 +592,12 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
 
     assert figures["reward"] is None
     assert figures["reward_cv"] is None
-    assert figures["reward_psth_selected_cells"] is None
+    assert figures["reward_psth_high_snr"] is None
+    assert figures["reward_psth_random"] is None
     assert all(not path.exists() for path in stale_reward_plots)
     plt.close(figures["fov"])
-    plt.close(figures["raw_traces"])
+    plt.close(figures["raw_traces_high_snr"])
+    plt.close(figures["raw_traces_random"])
 
 
 def test_behaviour_failure_propagates_and_stale_outputs_are_removed(

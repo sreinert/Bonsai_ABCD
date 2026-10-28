@@ -131,7 +131,8 @@ def test_safe_ratio_uses_adaptive_floor_and_cannot_explode(
     )
 
     assert result.denominator_floor[0] >= 0.5
-    assert np.max(np.abs(result.ratio[0])) <= 200.0
+    np.testing.assert_allclose(result.ratio[0], 10.0)
+    assert result.status[0] == "interpolated_low_red"
     assert np.all(np.isfinite(result.delta_ratio))
 
 
@@ -154,6 +155,30 @@ def test_safe_ratio_rejects_weak_red_reference(
     )
 
     assert result.status[0] == "weak_red_reference"
+    assert np.array_equal(result.delta_ratio, np.zeros_like(green))
+
+
+def test_safe_ratio_rejects_excessive_low_red_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        red_reference_correction, "_suite2p_preprocess", lambda values, *_: values
+    )
+    green = np.full((1, 20), 100.0)
+    red = np.full((1, 20), 10.0)
+    red[0, :3] = 0.0
+
+    result = red_reference_correction.compute_safe_ratio_delta(
+        green,
+        np.zeros_like(green),
+        red,
+        np.zeros_like(red),
+        legacy_ops(),
+        neuropil_coefficient=0.0,
+        smoothing_seconds=0.0,
+    )
+
+    assert result.status[0] == "excessive_low_red"
     assert np.array_equal(result.delta_ratio, np.zeros_like(green))
 
 
