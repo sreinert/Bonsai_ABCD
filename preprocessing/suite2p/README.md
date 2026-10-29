@@ -131,11 +131,10 @@ or contains no TIFF files. Sessions without TIFF files remain in the inventory.
 direct, non-hidden `.h5` file (case-insensitive).
 `meanImg_chan1_seg_created` reports whether a manual Cellpose
 `registration/meanImg_chan1_seg.npy` exists (the current pipeline location is
-`suite2p/qc/registration`). When it exists, `iscell_updated_after_seg` and
-`stat_updated_after_seg` independently compare each plane output's modification
-time with the segmentation file. They report `yes` for an equal or newer output
-and `no` for an older or missing output; both are blank when no segmentation
-file exists.
+`suite2p/qc/registration`). `iscell_updated` compares the modification times of
+`iscell.npy` and `stat.npy`. It reports `yes` only when `iscell.npy` is
+strictly newer than `stat.npy`, `no` when both exist but it is not newer, and is
+blank when either file is missing.
 `automatic_roi_detection_model` reads the recorded automatic detection
 provenance and reports `cpsam` or `cpsam_v2`. It is blank when no supported
 automatic model can be identified; manual GUI segmentation alone does not set

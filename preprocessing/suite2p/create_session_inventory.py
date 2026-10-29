@@ -47,8 +47,7 @@ FIELDNAMES = (
     "number_of_rois",
     "number_of_cells",
     "meanImg_chan1_seg_created",
-    "iscell_updated_after_seg",
-    "stat_updated_after_seg",
+    "iscell_updated",
 )
 
 
@@ -61,8 +60,7 @@ class Suite2pStatus:
     number_of_rois: int | None
     number_of_cells: int | None
     segmentation_created: bool
-    iscell_updated_after_seg: bool | None
-    stat_updated_after_seg: bool | None
+    iscell_updated_after_stat: bool | None
     automatic_roi_detection_model: str | None
 
 
@@ -137,9 +135,13 @@ def find_segmentation_file(
     return max(existing, key=lambda path: path.stat().st_mtime_ns) if existing else None
 
 
-def updated_after(path: Path, reference: Path) -> bool:
-    """Return whether path exists and is at least as new as reference."""
-    return path.is_file() and path.stat().st_mtime_ns >= reference.stat().st_mtime_ns
+def iscell_newer_than_stat(plane: Path) -> bool | None:
+    """Compare iscell.npy and stat.npy modification timestamps when both exist."""
+    iscell_path = plane / "iscell.npy"
+    stat_path = plane / "stat.npy"
+    if not iscell_path.is_file() or not stat_path.is_file():
+        return None
+    return iscell_path.stat().st_mtime_ns > stat_path.stat().st_mtime_ns
 
 
 def model_name_from_metadata(value: object) -> str | None:
@@ -220,7 +222,7 @@ def inspect_suite2p(
     suite2p_path = find_suite2p_path(raw_session_path, processed_session_path)
     if suite2p_path is None:
         return Suite2pStatus(
-            False, False, False, False, None, None, False, None, None, None
+            False, False, False, False, None, None, False, None, None
         )
 
     plane = suite2p_path / "plane0"
@@ -229,16 +231,7 @@ def inspect_suite2p(
         suite2p_path, raw_session_path, processed_session_path
     )
     segmentation_created = segmentation is not None
-    iscell_updated_after_seg = (
-        updated_after(plane / "iscell.npy", segmentation)
-        if segmentation is not None
-        else None
-    )
-    stat_updated_after_seg = (
-        updated_after(plane / "stat.npy", segmentation)
-        if segmentation is not None
-        else None
-    )
+    iscell_updated_after_stat = iscell_newer_than_stat(plane)
     if not plane.is_dir():
         return Suite2pStatus(
             True,
@@ -248,8 +241,7 @@ def inspect_suite2p(
             None,
             None,
             segmentation_created,
-            iscell_updated_after_seg,
-            stat_updated_after_seg,
+            iscell_updated_after_stat,
             detection_model,
         )
 
@@ -292,8 +284,7 @@ def inspect_suite2p(
         number_of_rois,
         number_of_cells,
         segmentation_created,
-        iscell_updated_after_seg,
-        stat_updated_after_seg,
+        iscell_updated_after_stat,
         detection_model,
     )
 
@@ -380,18 +371,11 @@ def inventory_mouse(
                 "meanImg_chan1_seg_created": (
                     "yes" if status.segmentation_created else "no"
                 ),
-                "iscell_updated_after_seg": (
+                "iscell_updated": (
                     ""
-                    if status.iscell_updated_after_seg is None
+                    if status.iscell_updated_after_stat is None
                     else "yes"
-                    if status.iscell_updated_after_seg
-                    else "no"
-                ),
-                "stat_updated_after_seg": (
-                    ""
-                    if status.stat_updated_after_seg is None
-                    else "yes"
-                    if status.stat_updated_after_seg
+                    if status.iscell_updated_after_stat
                     else "no"
                 ),
             }

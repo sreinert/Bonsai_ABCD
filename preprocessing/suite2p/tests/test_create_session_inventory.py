@@ -38,6 +38,12 @@ def save_complete_suite2p(processed_session: Path) -> None:
     np.save(plane / "Fneu.npy", np.ones((2, 4)))
     np.save(plane / "spks.npy", np.ones((2, 4)))
     np.save(plane / "iscell.npy", np.asarray([[1, 0.9], [0, 0.1]]))
+    base_time = 1_700_000_000_000_000_000
+    os.utime(plane / "stat.npy", ns=(base_time, base_time))
+    os.utime(
+        plane / "iscell.npy",
+        ns=(base_time + 1_000_000_000, base_time + 1_000_000_000),
+    )
 
 
 def test_inventory_filters_sessions_and_reports_complete_pipeline(tmp_path: Path) -> None:
@@ -69,8 +75,7 @@ def test_inventory_filters_sessions_and_reports_complete_pipeline(tmp_path: Path
             "number_of_rois": 2,
             "number_of_cells": 1,
             "meanImg_chan1_seg_created": "no",
-            "iscell_updated_after_seg": "",
-            "stat_updated_after_seg": "",
+            "iscell_updated": "yes",
         }
     ]
 
@@ -94,6 +99,7 @@ def test_inventory_reports_partial_pipeline(tmp_path: Path) -> None:
     assert row["trace_extraction"] == "no"
     assert row["number_of_rois"] == 0
     assert row["number_of_cells"] == ""
+    assert row["iscell_updated"] == ""
 
 
 def test_write_inventory_writes_headers_even_with_no_rows(tmp_path: Path) -> None:
@@ -173,7 +179,7 @@ def test_funcimg_reports_direct_visible_h5_file(tmp_path: Path) -> None:
     assert row["h5_files_present"] == "yes"
 
 
-def test_manual_segmentation_reports_independent_output_freshness(
+def test_iscell_update_status_compares_stat_mtime(
     tmp_path: Path,
 ) -> None:
     raw_root = tmp_path / "rawdata" / "cohort2"
@@ -202,8 +208,7 @@ def test_manual_segmentation_reports_independent_output_freshness(
     [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-08")
 
     assert row["meanImg_chan1_seg_created"] == "yes"
-    assert row["iscell_updated_after_seg"] == "no"
-    assert row["stat_updated_after_seg"] == "yes"
+    assert row["iscell_updated"] == "no"
 
 
 def test_automatic_roi_detection_model_comes_from_provenance(tmp_path: Path) -> None:
