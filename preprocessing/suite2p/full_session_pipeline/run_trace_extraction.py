@@ -26,9 +26,9 @@ sys.path.insert(0, str(PIPELINE_DIR))
 from full_session_common import write_json_atomic
 
 try:  # Support both direct script execution and package imports in tests.
-    from .config import FS, SUITE2P_VERSION, TAU
+    from .config import CLASSIFICATION, FS, SUITE2P_VERSION, TAU
 except ImportError:
-    from full_session_config import FS, SUITE2P_VERSION, TAU
+    from full_session_config import CLASSIFICATION, FS, SUITE2P_VERSION, TAU
 
 
 PLANE_OUTPUTS = (
@@ -89,6 +89,17 @@ def configure_settings(settings: dict[str, Any], device: str) -> dict[str, Any]:
     settings["classification"]["use_builtin_classifier"] = True
     settings["classification"]["preclassify"] = 0.0
     return settings
+
+
+def apply_cell_probability_threshold(
+    iscell: np.ndarray, threshold: float
+) -> np.ndarray:
+    """Apply the chosen classifier cutoff while preserving cell probabilities."""
+    if iscell.ndim != 2 or iscell.shape[1] != 2:
+        raise ValueError(f"iscell has shape {iscell.shape}; expected (n_rois, 2)")
+    thresholded = iscell.copy()
+    thresholded[:, 0] = thresholded[:, 1] > threshold
+    return thresholded
 
 
 def load_reviewed_detection(
@@ -360,6 +371,9 @@ def main() -> None:
             stat=stat,
             classfile=suite2p.classification.builtin_classfile,
         )
+        iscell = apply_cell_probability_threshold(
+            iscell, CLASSIFICATION["cell_probability_threshold"]
+        )
         classification_seconds = time.time() - classification_started
 
         deconvolution_started = time.time()
@@ -436,6 +450,9 @@ def main() -> None:
             "output_dir": str(output_dir),
             "n_rois": int(len(stat)),
             "n_cells": int(np.count_nonzero(iscell[:, 0])),
+            "iscell_probability_threshold": CLASSIFICATION[
+                "cell_probability_threshold"
+            ],
             "n_frames": int(F.shape[1]),
             "functional_channel": int(db.get("functional_chan", 1)),
             "anatomical_channel_extracted": True,

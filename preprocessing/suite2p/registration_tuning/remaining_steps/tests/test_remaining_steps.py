@@ -218,6 +218,17 @@ def test_trace_configuration_is_reproducible_and_skips_registration() -> None:
     }
 
 
+def test_iscell_uses_configured_probability_threshold() -> None:
+    classified = np.asarray([[0.0, 0.05], [0.0, 0.1], [0.0, 0.11], [1.0, 0.9]])
+    thresholded = run_trace_extraction.apply_cell_probability_threshold(
+        classified, config.CLASSIFICATION["cell_probability_threshold"]
+    )
+    assert config.CLASSIFICATION["cell_probability_threshold"] == 0.1
+    assert np.array_equal(thresholded[:, 0], [0.0, 0.0, 1.0, 1.0])
+    assert np.array_equal(thresholded[:, 1], classified[:, 1])
+    assert np.array_equal(classified[:, 0], [0.0, 0.0, 0.0, 1.0])
+
+
 def test_trace_loader_requires_completed_reviewed_detection(tmp_path: Path) -> None:
     detection_dir = tmp_path / "roi_detection" / "cpsam"
     detection_dir.mkdir(parents=True)

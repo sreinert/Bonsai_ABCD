@@ -57,3 +57,9 @@ DETECTION = {
     "cellprob_threshold": 0.0,
     "denoise": True,
 }
+
+CLASSIFICATION = {
+    # Suite2p's built-in ROI classifier defaults to 0.5. The reviewed data
+    # require the same 0.1 cutoff used interactively in the Suite2p GUI.
+    "cell_probability_threshold": 0.1,
+}
