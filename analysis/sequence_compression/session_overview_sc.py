@@ -16,6 +16,7 @@ import argparse
 import math
 import os
 from pathlib import Path
+import tempfile
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
@@ -191,6 +192,37 @@ def _atomic_save_npz(path, **values):
         temporary.unlink(missing_ok=True)
 
 
+def _celltv_responsive_neurons(dff, imaging_path):
+    """Run CellTV selection without leaving its legacy NPZ beside our cache."""
+    from cellTV.cellTV_functions_cohort2 import get_responsive_neurons
+
+    with tempfile.TemporaryDirectory(prefix="celltv-responsive-neurons-") as temporary:
+        return get_responsive_neurons(
+            np.asarray(dff),
+            str(imaging_path),
+            save_path=temporary,
+            plot_deltas=False,
+            plot_responses=False,
+        )
+
+
+def _validate_valid_neurons(values, n_rois):
+    """Return sorted, unique Suite2p ROI indices from CellTV selection."""
+    values = np.asarray(values)
+    if values.ndim != 1:
+        raise ValueError(f"valid_neurons must be one-dimensional, got {values.shape}")
+    if not np.issubdtype(values.dtype, np.integer):
+        if not np.all(np.isfinite(values)) or not np.all(values == np.floor(values)):
+            raise ValueError("valid_neurons must contain integer ROI indices")
+    values = np.unique(values.astype(int, copy=False))
+    if values.size and (values.min() < 0 or values.max() >= n_rois):
+        raise IndexError(
+            f"valid_neurons range [{values.min()}, {values.max()}] is incompatible "
+            f"with {n_rois} Suite2p ROIs"
+        )
+    return values
+
+
 def _load_or_extract_ratio_signals(
     suite2p_plane_path, aligned_funcimg_path, accepted, valid_frames
 ):
@@ -203,6 +235,12 @@ def _load_or_extract_ratio_signals(
         "ratio_delta": aligned_funcimg_path / "safe_green_red_ratio_delta_v3.npy",
     }
     diagnostics_path = aligned_funcimg_path / "safe_green_red_ratio_diagnostics_v3.npz"
+    valid_neurons_path = aligned_funcimg_path / "valid_neurons.npy"
+    iscell_path = suite2p_plane_path / "iscell.npy"
+    if not iscell_path.is_file():
+        raise FileNotFoundError(
+            f"CellTV valid-neuron selection requires {iscell_path}"
+        )
     valid_frames = np.asarray(valid_frames, dtype=int)
     if valid_frames.ndim != 1 or valid_frames.size == 0:
         raise ValueError("valid_frames must be a non-empty one-dimensional array")
@@ -216,6 +254,7 @@ def _load_or_extract_ratio_signals(
                 "valid_frames" in diagnostics
                 and np.array_equal(diagnostics["valid_frames"], valid_frames)
             )
+    rebuilt_signals = not cache_matches_alignment
     if cache_matches_alignment:
         outputs = {
             name: np.load(path, mmap_mode="r") for name, path in output_paths.items()
@@ -278,6 +317,30 @@ def _load_or_extract_ratio_signals(
             )
         )
 
+    valid_neurons_is_current = (
+        valid_neurons_path.is_file()
+        and not rebuilt_signals
+        and valid_neurons_path.stat().st_mtime
+        >= max(
+            output_paths["green_delta"].stat().st_mtime,
+            iscell_path.stat().st_mtime,
+        )
+    )
+    if valid_neurons_is_current:
+        valid_neurons = _validate_valid_neurons(
+            np.load(valid_neurons_path), outputs["green_delta"].shape[0]
+        )
+    else:
+        valid_neurons = _validate_valid_neurons(
+            _celltv_responsive_neurons(outputs["green_delta"], suite2p_plane_path),
+            outputs["green_delta"].shape[0],
+        )
+        _atomic_save_npy(valid_neurons_path, valid_neurons)
+        print(
+            f"Saved {len(valid_neurons)} CellTV-responsive Suite2p ROI indices to "
+            f"{valid_neurons_path}"
+        )
+
     shapes = {name: tuple(values.shape) for name, values in outputs.items()}
     if len(set(shapes.values())) != 1:
         raise ValueError(f"Saved safe G/R signal shapes are incompatible: {shapes}")
@@ -306,7 +369,11 @@ def _load_or_extract_ratio_signals(
         for name in np.unique(accepted_statuses)
     }
     print(f"Safe G/R denominator status for accepted ROIs: {status_counts}")
-    return {name: np.asarray(values[accepted]) for name, values in outputs.items()}
+    accepted_outputs = {
+        name: np.asarray(values[accepted]) for name, values in outputs.items()
+    }
+    accepted_outputs["valid_neurons"] = valid_neurons
+    return accepted_outputs
 
 
 def _load_aligned_behaviour(session_path, n_frames):
@@ -614,10 +681,14 @@ def load_session_data(mouse, session_id, project_root):
         ratio_delta = None
         ratio_status = None
         ratio_floor_fraction = None
+        valid_neurons = None
+        valid_cell_mask = None
     else:
         green_delta = ratio_signals["green_delta"]
         red_delta = ratio_signals["red_delta"]
         ratio_delta = ratio_signals["ratio_delta"]
+        valid_neurons = np.asarray(ratio_signals["valid_neurons"], dtype=int)
+        valid_cell_mask = np.isin(accepted, valid_neurons)
         signal_shapes = {
             "NWB green": nwb_dff.shape,
             "computed green": green_delta.shape,
@@ -655,6 +726,8 @@ def load_session_data(mouse, session_id, project_root):
         "green_red_ratio_dF": ratio_delta,
         "green_red_ratio_status": ratio_status,
         "green_red_ratio_floor_fraction": ratio_floor_fraction,
+        "valid_neurons": valid_neurons,
+        "valid_cell_mask": valid_cell_mask,
         "neurons": accepted,
         "mean_img": mean_img,
         "image_mask": image_mask,
@@ -769,6 +842,14 @@ def select_trace_cells(
         raise ValueError("At least one accepted cell is required")
     if n_cells <= 0:
         raise ValueError("n_cells must be positive")
+    allowed = np.ones(n_total_cells, dtype=bool)
+    if eligible is not None:
+        allowed = np.asarray(eligible, dtype=bool)
+        if allowed.shape != (n_total_cells,):
+            raise ValueError("eligible must have one value per accepted cell")
+    allowed_indices = np.flatnonzero(allowed)
+    if allowed_indices.size == 0:
+        raise ValueError("No eligible cells are available for trace selection")
     if traces is not None:
         traces = np.asarray(traces, dtype=float)
         if traces.ndim != 2 or traces.shape[0] != n_total_cells:
@@ -789,29 +870,35 @@ def select_trace_cells(
             out=np.full(n_total_cells, np.nan),
             where=np.isfinite(noise) & (noise > 0),
         )
-        allowed = np.ones(n_total_cells, dtype=bool)
-        if eligible is not None:
-            allowed = np.asarray(eligible, dtype=bool)
-            if allowed.shape != (n_total_cells,):
-                raise ValueError("eligible must have one value per accepted cell")
         candidates = np.flatnonzero(allowed & np.isfinite(snr))
         if candidates.size:
             order = np.lexsort((candidates, -snr[candidates]))
             return candidates[order[: min(n_cells, candidates.size)]]
-    return np.unique(
-        np.linspace(0, n_total_cells - 1, min(n_cells, n_total_cells)).astype(int)
-    )
+    positions = np.linspace(
+        0, allowed_indices.size - 1, min(n_cells, allowed_indices.size)
+    ).astype(int)
+    return np.unique(allowed_indices[positions])
 
 
-def select_random_trace_cells(n_total_cells, n_cells=20, *, seed=0):
+def select_random_trace_cells(
+    n_total_cells, n_cells=20, *, seed=0, eligible=None
+):
     """Return a reproducible random sample of accepted-cell row indices."""
     if n_total_cells <= 0:
         raise ValueError("At least one accepted cell is required")
     if n_cells <= 0:
         raise ValueError("n_cells must be positive")
+    candidates = np.arange(n_total_cells)
+    if eligible is not None:
+        eligible = np.asarray(eligible, dtype=bool)
+        if eligible.shape != (n_total_cells,):
+            raise ValueError("eligible must have one value per accepted cell")
+        candidates = candidates[eligible]
+    if candidates.size == 0:
+        raise ValueError("No eligible cells are available for random selection")
     rng = np.random.default_rng(seed)
     selected = rng.choice(
-        n_total_cells, size=min(n_cells, n_total_cells), replace=False
+        candidates, size=min(n_cells, candidates.size), replace=False
     )
     return np.sort(selected)
 
@@ -1300,13 +1387,23 @@ def run_overview(
     def output_path(name):
         return str(save_dir / f"{name}.png") if save_dir else None
 
+    valid_cell_mask = data.get("valid_cell_mask")
+    if valid_cell_mask is None:
+        raise RuntimeError(
+            "CellTV valid-neuron selection is unavailable; the overview will not "
+            "sample accepted ROIs without applying get_responsive_neurons"
+        )
     high_snr_indices = select_trace_cells(
         dff.shape[0],
         n_trace_cells,
         traces=dff,
+        eligible=valid_cell_mask,
     )
     random_indices = select_random_trace_cells(
-        dff.shape[0], n_trace_cells, seed=random_seed
+        dff.shape[0],
+        n_trace_cells,
+        seed=random_seed,
+        eligible=valid_cell_mask,
     )
     trace_groups = (
         (
@@ -1317,8 +1414,10 @@ def run_overview(
         ("random", f"random sample (seed={random_seed})", random_indices),
     )
     print(
-        f"Selected the top {len(high_snr_indices)} green-SNR cell(s) and "
-        f"{len(random_indices)} reproducibly random cell(s)."
+        f"CellTV retained {np.count_nonzero(valid_cell_mask)} of "
+        f"{dff.shape[0]} accepted cell(s); selected the top "
+        f"{len(high_snr_indices)} green-SNR cell(s) and {len(random_indices)} "
+        "reproducibly random cell(s) from that intersection."
     )
     figures = {}
     print(f"Plot 1/{n_plots}: FOV with accepted-cell masks...")

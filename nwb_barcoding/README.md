@@ -109,18 +109,22 @@ run NWB conversion or barcode alignment. Each array task runs only
 analysis/cohort2/<subject>/<full-session>/
 ```
 
-The first overview run also reproduces CellTV's aligned two-channel extraction from
-the matching Suite2p traces, using `neucoeff` from `ops.npy`, and saves the established
-files under `BehaviourAligned_robust/cohort2/<subject>/<full-session>/funcimg/`:
+The first overview run also performs the aligned two-channel extraction from the
+matching Suite2p traces, using `neucoeff` from `ops.npy`, and saves its caches under
+`BehaviourAligned_robust/cohort2/<subject>/<full-session>/funcimg/`:
 
 ```text
-DF_F0.npy
-DF_F02.npy
-DG_R.npy
+safe_ratio_green_delta_v3.npy
+safe_ratio_red_delta_v3.npy
+safe_green_red_ratio_delta_v3.npy
+safe_green_red_ratio_diagnostics_v3.npz
+valid_neurons.npy
 ```
 
-Existing complete files are reused. The overview adds raw-trace, peri-reward,
-cross-validated peri-reward, and selected-cell reward-PSTH plots for `DG_R.npy`.
+`valid_neurons.npy` contains original Suite2p ROI indices returned by CellTV's
+`get_responsive_neurons`; both the high-green-SNR and reproducibly random selected-cell
+plots are sampled only from ROIs that are also classified as cells. Existing complete
+files are reused.
 
 The overview stage uses the existing `suite2p-reg-1.1.0` conda environment rather
 than the barcode-alignment uv environment. Install its small set of additional

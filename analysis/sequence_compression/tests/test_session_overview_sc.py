@@ -48,6 +48,15 @@ def test_trace_selection_ranks_all_finite_snr_and_respects_eligibility():
     )
     np.testing.assert_array_equal(selected, [0])
 
+    random_a = overview.select_random_trace_cells(
+        3, 2, seed=12, eligible=[True, False, True]
+    )
+    random_b = overview.select_random_trace_cells(
+        3, 2, seed=12, eligible=[True, False, True]
+    )
+    np.testing.assert_array_equal(random_a, [0, 2])
+    np.testing.assert_array_equal(random_a, random_b)
+
 
 def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypatch):
     plane = tmp_path / "suite2p" / "plane0"
@@ -63,6 +72,7 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
         ("Fneu_chan2.npy", Fneu2),
     ):
         np.save(plane / name, values)
+    np.save(plane / "iscell.npy", np.array([[0, 0.1], [1, 0.9]]))
     np.save(
         plane / "ops.npy",
         {
@@ -99,6 +109,13 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
 
     monkeypatch.setattr(overview, "compute_channel_delta", fake_channel_delta)
     monkeypatch.setattr(overview, "compute_safe_ratio_delta", fake_safe_ratio)
+    responsive_calls = []
+
+    def fake_responsive(dff, imaging_path):
+        responsive_calls.append((np.asarray(dff).copy(), Path(imaging_path)))
+        return np.array([1])
+
+    monkeypatch.setattr(overview, "_celltv_responsive_neurons", fake_responsive)
     aligned_funcimg = tmp_path / "aligned" / "funcimg"
     aligned_funcimg.mkdir(parents=True)
     for legacy_name in ("DF_F0.npy", "DF_F02.npy", "DG_R.npy"):
@@ -121,6 +138,9 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
     np.testing.assert_allclose(
         result["ratio_delta"], expected_ratio[[1]]
     )
+    np.testing.assert_array_equal(result["valid_neurons"], [1])
+    np.testing.assert_allclose(responsive_calls[0][0], expected_green_full[:, [1, 3]])
+    assert responsive_calls[0][1] == plane
     assert len(delta_calls) == 2
     np.testing.assert_array_equal(delta_calls[0][0], F)
     np.testing.assert_array_equal(delta_calls[1][0], F2)
@@ -131,7 +151,9 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
         "safe_ratio_green_delta_v3.npy",
         "safe_ratio_red_delta_v3.npy",
         "safe_green_red_ratio_delta_v3.npy",
+        "valid_neurons.npy",
     }
+    np.testing.assert_array_equal(np.load(aligned_funcimg / "valid_neurons.npy"), [1])
     assert (aligned_funcimg / "safe_green_red_ratio_diagnostics_v3.npz").is_file()
 
 
@@ -389,6 +411,7 @@ def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, mon
             "green_red_ratio_dF": (
                 np.arange(120, dtype=float).reshape(3, 40) / 10
             ),
+            "valid_cell_mask": np.array([True, False, True]),
             "neurons": np.array([2, 5, 9]),
             "mean_img": np.zeros((2, 2)),
             "image_mask": [np.eye(2, dtype=bool)],
@@ -413,7 +436,7 @@ def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, mon
             else "traces"
         )
         calls.append((name, kwargs["save_path"]))
-        selected = overview.select_trace_cells(3, 20)
+        selected = np.array([0, 2])
         np.testing.assert_array_equal(kwargs["cell_indices"], selected)
         np.testing.assert_array_equal(kwargs["cell_labels"], np.array([2, 5, 9])[selected])
         return plt.figure()
@@ -439,7 +462,7 @@ def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, mon
             else ""
         )
         calls.append((prefix + "reward_psth", kwargs["save_path"]))
-        selected = overview.select_trace_cells(3, 20)
+        selected = np.array([0, 2])
         np.testing.assert_array_equal(args[1], selected)
         np.testing.assert_array_equal(kwargs["cell_labels"], np.array([2, 5, 9])[selected])
         return plt.figure()
@@ -531,6 +554,7 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
         "load_session_data",
         lambda *args, **kwargs: {
             "dF": np.ones((2, 20)),
+            "valid_cell_mask": np.array([True, True]),
             "neurons": np.array([1, 4]),
             "mean_img": np.zeros((2, 2)),
             "image_mask": [np.eye(2, dtype=bool)],
@@ -609,6 +633,7 @@ def test_behaviour_failure_propagates_and_stale_outputs_are_removed(
         "load_session_data",
         lambda *args, **kwargs: {
             "dF": np.ones((2, 40)),
+            "valid_cell_mask": np.array([True, True]),
             "neurons": np.array([1, 4]),
             "mean_img": np.zeros((2, 2)),
             "image_mask": [np.eye(2, dtype=bool)],
