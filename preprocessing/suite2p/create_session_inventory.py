@@ -31,6 +31,7 @@ SESSION_PATTERN = re.compile(
 REGISTRATION_FILES = ("ops.npy", "data.bin")
 TRACE_FILES = ("F.npy", "Fneu.npy", "spks.npy", "iscell.npy")
 TIFF_SUFFIXES = {".tif", ".tiff"}
+REQUIRED_ALIGNMENT_FILES = ("behaviour_data.npz", "valid_frames.npz")
 FIELDNAMES = (
     "mouse_id",
     "session_full_name",
@@ -48,6 +49,9 @@ FIELDNAMES = (
     "number_of_cells",
     "meanImg_chan1_seg_created",
     "iscell_updated",
+    "alignment_performed",
+    "session_overview_completed",
+    "number_of_valid_neurons",
 )
 
 
@@ -62,6 +66,13 @@ class Suite2pStatus:
     segmentation_created: bool
     iscell_updated_after_stat: bool | None
     automatic_roi_detection_model: str | None
+
+
+@dataclass(frozen=True)
+class DownstreamStatus:
+    alignment_performed: bool
+    session_overview_completed: bool
+    number_of_valid_neurons: int | None
 
 
 def resolve_project_root(value: Path) -> Path:
@@ -318,14 +329,93 @@ def has_direct_h5_files(funcimg_path: Path) -> bool:
     )
 
 
+def complete_alignment_files(aligned_session_path: Path) -> tuple[Path, ...]:
+    """Return canonical alignment products, or an empty tuple if incomplete."""
+    if not aligned_session_path.is_dir():
+        return ()
+    nwbs = tuple(sorted(aligned_session_path.glob("vrabcd_2p_preprocessed_*.nwb")))
+    required = tuple(aligned_session_path / name for name in REQUIRED_ALIGNMENT_FILES)
+    if len(nwbs) != 1 or not all(path.is_file() for path in required):
+        return ()
+    return (*nwbs, *required)
+
+
+def count_valid_neurons(path: Path) -> int | None:
+    if not path.is_file():
+        return None
+    try:
+        values = np.load(path, mmap_mode="r", allow_pickle=False)
+    except (OSError, ValueError, EOFError):
+        return None
+    if values.ndim != 1:
+        return None
+    return int(values.size)
+
+
+def inspect_downstream_outputs(
+    project_root: Path,
+    mouse_id: str,
+    full_session_name: str,
+    plane: Path,
+) -> DownstreamStatus:
+    aligned_session = (
+        project_root
+        / "BehaviourAligned_robust"
+        / "cohort2"
+        / mouse_id
+        / full_session_name
+    )
+    alignment_files = complete_alignment_files(aligned_session)
+    iscell_path = plane / "iscell.npy"
+    alignment_performed = bool(alignment_files) and iscell_path.is_file()
+    latest_alignment_mtime: int | None = None
+    if alignment_performed:
+        latest_alignment_mtime = max(
+            path.stat().st_mtime_ns for path in alignment_files
+        )
+        alignment_performed = (
+            latest_alignment_mtime > iscell_path.stat().st_mtime_ns
+        )
+
+    analysis_session = (
+        project_root / "analysis" / "cohort2" / mouse_id / full_session_name
+    )
+    overview_outputs = tuple(
+        path
+        for path in analysis_session.glob("*.png")
+        if path.is_file() and not path.name.startswith(".")
+    )
+    session_overview_completed = (
+        alignment_performed
+        and latest_alignment_mtime is not None
+        and bool(overview_outputs)
+        and max(path.stat().st_mtime_ns for path in overview_outputs)
+        > latest_alignment_mtime
+    )
+    valid_neurons = count_valid_neurons(
+        aligned_session / "funcimg" / "valid_neurons.npy"
+    )
+    return DownstreamStatus(
+        alignment_performed=alignment_performed,
+        session_overview_completed=session_overview_completed,
+        number_of_valid_neurons=valid_neurons,
+    )
+
+
 def inventory_mouse(
-    session_root: Path, suite2p_root: Path, mouse_id: str
+    session_root: Path,
+    suite2p_root: Path,
+    mouse_id: str,
+    *,
+    project_root: Path | None = None,
 ) -> list[dict[str, object]]:
     if not mouse_id or mouse_id in {".", ".."} or Path(mouse_id).name != mouse_id:
         raise ValueError(f"Mouse ID must be one directory name, received {mouse_id!r}")
     mouse_path = session_root / mouse_id
     if not mouse_path.is_dir():
         raise NotADirectoryError(f"Mouse directory not found: {mouse_path}")
+    if project_root is None:
+        project_root = session_root.parent.parent
 
     rows: list[dict[str, object]] = []
     for session_path in visible_session_directories(mouse_path):
@@ -335,6 +425,12 @@ def inventory_mouse(
         short_name, date = parse_session_name(session_path.name)
         processed_session_path = suite2p_root / mouse_id / short_name
         status = inspect_suite2p(session_path, processed_session_path)
+        downstream = inspect_downstream_outputs(
+            project_root,
+            mouse_id,
+            session_path.name,
+            processed_session_path / "suite2p" / "plane0",
+        )
         registration_status = (
             "succeeded"
             if status.registration
@@ -377,6 +473,17 @@ def inventory_mouse(
                     else "yes"
                     if status.iscell_updated_after_stat
                     else "no"
+                ),
+                "alignment_performed": (
+                    "yes" if downstream.alignment_performed else "no"
+                ),
+                "session_overview_completed": (
+                    "yes" if downstream.session_overview_completed else "no"
+                ),
+                "number_of_valid_neurons": (
+                    ""
+                    if downstream.number_of_valid_neurons is None
+                    else downstream.number_of_valid_neurons
                 ),
             }
         )
@@ -472,7 +579,12 @@ def main() -> None:
     output_dir = args.output_dir.expanduser().resolve() if args.output_dir else None
     for mouse_id in mouse_ids:
         try:
-            rows = inventory_mouse(session_root, suite2p_root, mouse_id)
+            rows = inventory_mouse(
+                session_root,
+                suite2p_root,
+                mouse_id,
+                project_root=project_root,
+            )
         except PermissionError as exc:
             raise SystemExit(
                 f"ERROR: permission denied while reading {exc.filename}. "

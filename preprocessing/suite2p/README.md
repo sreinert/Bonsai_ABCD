@@ -139,6 +139,14 @@ blank when either file is missing.
 provenance and reports `cpsam` or `cpsam_v2`. It is blank when no supported
 automatic model can be identified; manual GUI segmentation alone does not set
 this field.
+`alignment_performed` is `yes` when the full session under
+`BehaviourAligned_robust/cohort2` contains one merged NWB plus
+`behaviour_data.npz` and `valid_frames.npz`, and the newest of those alignment
+files is newer than `suite2p/plane0/iscell.npy`. `session_overview_completed` is
+`yes` when the full-session folder under `analysis/cohort2` contains a PNG newer
+than the newest alignment file. `number_of_valid_neurons` is the length of
+`BehaviourAligned_robust/.../funcimg/valid_neurons.npy`, or blank if that file is
+missing or invalid.
 
 ## Import a reviewed Cellpose segmentation
 

@@ -76,6 +76,9 @@ def test_inventory_filters_sessions_and_reports_complete_pipeline(tmp_path: Path
             "number_of_cells": 1,
             "meanImg_chan1_seg_created": "no",
             "iscell_updated": "yes",
+            "alignment_performed": "no",
+            "session_overview_completed": "no",
+            "number_of_valid_neurons": "",
         }
     ]
 
@@ -241,6 +244,102 @@ def test_automatic_roi_detection_model_comes_from_provenance(tmp_path: Path) -> 
         row["session_full_name"]: row["automatic_roi_detection_model"]
         for row in rows
     } == expected
+
+
+def test_alignment_overview_and_valid_neuron_status_use_timestamps(
+    tmp_path: Path,
+) -> None:
+    raw_root = tmp_path / "rawdata" / "cohort2"
+    processed_root = tmp_path / "processed" / "cohort2"
+    session_name = "ses-downstream_date-20261010"
+    make_session(raw_root, "sub-11", session_name)
+    processed_session = processed_root / "sub-11" / "downstream"
+    save_complete_suite2p(processed_session)
+
+    aligned = (
+        tmp_path
+        / "BehaviourAligned_robust"
+        / "cohort2"
+        / "sub-11"
+        / session_name
+    )
+    aligned.mkdir(parents=True)
+    alignment_files = (
+        aligned / "vrabcd_2p_preprocessed_test.nwb",
+        aligned / "behaviour_data.npz",
+        aligned / "valid_frames.npz",
+    )
+    for path in alignment_files:
+        path.touch()
+    aligned_funcimg = aligned / "funcimg"
+    aligned_funcimg.mkdir()
+    np.save(aligned_funcimg / "valid_neurons.npy", np.asarray([1, 4, 7]))
+
+    analysis = tmp_path / "analysis" / "cohort2" / "sub-11" / session_name
+    analysis.mkdir(parents=True)
+    overview = analysis / "1_fov_masks.png"
+    overview.write_bytes(b"plot")
+
+    base_time = 1_700_000_000_000_000_000
+    os.utime(
+        processed_session / "suite2p" / "plane0" / "iscell.npy",
+        ns=(base_time, base_time),
+    )
+    for path in alignment_files:
+        os.utime(
+            path,
+            ns=(base_time + 1_000_000_000, base_time + 1_000_000_000),
+        )
+    os.utime(
+        overview,
+        ns=(base_time + 2_000_000_000, base_time + 2_000_000_000),
+    )
+
+    [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-11")
+
+    assert row["alignment_performed"] == "yes"
+    assert row["session_overview_completed"] == "yes"
+    assert row["number_of_valid_neurons"] == 3
+
+
+def test_stale_alignment_and_overview_report_no(tmp_path: Path) -> None:
+    raw_root = tmp_path / "rawdata" / "cohort2"
+    processed_root = tmp_path / "processed" / "cohort2"
+    session_name = "ses-stale_date-20261011"
+    make_session(raw_root, "sub-12", session_name)
+    processed_session = processed_root / "sub-12" / "stale"
+    save_complete_suite2p(processed_session)
+
+    aligned = (
+        tmp_path / "BehaviourAligned_robust" / "cohort2" / "sub-12" / session_name
+    )
+    aligned.mkdir(parents=True)
+    alignment_files = (
+        aligned / "vrabcd_2p_preprocessed_test.nwb",
+        aligned / "behaviour_data.npz",
+        aligned / "valid_frames.npz",
+    )
+    for path in alignment_files:
+        path.touch()
+    analysis = tmp_path / "analysis" / "cohort2" / "sub-12" / session_name
+    analysis.mkdir(parents=True)
+    overview = analysis / "1_fov_masks.png"
+    overview.write_bytes(b"old plot")
+
+    base_time = 1_700_000_000_000_000_000
+    for path in alignment_files:
+        os.utime(path, ns=(base_time, base_time))
+    os.utime(overview, ns=(base_time - 1_000_000_000,) * 2)
+    os.utime(
+        processed_session / "suite2p" / "plane0" / "iscell.npy",
+        ns=(base_time + 1_000_000_000, base_time + 1_000_000_000),
+    )
+
+    [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-12")
+
+    assert row["alignment_performed"] == "no"
+    assert row["session_overview_completed"] == "no"
+    assert row["number_of_valid_neurons"] == ""
 
 
 def test_default_output_is_inside_processed_mouse_folder(tmp_path: Path) -> None:
