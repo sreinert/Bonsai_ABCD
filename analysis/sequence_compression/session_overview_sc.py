@@ -758,11 +758,17 @@ def select_trace_cells(
     *,
     traces=None,
     eligible=None,
-    snr_threshold=5.0,
 ):
-    """Select accepted cells, preferring high-SNR cells when traces are supplied."""
+    """Select the highest-SNR accepted cells when traces are supplied.
+
+    SNR is used as a ranking metric, not as a pass/fail threshold.  This keeps
+    the requested number of cells in the overview even when every cell has a
+    relatively low absolute SNR.
+    """
     if n_total_cells <= 0:
         raise ValueError("At least one accepted cell is required")
+    if n_cells <= 0:
+        raise ValueError("n_cells must be positive")
     if traces is not None:
         traces = np.asarray(traces, dtype=float)
         if traces.ndim != 2 or traces.shape[0] != n_total_cells:
@@ -788,9 +794,7 @@ def select_trace_cells(
             allowed = np.asarray(eligible, dtype=bool)
             if allowed.shape != (n_total_cells,):
                 raise ValueError("eligible must have one value per accepted cell")
-        candidates = np.flatnonzero(allowed & np.isfinite(snr) & (snr >= snr_threshold))
-        if candidates.size == 0:
-            candidates = np.flatnonzero(allowed & np.isfinite(snr))
+        candidates = np.flatnonzero(allowed & np.isfinite(snr))
         if candidates.size:
             order = np.lexsort((candidates, -snr[candidates]))
             return candidates[order[: min(n_cells, candidates.size)]]
@@ -1305,11 +1309,15 @@ def run_overview(
         dff.shape[0], n_trace_cells, seed=random_seed
     )
     trace_groups = (
-        ("high_snr", "high green SNR", high_snr_indices),
+        (
+            "high_snr",
+            f"top {len(high_snr_indices)} green SNR",
+            high_snr_indices,
+        ),
         ("random", f"random sample (seed={random_seed})", random_indices),
     )
     print(
-        f"Selected {len(high_snr_indices)} high-green-SNR cell(s) and "
+        f"Selected the top {len(high_snr_indices)} green-SNR cell(s) and "
         f"{len(random_indices)} reproducibly random cell(s)."
     )
     figures = {}

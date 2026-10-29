@@ -31,21 +31,20 @@ def test_valid_frames_are_checked_before_selection():
         overview._select_valid_frames(dff, [])
 
 
-def test_trace_selection_prefers_high_snr_and_respects_ratio_eligibility():
+def test_trace_selection_ranks_all_finite_snr_and_respects_eligibility():
     rng = np.random.default_rng(4)
     traces = rng.normal(scale=1.0, size=(3, 1000))
     traces[1, 400:430] += 20.0
     traces[2] = 0.0
 
-    selected = overview.select_trace_cells(3, 1, traces=traces, snr_threshold=5.0)
-    np.testing.assert_array_equal(selected, [1])
+    selected = overview.select_trace_cells(3, 2, traces=traces)
+    np.testing.assert_array_equal(selected, [1, 0])
 
     selected = overview.select_trace_cells(
         3,
         1,
         traces=traces,
         eligible=[True, False, False],
-        snr_threshold=5.0,
     )
     np.testing.assert_array_equal(selected, [0])
 
