@@ -1,7 +1,7 @@
 """Overview plots for an aligned sequence-compression imaging session.
 
 Imaging metadata is loaded from the barcode-aligned NWB. Green and red delta-fluorescence
-signals, plus denominator-guarded CellTV-style G/R, are loaded or extracted from the
+signals, plus CellTV G/R, are loaded or extracted from the
 matching two-channel Suite2p traces and saved under the aligned
 session's ``funcimg`` folder. Landmark intervals are parsed only to keep reward-PSTH
 windows from overlapping other landmarks; no position-tuning or goal-progress analysis
@@ -27,8 +27,8 @@ from scipy import stats
 import era_brewer
 from nwb_barcoding.sequence_compression import resolve_raw_session, short_session_name
 from preprocessing.suite2p.full_session_pipeline.red_reference_correction import (
+    compute_celltv_ratio_delta,
     compute_channel_delta,
-    compute_safe_ratio_delta,
 )
 
 
@@ -226,15 +226,15 @@ def _validate_valid_neurons(values, n_rois):
 def _load_or_extract_ratio_signals(
     suite2p_plane_path, aligned_funcimg_path, accepted, valid_frames
 ):
-    """Load or create aligned green, red, and safely guarded G/R traces."""
+    """Load or create aligned green, red, and CellTV G/R traces."""
     suite2p_plane_path = Path(suite2p_plane_path)
     aligned_funcimg_path = Path(aligned_funcimg_path)
     output_paths = {
-        "green_delta": aligned_funcimg_path / "safe_ratio_green_delta_v3.npy",
-        "red_delta": aligned_funcimg_path / "safe_ratio_red_delta_v3.npy",
-        "ratio_delta": aligned_funcimg_path / "safe_green_red_ratio_delta_v3.npy",
+        "green_delta": aligned_funcimg_path / "celltv_green_delta_v4.npy",
+        "red_delta": aligned_funcimg_path / "celltv_red_delta_v4.npy",
+        "ratio_delta": aligned_funcimg_path / "celltv_green_red_ratio_delta_v4.npy",
     }
-    diagnostics_path = aligned_funcimg_path / "safe_green_red_ratio_diagnostics_v3.npz"
+    diagnostics_path = aligned_funcimg_path / "celltv_green_red_ratio_diagnostics_v4.npz"
     valid_neurons_path = aligned_funcimg_path / "valid_neurons.npy"
     iscell_path = suite2p_plane_path / "iscell.npy"
     if not iscell_path.is_file():
@@ -264,7 +264,7 @@ def _load_or_extract_ratio_signals(
         missing = [name for name in required if not (suite2p_plane_path / name).is_file()]
         if missing:
             raise FileNotFoundError(
-                f"Safe G/R extraction requires {missing} under {suite2p_plane_path}"
+                f"CellTV G/R extraction requires {missing} under {suite2p_plane_path}"
             )
         arrays = [
             np.load(suite2p_plane_path / name, mmap_mode="r")
@@ -285,13 +285,17 @@ def _load_or_extract_ratio_signals(
         ).item()
         green_delta_full = compute_channel_delta(arrays[0], arrays[1], ops)
         red_delta_full = compute_channel_delta(arrays[2], arrays[3], ops)
-        safe_ratio = compute_safe_ratio_delta(
-            arrays[0], arrays[1], arrays[2], arrays[3], ops
+        celltv_ratio = compute_celltv_ratio_delta(
+            arrays[0][:, valid_frames],
+            arrays[1][:, valid_frames],
+            arrays[2][:, valid_frames],
+            arrays[3][:, valid_frames],
+            ops,
         )
         outputs = {
             "green_delta": green_delta_full[:, valid_frames],
             "red_delta": red_delta_full[:, valid_frames],
-            "ratio_delta": safe_ratio.delta_ratio[:, valid_frames],
+            "ratio_delta": celltv_ratio.delta_ratio,
         }
         aligned_funcimg_path.mkdir(parents=True, exist_ok=True)
         diagnostics_path.unlink(missing_ok=True)
@@ -299,19 +303,17 @@ def _load_or_extract_ratio_signals(
             _atomic_save_npy(path, np.asarray(outputs[name], dtype=np.float32))
         _atomic_save_npz(
             diagnostics_path,
-            denominator_floor=safe_ratio.denominator_floor,
-            floor_fraction=safe_ratio.floor_fraction,
-            typical_red=safe_ratio.typical_red,
-            status=safe_ratio.status,
-            smoothing_kernel_frames=safe_ratio.smoothing_kernel_frames,
-            floor_percentile=safe_ratio.floor_percentile,
-            relative_floor=safe_ratio.relative_floor,
-            absolute_floor=safe_ratio.absolute_floor,
-            maximum_floor_fraction=safe_ratio.maximum_floor_fraction,
+            denominator_floor=celltv_ratio.denominator_floor,
+            floor_fraction=celltv_ratio.floor_fraction,
+            typical_red=celltv_ratio.typical_red,
+            status=celltv_ratio.status,
+            smoothing_kernel_frames=celltv_ratio.smoothing_kernel_frames,
+            floor_percentile=celltv_ratio.floor_percentile,
+            absolute_floor=celltv_ratio.absolute_floor,
             valid_frames=valid_frames,
         )
         print(
-            "Saved aligned safe G/R signals: "
+            "Saved aligned CellTV G/R signals: "
             + ", ".join(
                 str(path) for path in (*output_paths.values(), diagnostics_path)
             )
@@ -343,23 +345,23 @@ def _load_or_extract_ratio_signals(
 
     shapes = {name: tuple(values.shape) for name, values in outputs.items()}
     if len(set(shapes.values())) != 1:
-        raise ValueError(f"Saved safe G/R signal shapes are incompatible: {shapes}")
+        raise ValueError(f"Saved CellTV G/R signal shapes are incompatible: {shapes}")
     expected_frames = len(np.asarray(valid_frames))
     signal_shape = next(iter(shapes.values()))
     if signal_shape[1] != expected_frames:
         raise ValueError(
-            f"Saved safe G/R signals have {signal_shape[1]} frames, but "
+            f"Saved CellTV G/R signals have {signal_shape[1]} frames, but "
             f"valid_frames contains {expected_frames}; remove the four "
-            "safe_*_v3 files and rerun"
+            "celltv_*_v4 files and rerun"
         )
 
     accepted = np.asarray(accepted, dtype=int)
     if accepted.ndim != 1 or accepted.size == 0:
-        raise ValueError("Safe G/R signals require at least one accepted ROI")
+        raise ValueError("CellTV G/R signals require at least one accepted ROI")
     if accepted.min() < 0 or accepted.max() >= signal_shape[0]:
         raise IndexError(
             f"Accepted ROI range [{accepted.min()}, {accepted.max()}] is incompatible "
-            f"with safe G/R signal shapes {shapes}"
+            f"with CellTV G/R signal shapes {shapes}"
         )
     with np.load(diagnostics_path) as diagnostics:
         statuses = np.asarray(diagnostics["status"])
@@ -368,7 +370,7 @@ def _load_or_extract_ratio_signals(
         str(name): int(np.sum(accepted_statuses == name))
         for name in np.unique(accepted_statuses)
     }
-    print(f"Safe G/R denominator status for accepted ROIs: {status_counts}")
+    print(f"CellTV G/R denominator status for accepted ROIs: {status_counts}")
     accepted_outputs = {
         name: np.asarray(values[accepted]) for name, values in outputs.items()
     }
@@ -640,7 +642,7 @@ def _load_behaviour_analysis(raw_session, subject, aligned, frame_times, session
 
 
 def load_session_data(mouse, session_id, project_root):
-    """Load aligned green, red, and denominator-guarded G/R signals."""
+    """Load aligned green, red, and CellTV G/R signals."""
     project_root = Path(project_root).expanduser().resolve()
     subject = str(mouse) if str(mouse).startswith("sub-") else f"sub-{mouse}"
     aligned_subject = project_root / "BehaviourAligned_robust" / "cohort2" / subject
@@ -671,7 +673,7 @@ def load_session_data(mouse, session_id, project_root):
         )
     except FileNotFoundError as error:
         print(
-            "Safe G/R signals unavailable; ratio plots will be skipped: "
+            "CellTV G/R signals unavailable; ratio plots will be skipped: "
             f"{error}"
         )
         ratio_signals = None
@@ -693,14 +695,14 @@ def load_session_data(mouse, session_id, project_root):
             "NWB green": nwb_dff.shape,
             "computed green": green_delta.shape,
             "computed red": red_delta.shape,
-            "safe G/R": ratio_delta.shape,
+            "CellTV G/R": ratio_delta.shape,
         }
         if len(set(signal_shapes.values())) != 1:
             raise ValueError(
                 f"Aligned imaging signal shapes do not match: {signal_shapes}"
             )
         with np.load(
-            session_path / "funcimg" / "safe_green_red_ratio_diagnostics_v3.npz"
+            session_path / "funcimg" / "celltv_green_red_ratio_diagnostics_v4.npz"
         ) as diagnostics:
             ratio_status = np.asarray(diagnostics["status"])[accepted]
             ratio_floor_fraction = np.asarray(diagnostics["floor_fraction"])[accepted]
@@ -1506,7 +1508,7 @@ def run_overview(
             if skipped_output:
                 Path(skipped_output).unlink(missing_ok=True)
     else:
-        ratio_label = "Safe Δ(G/R)"
+        ratio_label = "CellTV Δ(G/R)"
         for group_index, (suffix, group_label, cell_indices) in enumerate(trace_groups):
             print(f"Plot 6{suffix[0]}/{n_plots}: raw {ratio_label}, {group_label}...")
             figures[f"safe_gr_raw_traces_{suffix}"] = plot_raw_traces(

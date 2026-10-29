@@ -102,13 +102,11 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
             status=np.full(n_rois, "ok"),
             smoothing_kernel_frames=1,
             floor_percentile=5.0,
-            relative_floor=0.05,
             absolute_floor=1e-3,
-            maximum_floor_fraction=0.1,
         )
 
     monkeypatch.setattr(overview, "compute_channel_delta", fake_channel_delta)
-    monkeypatch.setattr(overview, "compute_safe_ratio_delta", fake_safe_ratio)
+    monkeypatch.setattr(overview, "compute_celltv_ratio_delta", fake_safe_ratio)
     responsive_calls = []
 
     def fake_responsive(dff, imaging_path):
@@ -148,13 +146,13 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
         "DF_F0.npy",
         "DF_F02.npy",
         "DG_R.npy",
-        "safe_ratio_green_delta_v3.npy",
-        "safe_ratio_red_delta_v3.npy",
-        "safe_green_red_ratio_delta_v3.npy",
+        "celltv_green_delta_v4.npy",
+        "celltv_red_delta_v4.npy",
+        "celltv_green_red_ratio_delta_v4.npy",
         "valid_neurons.npy",
     }
     np.testing.assert_array_equal(np.load(aligned_funcimg / "valid_neurons.npy"), [1])
-    assert (aligned_funcimg / "safe_green_red_ratio_diagnostics_v3.npz").is_file()
+    assert (aligned_funcimg / "celltv_green_red_ratio_diagnostics_v4.npz").is_file()
 
 
 def test_accepted_cells_and_empirical_frame_rate():

@@ -109,7 +109,7 @@ def test_suite2p_preprocess_explicitly_uses_cpu_when_device_is_supported(
     assert observed["device"] == "cpu"
 
 
-def test_safe_ratio_uses_adaptive_floor_and_cannot_explode(
+def test_ratio_matches_celltv_percentile_floor_without_interpolation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -120,7 +120,7 @@ def test_safe_ratio_uses_adaptive_floor_and_cannot_explode(
     red[0, 4] = 0.0
     ops = legacy_ops()
 
-    result = red_reference_correction.compute_safe_ratio_delta(
+    result = red_reference_correction.compute_celltv_ratio_delta(
         green,
         np.zeros_like(green),
         red,
@@ -130,13 +130,14 @@ def test_safe_ratio_uses_adaptive_floor_and_cannot_explode(
         smoothing_seconds=0.0,
     )
 
-    assert result.denominator_floor[0] >= 0.5
-    np.testing.assert_allclose(result.ratio[0], 10.0)
-    assert result.status[0] == "interpolated_low_red"
+    assert result.denominator_floor[0] == pytest.approx(4.0)
+    np.testing.assert_allclose(result.ratio[0, [0, 1, 2, 3, 5, 6, 7, 8]], 10.0)
+    assert result.ratio[0, 4] == pytest.approx(25.0)
+    assert result.status[0] == "ok"
     assert np.all(np.isfinite(result.delta_ratio))
 
 
-def test_safe_ratio_rejects_weak_red_reference(
+def test_ratio_uses_celltv_absolute_floor_for_zero_red(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -145,7 +146,7 @@ def test_safe_ratio_rejects_weak_red_reference(
     green = np.full((1, 9), 100.0)
     red = np.zeros((1, 9))
 
-    result = red_reference_correction.compute_safe_ratio_delta(
+    result = red_reference_correction.compute_celltv_ratio_delta(
         green,
         np.zeros_like(green),
         red,
@@ -154,11 +155,12 @@ def test_safe_ratio_rejects_weak_red_reference(
         neuropil_coefficient=0.0,
     )
 
-    assert result.status[0] == "weak_red_reference"
-    assert np.array_equal(result.delta_ratio, np.zeros_like(green))
+    assert result.denominator_floor[0] == pytest.approx(1e-3)
+    np.testing.assert_allclose(result.delta_ratio, 100_000.0)
+    assert result.status[0] == "ok"
 
 
-def test_safe_ratio_rejects_excessive_low_red_frames(
+def test_ratio_does_not_reject_frequent_low_red_frames(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
@@ -168,7 +170,7 @@ def test_safe_ratio_rejects_excessive_low_red_frames(
     red = np.full((1, 20), 10.0)
     red[0, :3] = 0.0
 
-    result = red_reference_correction.compute_safe_ratio_delta(
+    result = red_reference_correction.compute_celltv_ratio_delta(
         green,
         np.zeros_like(green),
         red,
@@ -178,8 +180,33 @@ def test_safe_ratio_rejects_excessive_low_red_frames(
         smoothing_seconds=0.0,
     )
 
-    assert result.status[0] == "excessive_low_red"
-    assert np.array_equal(result.delta_ratio, np.zeros_like(green))
+    assert result.status[0] == "ok"
+    np.testing.assert_allclose(result.delta_ratio[0, :3], 100_000.0)
+    np.testing.assert_allclose(result.delta_ratio[0, 3:], 10.0)
+
+
+def test_ratio_uses_celltv_medfilt_zero_padding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        red_reference_correction, "_suite2p_preprocess", lambda values, *_: values
+    )
+    green = np.ones((1, 5))
+    red = np.array([[100.0, 0.0, 0.0, 0.0, 0.0]])
+    ops = legacy_ops()
+    ops["fs"] = 12.0
+
+    result = red_reference_correction.compute_celltv_ratio_delta(
+        green,
+        np.zeros_like(green),
+        red,
+        np.zeros_like(red),
+        ops,
+        neuropil_coefficient=0.0,
+    )
+
+    assert result.smoothing_kernel_frames == 3
+    np.testing.assert_array_equal(result.smoothed_red, np.zeros((1, 5)))
 
 
 def test_tukey_correction_removes_shared_motion_and_preserves_transient() -> None:

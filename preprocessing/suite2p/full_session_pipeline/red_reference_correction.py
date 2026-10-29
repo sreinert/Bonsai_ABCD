@@ -2,8 +2,8 @@
 
 The functions in this module deliberately do not alter CellTV's historical G/R
 functions. They provide separately testable implementations of the same
-baseline-subtracted fluorescence calculation used by ``nwb_barcoding``, a
-denominator-guarded CellTV-style G/R calculation, and the earlier opt-in robust
+baseline-subtracted fluorescence calculation used by ``nwb_barcoding``, the
+CellTV ``get_dff_GR`` calculation, and the earlier opt-in robust
 reference-channel regression.
 """
 
@@ -20,6 +20,7 @@ from scipy.ndimage import (
     median_filter,
     minimum_filter1d,
 )
+from scipy.signal import medfilt
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ class ReferenceCorrectionResult:
 
 @dataclass(frozen=True)
 class SafeRatioResult:
-    """Baseline-subtracted G/R plus denominator-safety diagnostics."""
+    """CellTV baseline-subtracted G/R plus denominator-floor diagnostics."""
 
     delta_ratio: np.ndarray
     ratio: np.ndarray
@@ -59,9 +60,7 @@ class SafeRatioResult:
     status: np.ndarray
     smoothing_kernel_frames: int
     floor_percentile: float
-    relative_floor: float
     absolute_floor: float
-    maximum_floor_fraction: float
 
 
 def _validate_trace_pair(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -200,31 +199,25 @@ def compute_channel_delta(
     return delta.astype(np.float32, copy=False)
 
 
-def compute_safe_ratio_delta(
+def compute_celltv_ratio_delta(
     green_fluorescence: np.ndarray,
     green_neuropil: np.ndarray,
     red_fluorescence: np.ndarray,
     red_neuropil: np.ndarray,
     ops: dict[str, Any],
-    neuropil_coefficient: float | None = None,
+    neuropil_coefficient: float | None = 0.7,
     *,
     smoothing_seconds: float = 0.25,
     floor_percentile: float = 5.0,
-    relative_floor: float = 0.05,
     absolute_floor: float = 1e-3,
-    maximum_floor_fraction: float = 0.10,
 ) -> SafeRatioResult:
-    """Return the original CellTV-style Δ(G/R) with a guarded denominator.
+    """Reproduce CellTV ``get_dff_GR`` without interpolation or ROI rejection.
 
-    Green and red are neuropil-corrected, red is median-filtered, G/R is
-    calculated, and Suite2p baseline subtraction is applied to the ratio.  The
-    denominator is never smaller than the largest of its per-ROI percentile,
-    ``relative_floor * median(abs(red))``, and ``absolute_floor``.
-
-    Frames below the denominator threshold are not divided: their ratio values
-    are linearly interpolated from neighboring valid frames. A weak/non-finite
-    red reference, or an ROI with more than ``maximum_floor_fraction`` invalid
-    frames, produces a zero trace with an explicit status.
+    CellTV neuropil-corrects both channels, median-filters red with
+    :func:`scipy.signal.medfilt`, floors red at the larger of its per-ROI fifth
+    percentile and ``1e-3``, divides green by that floored denominator, and
+    applies Suite2p baseline preprocessing to G/R. The default neuropil
+    coefficient is CellTV's hard-coded ``0.7``.
     """
 
     green_fluorescence, green_neuropil = _validate_trace_pair(
@@ -243,12 +236,8 @@ def compute_safe_ratio_delta(
         raise ValueError("Smoothing duration must be finite and non-negative")
     if not 0 <= floor_percentile <= 100:
         raise ValueError("Denominator floor percentile must be in [0, 100]")
-    if not np.isfinite(relative_floor) or relative_floor <= 0:
-        raise ValueError("Relative denominator floor must be finite and positive")
     if not np.isfinite(absolute_floor) or absolute_floor <= 0:
         raise ValueError("Absolute denominator floor must be finite and positive")
-    if not 0 <= maximum_floor_fraction <= 1:
-        raise ValueError("Maximum floor fraction must be in [0, 1]")
 
     coefficient = _neuropil_coefficient(ops, neuropil_coefficient)
     green = np.asarray(green_fluorescence, dtype=np.float32) - coefficient * np.asarray(
@@ -258,50 +247,22 @@ def compute_safe_ratio_delta(
         red_neuropil, dtype=np.float32
     )
     kernel = max(1, int(fs * smoothing_seconds) | 1)
-    smoothed_red = median_filter(red, size=(1, kernel), mode="nearest")
+    smoothed_red = medfilt(red, kernel_size=(1, kernel))
     typical_red = np.median(np.abs(smoothed_red), axis=1)
-    percentile_floor = np.percentile(
-        smoothed_red, floor_percentile, axis=1
-    )
-    denominator_floor = np.maximum.reduce(
-        (
-            percentile_floor,
-            relative_floor * typical_red,
-            np.full_like(typical_red, absolute_floor),
-        )
+    denominator_floor = np.maximum(
+        np.percentile(smoothed_red, floor_percentile, axis=1),
+        absolute_floor,
     )
     low_red = smoothed_red < denominator_floor[:, None]
     floor_fraction = np.mean(low_red, axis=1)
-
-    n_rois = green.shape[0]
-    ratio = np.zeros_like(green, dtype=np.float32)
-    status = np.full(n_rois, "ok", dtype="U32")
-    finite = (
+    guarded_red = np.maximum(smoothed_red, denominator_floor[:, None])
+    ratio = green / guarded_red
+    status = np.full(green.shape[0], "ok", dtype="U32")
+    nonfinite_input = ~(
         np.all(np.isfinite(green), axis=1)
         & np.all(np.isfinite(smoothed_red), axis=1)
-        & np.isfinite(typical_red)
-        & np.isfinite(denominator_floor)
     )
-    # Require the relative floor to dominate the absolute numerical epsilon.
-    # Otherwise a near-zero red channel could still turn ordinary green values
-    # into a very large but technically finite ratio.
-    usable = finite & (typical_red > absolute_floor / relative_floor)
-    status[~finite] = "nonfinite_input"
-    status[finite & ~usable] = "weak_red_reference"
-    for roi in np.flatnonzero(usable):
-        valid_frames = ~low_red[roi]
-        if floor_fraction[roi] > maximum_floor_fraction or np.count_nonzero(valid_frames) < 2:
-            status[roi] = "excessive_low_red"
-            continue
-        ratio[roi, valid_frames] = green[roi, valid_frames] / smoothed_red[roi, valid_frames]
-        if np.any(~valid_frames):
-            frame_index = np.arange(green.shape[1])
-            ratio[roi, ~valid_frames] = np.interp(
-                frame_index[~valid_frames],
-                frame_index[valid_frames],
-                ratio[roi, valid_frames],
-            )
-            status[roi] = "interpolated_low_red"
+    status[nonfinite_input] = "nonfinite_input"
 
     baseline_method, window, sigma, _, percentile = _baseline_parameters(ops)
     delta_ratio = np.asarray(
@@ -310,10 +271,7 @@ def compute_safe_ratio_delta(
         )
     ).astype(np.float32, copy=False)
     nonfinite_output = ~np.all(np.isfinite(delta_ratio), axis=1)
-    if np.any(nonfinite_output):
-        ratio[nonfinite_output] = 0
-        delta_ratio[nonfinite_output] = 0
-        status[nonfinite_output] = "nonfinite_output"
+    status[nonfinite_output] = "nonfinite_output"
 
     return SafeRatioResult(
         delta_ratio=delta_ratio,
@@ -325,10 +283,13 @@ def compute_safe_ratio_delta(
         status=status,
         smoothing_kernel_frames=kernel,
         floor_percentile=float(floor_percentile),
-        relative_floor=float(relative_floor),
         absolute_floor=float(absolute_floor),
-        maximum_floor_fraction=float(maximum_floor_fraction),
     )
+
+
+# Backward-compatible import for code written while this calculation included
+# additional interpolation/rejection guards. It now returns exact CellTV G/R.
+compute_safe_ratio_delta = compute_celltv_ratio_delta
 
 
 def _robust_center_scale(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

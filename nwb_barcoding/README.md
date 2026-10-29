@@ -110,14 +110,16 @@ analysis/cohort2/<subject>/<full-session>/
 ```
 
 The first overview run also performs the aligned two-channel extraction from the
-matching Suite2p traces, using `neucoeff` from `ops.npy`, and saves its caches under
+matching Suite2p traces. The G/R trace reproduces CellTV `get_dff_GR`, including its
+0.7 neuropil coefficient, red median filter, and fifth-percentile denominator floor.
+It saves its caches under
 `BehaviourAligned_robust/cohort2/<subject>/<full-session>/funcimg/`:
 
 ```text
-safe_ratio_green_delta_v3.npy
-safe_ratio_red_delta_v3.npy
-safe_green_red_ratio_delta_v3.npy
-safe_green_red_ratio_diagnostics_v3.npz
+celltv_green_delta_v4.npy
+celltv_red_delta_v4.npy
+celltv_green_red_ratio_delta_v4.npy
+celltv_green_red_ratio_diagnostics_v4.npz
 valid_neurons.npy
 ```
 
