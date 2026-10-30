@@ -26,20 +26,23 @@ from full_session_config import SUITE2P_VERSION  # noqa: E402
 
 DEFAULT_PROJECT_ROOT = Path("AtAp_20260119_SequenceCompression")
 SESSION_PATTERN = re.compile(
-    r"^ses-(?P<processed>.+?)_date-\d{8}(?:T\d{6})?(?:_|$)",
+    r"^ses-.+?_date-\d{8}(?:T\d{6})?(?:_|$)",
     re.IGNORECASE,
 )
 SEGMENTATION_NAMES = ("meanImg_chan1_seg.npy", "meanImg_seg.npy")
 
 
-def processed_session_id(session: str) -> str:
-    """Accept a full raw-session name or the short processed-session ID."""
+def processed_session_name(session: str) -> str:
+    """Validate and return the full session name used under ``processed``."""
     if not session or session in {".", ".."} or Path(session).name != session:
         raise ValueError(f"Session must be one directory name, received {session!r}")
     match = SESSION_PATTERN.match(session)
-    if match is not None:
-        return match.group("processed")
-    return session.removeprefix("ses-")
+    if match is None:
+        raise ValueError(
+            "Session must use the full rawdata folder name "
+            "(ses-<session-id>_date-YYYYMMDD[THHMMSS])"
+        )
+    return session
 
 
 def resolve_paths(
@@ -59,7 +62,7 @@ def resolve_paths(
     else:
         processed_root = processed_root.expanduser().resolve()
 
-    run_dir = (processed_root / subject / processed_session_id(session)).resolve()
+    run_dir = (processed_root / subject / processed_session_name(session)).resolve()
     if not is_relative_to(run_dir, processed_root):
         raise ValueError(f"Resolved session escapes the processed root: {run_dir}")
     suite2p_dir = run_dir / "suite2p"
@@ -358,8 +361,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "session",
         help=(
-            "Full raw session name (ses-full002_date-...) or short processed "
-            "session ID (full002)"
+            "Full raw session folder name (ses-full002_date-...)"
         ),
     )
     parser.add_argument(

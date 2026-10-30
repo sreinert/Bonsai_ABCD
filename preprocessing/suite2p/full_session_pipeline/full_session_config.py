@@ -6,17 +6,18 @@ import re
 
 
 TIFF_SUFFIXES = {".tif", ".tiff"}
-SESSION_PATTERN = re.compile(r"^ses-(?P<processed>.+?)_date-\d{8}T\d{6}(?:_|$)")
+SESSION_PATTERN = re.compile(r"^ses-.+?_date-\d{8}T\d{6}(?:_|$)")
 
 
-def processed_session_id(raw_session_id: str) -> str:
+def processed_session_name(raw_session_id: str) -> str:
+    """Validate and return the full session folder name used in both data trees."""
     match = SESSION_PATTERN.match(raw_session_id)
     if match is None:
         raise ValueError(
             f"Session {raw_session_id!r} does not match "
-            "ses-<processed-id>_date-YYYYMMDDTHHMMSS"
+            "ses-<session-id>_date-YYYYMMDDTHHMMSS"
         )
-    return match.group("processed")
+    return raw_session_id
 
 
 SUITE2P_VERSION = "1.1.0"

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -14,7 +13,6 @@ from discover_sessions import parse_date, resolve_data_root, validate_tiff_heade
 
 
 TIFF_SUFFIXES = {".tif", ".tiff"}
-SESSION_PATTERN = re.compile(r"^ses-(?P<processed>.+?)_date-\d{8}T\d{6}(?:_|$)")
 REGISTRATION = {
     "nonrigid": True,
     "block_size": [128, 128],
@@ -33,19 +31,8 @@ REGISTRATION = {
 class FullSession:
     mouse_id: str
     raw_session_id: str
-    processed_session_id: str
     input_path: Path
     tiff_files: tuple[Path, ...]
-
-
-def processed_session_id(raw_session_id: str) -> str:
-    match = SESSION_PATTERN.match(raw_session_id)
-    if match is None:
-        raise ValueError(
-            f"Session {raw_session_id!r} does not match "
-            "ses-<processed-id>_date-YYYYMMDDTHHMMSS"
-        )
-    return match.group("processed")
 
 
 def discover_mouse(mouse_path: Path) -> list[FullSession]:
@@ -73,7 +60,6 @@ def discover_mouse(mouse_path: Path) -> list[FullSession]:
             FullSession(
                 mouse_id=mouse_path.name,
                 raw_session_id=session_path.name,
-                processed_session_id=processed_session_id(session_path.name),
                 input_path=input_path.resolve(),
                 tiff_files=tiff_files,
             )
@@ -96,7 +82,7 @@ def build_tasks(data_root: Path, processed_root: Path) -> list[dict[str, object]
     rows: list[dict[str, object]] = []
     for mouse_path in sorted(path for path in data_root.glob("sub-*") if path.is_dir()):
         for role, session in first_last(discover_mouse(mouse_path)):
-            run_dir = processed_root / session.mouse_id / session.processed_session_id
+            run_dir = processed_root / session.mouse_id / session.raw_session_id
             complete = run_dir / "status.json"
             ops_path = run_dir / "suite2p" / "plane0" / "ops.npy"
             if complete.is_file() and ops_path.is_file():

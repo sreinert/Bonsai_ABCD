@@ -15,11 +15,12 @@ The adapter understands the split layout used by this project:
 
 ```text
 rawdata/cohort2/<subject>/<full-session>/
-processed/cohort2/<subject>/<short-session>/suite2p/
+processed/cohort2/<subject>/<full-session>/suite2p/
 BehaviourAligned_robust/cohort2/<subject>/<full-session>/
 ```
 
-Run one session by full or short identifier:
+Run one session by full or short selector. A short selector is resolved against
+`rawdata`; the resulting full folder name is then used under `processed`:
 
 ```bash
 python -m nwb_barcoding.sequence_compression \

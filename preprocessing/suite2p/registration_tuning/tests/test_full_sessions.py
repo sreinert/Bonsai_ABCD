@@ -37,15 +37,6 @@ def write_session(root: Path, mouse: str, session: str) -> Path:
     return funcimg
 
 
-def test_processed_session_id() -> None:
-    assert (
-        workflow.processed_session_id(
-            "ses-abab-random-001_date-20260824T120630"
-        )
-        == "abab-random-001"
-    )
-
-
 def test_builds_first_last_full_session_tasks(tmp_path: Path) -> None:
     first = write_session(
         tmp_path, "sub-02", "ses-abab-random-001_date-20260824T120630"
@@ -62,8 +53,18 @@ def test_builds_first_last_full_session_tasks(tmp_path: Path) -> None:
 
     assert [row["selection_role"] for row in rows] == ["first", "last"]
     assert [row["run_dir"] for row in rows] == [
-        str((tmp_path / "processed/cohort2/sub-02/abab-random-001").resolve()),
-        str((tmp_path / "processed/cohort2/sub-02/abab-random-003").resolve()),
+        str(
+            (
+                tmp_path
+                / "processed/cohort2/sub-02/ses-abab-random-001_date-20260824T120630"
+            ).resolve()
+        ),
+        str(
+            (
+                tmp_path
+                / "processed/cohort2/sub-02/ses-abab-random-003_date-20260826T120630"
+            ).resolve()
+        ),
     ]
     assert json.loads(rows[0]["tiff_files_json"]) == [
         str((first / "full.tif").resolve())

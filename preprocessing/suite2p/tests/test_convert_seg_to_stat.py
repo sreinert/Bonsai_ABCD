@@ -16,7 +16,12 @@ SPEC.loader.exec_module(MODULE)
 
 def make_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     processed_root = tmp_path / "processed" / "cohort2"
-    suite2p = processed_root / "sub-02" / "full002" / "suite2p"
+    suite2p = (
+        processed_root
+        / "sub-02"
+        / "ses-full002_date-20260818T134310"
+        / "suite2p"
+    )
     plane = suite2p / "plane0"
     registration = suite2p / "qc" / "registration"
     plane.mkdir(parents=True)
@@ -26,15 +31,25 @@ def make_layout(tmp_path: Path) -> tuple[Path, Path, Path]:
     return processed_root, segmentation, plane
 
 
-def test_full_and_short_session_names_resolve_to_current_layout(tmp_path: Path) -> None:
+def test_full_session_name_resolves_to_current_layout(tmp_path: Path) -> None:
     processed_root, segmentation, plane = make_layout(tmp_path)
-    for session in ("full002", "ses-full002", "ses-full002_date-20260818T134310"):
-        assert MODULE.resolve_paths(
+    assert MODULE.resolve_paths(
+        "sub-02",
+        "ses-full002_date-20260818T134310",
+        project_root=tmp_path,
+        processed_root=processed_root,
+    ) == (segmentation.resolve(), plane.resolve())
+
+
+def test_short_session_name_is_rejected(tmp_path: Path) -> None:
+    processed_root, _, _ = make_layout(tmp_path)
+    with pytest.raises(ValueError, match="full rawdata folder name"):
+        MODULE.resolve_paths(
             "sub-02",
-            session,
+            "full002",
             project_root=tmp_path,
             processed_root=processed_root,
-        ) == (segmentation.resolve(), plane.resolve())
+        )
 
 
 def test_load_masks_and_make_raw_stat(tmp_path: Path) -> None:
@@ -54,7 +69,7 @@ def test_resolve_paths_requires_manual_segmentation(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="Manual Cellpose segmentation"):
         MODULE.resolve_paths(
             "sub-02",
-            "full002",
+            "ses-full002_date-20260818T134310",
             project_root=tmp_path,
             processed_root=processed_root,
         )
@@ -67,7 +82,7 @@ def test_meanimg_folder_supports_legacy_plane_layout(tmp_path: Path) -> None:
     np.save(legacy_segmentation, {"masks": np.asarray([[0, 1], [2, 2]])})
     assert MODULE.resolve_paths(
         "sub-02",
-        "full002",
+        "ses-full002_date-20260818T134310",
         project_root=tmp_path,
         processed_root=processed_root,
         meanimg_folder=Path("plane0"),

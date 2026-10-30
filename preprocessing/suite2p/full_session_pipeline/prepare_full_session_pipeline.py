@@ -26,7 +26,7 @@ from full_session_common import (  # noqa: E402
 from full_session_config import (  # noqa: E402
     REGISTRATION,
     TIFF_SUFFIXES,
-    processed_session_id,
+    processed_session_name,
 )
 
 
@@ -210,9 +210,9 @@ def build_pipeline(
     for path in tiffs:
         validate_tiff_header(path)
 
-    processed_id = processed_session_id(session_id)
+    processed_name = processed_session_name(session_id)
     processed_root = (project / "processed" / "cohort2").resolve()
-    run_dir = (processed_root / mouse_id / processed_id).resolve()
+    run_dir = (processed_root / mouse_id / processed_name).resolve()
     suite2p_dir = run_dir / "suite2p"
     plane_dir = suite2p_dir / "plane0"
     qc_dir = suite2p_dir / "qc"

@@ -14,8 +14,6 @@ from pathlib import Path
 from .sequence_compression import (
     build_sequence_compression_session,
     resolve_paths,
-    resolve_raw_session,
-    short_session_name,
 )
 
 
@@ -27,36 +25,6 @@ class BatchSession:
 
 
 REQUIRED_PLANE0_FILES = ("ops.npy", "F.npy", "Fneu.npy", "spks.npy", "iscell.npy", "stat.npy")
-
-
-def _resolve_full_session(project_root: Path, subject: str, short_session: str,
-                          suite2p_dir: Path) -> str:
-    """Resolve restarted recordings from Suite2p's recorded source path."""
-    raw_subject = project_root / "rawdata" / "cohort2" / subject
-    try:
-        return resolve_raw_session(raw_subject, short_session).name
-    except ValueError as ambiguity:
-        import numpy as np
-
-        ops_path = suite2p_dir / "plane0" / "ops.npy"
-        ops = np.load(ops_path, allow_pickle=True).item()
-        data_paths = ops.get("data_path") or []
-        if isinstance(data_paths, (str, Path)):
-            data_paths = [data_paths]
-
-        candidates = set()
-        for source in data_paths:
-            for part in reversed(Path(str(source)).parts):
-                if part.startswith("ses-") and short_session_name(part) == short_session:
-                    if (raw_subject / part).is_dir():
-                        candidates.add(part)
-                    break
-        if len(candidates) == 1:
-            return candidates.pop()
-        raise ValueError(
-            f"Could not disambiguate {subject}/{short_session} from {ops_path}; "
-            f"Suite2p identifies {sorted(candidates)}. Original error: {ambiguity}"
-        ) from ambiguity
 
 
 def normalize_subject(subject: str) -> str:
@@ -88,6 +56,15 @@ def discover_sessions(
         if selected_subjects is not None and subject_dir.name not in selected_subjects:
             continue
         for session_dir in sorted(path for path in subject_dir.iterdir() if path.is_dir()):
+            raw_session = (
+                project_root
+                / "rawdata"
+                / "cohort2"
+                / subject_dir.name
+                / session_dir.name
+            )
+            if not session_dir.name.startswith("ses-") or not raw_session.is_dir():
+                continue
             suite2p_dir = session_dir / "suite2p"
             plane0 = suite2p_dir / "plane0"
             if not all((plane0 / filename).is_file() for filename in REQUIRED_PLANE0_FILES):
@@ -95,9 +72,7 @@ def discover_sessions(
             sessions.append(
                 BatchSession(
                     subject=subject_dir.name,
-                    session=_resolve_full_session(
-                        project_root, subject_dir.name, session_dir.name, suite2p_dir
-                    ),
+                    session=session_dir.name,
                     suite2p_dir=suite2p_dir,
                 )
             )

@@ -160,11 +160,11 @@ python preprocessing/suite2p/Convert_seg_to_stat.py \
   ses-full002_date-20260818T134310
 ```
 
-The short processed session ID (for example `full002`) is also accepted. Use
-`--dry-run` first to validate the resolved paths, mask dimensions, and ROI count
-without changing files. The command reads the registered `data.bin` and, when
-present, `data_chan2.bin`; it updates `stat.npy`, fluorescence/neuropil traces,
-`iscell.npy`, and `spks.npy` together. Previous outputs are retained under
+Pass the full session folder name so it resolves identically under `rawdata` and
+`processed`. Use `--dry-run` first to validate the resolved paths, mask
+dimensions, and ROI count without changing files. The command reads the
+registered `data.bin` and, when present, `data_chan2.bin`; it updates `stat.npy`,
+fluorescence/neuropil traces, `iscell.npy`, and `spks.npy` together. Previous outputs are retained under
 `suite2p/.workflow/manual_segmentation_backups`. On Slurm, the equivalent GPU
 submission is:
 

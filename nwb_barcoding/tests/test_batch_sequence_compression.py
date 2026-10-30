@@ -1,20 +1,20 @@
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 import nwb_barcoding.batch_sequence_compression as batch
 
 
 def _session_tree(project, subject, session, with_suite2p=True):
-    processed = project / "processed" / "cohort2" / subject / session
+    full_session = f"ses-{session}_date-20260101T120000"
+    processed = project / "processed" / "cohort2" / subject / full_session
     processed.mkdir(parents=True)
     if with_suite2p:
         plane0 = processed / "suite2p" / "plane0"
         plane0.mkdir(parents=True)
         for filename in batch.REQUIRED_PLANE0_FILES:
             (plane0 / filename).touch()
-    raw = project / "rawdata" / "cohort2" / subject / f"ses-{session}_date-20260101T120000"
+    raw = project / "rawdata" / "cohort2" / subject / full_session
     raw.mkdir(parents=True)
     return raw
 
@@ -24,7 +24,8 @@ def test_discover_sessions_only_includes_complete_suite2p_directories(tmp_path):
     _session_tree(tmp_path, "sub-02", "full003", with_suite2p=False)
     _session_tree(tmp_path, "sub-01", "full001")
     _session_tree(tmp_path, "sub-03", "full004")
-    (tmp_path / "processed" / "cohort2" / "sub-03" / "full004" / "suite2p"
+    (tmp_path / "processed" / "cohort2" / "sub-03"
+     / "ses-full004_date-20260101T120000" / "suite2p"
      / "plane0" / "stat.npy").unlink()
 
     found = batch.discover_sessions(tmp_path)
@@ -46,20 +47,29 @@ def test_discover_sessions_can_be_limited_to_subject(tmp_path):
     ]
 
 
-def test_discover_sessions_uses_ops_source_to_resolve_restart(tmp_path):
+def test_discover_sessions_uses_full_processed_name_for_restart(tmp_path):
     first_raw = _session_tree(tmp_path, "sub-07", "full007")
     second_raw = first_raw.with_name("ses-full007_date-20260102T120000")
     (second_raw / "funcimg").mkdir(parents=True)
-    ops_path = (
-        tmp_path / "processed" / "cohort2" / "sub-07" / "full007"
-        / "suite2p" / "plane0" / "ops.npy"
-    )
-    np.save(ops_path, {"data_path": [str(second_raw / "funcimg")]})
 
     found = batch.discover_sessions(tmp_path, ["sub-07"])
 
     assert len(found) == 1
-    assert found[0].session == second_raw.name
+    assert found[0].session == first_raw.name
+
+
+def test_discover_sessions_ignores_legacy_short_processed_name(tmp_path):
+    full_name = "ses-full007_date-20260101T120000"
+    (tmp_path / "rawdata" / "cohort2" / "sub-07" / full_name).mkdir(parents=True)
+    plane0 = (
+        tmp_path / "processed" / "cohort2" / "sub-07" / "full007"
+        / "suite2p" / "plane0"
+    )
+    plane0.mkdir(parents=True)
+    for filename in batch.REQUIRED_PLANE0_FILES:
+        (plane0 / filename).touch()
+
+    assert batch.discover_sessions(tmp_path, ["sub-07"]) == []
 
 
 def test_manifest_round_trip(tmp_path):

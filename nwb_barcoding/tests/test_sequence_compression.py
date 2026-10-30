@@ -12,8 +12,7 @@ from nwb_barcoding.sequence_compression import (
 def _make_session(project, subject, full_name):
     raw = project / "rawdata" / "cohort2" / subject / full_name
     (raw / "behav").mkdir(parents=True)
-    short = short_session_name(full_name)
-    suite2p = project / "processed" / "cohort2" / subject / short / "suite2p"
+    suite2p = project / "processed" / "cohort2" / subject / full_name / "suite2p"
     suite2p.mkdir(parents=True)
     return raw, suite2p
 

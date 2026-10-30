@@ -663,7 +663,7 @@ def load_session_data(mouse, session_id, project_root):
         / "processed"
         / "cohort2"
         / subject
-        / short_session_name(session_path.name)
+        / session_path.name
         / "suite2p"
         / "plane0"
     )

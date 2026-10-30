@@ -324,7 +324,10 @@ def test_full_pipeline_uses_standard_plane0_layout(tmp_path: Path) -> None:
         tmp_path, mouse, session
     )
 
-    expected_run = tmp_path / "processed/cohort2/sub-02/abab-random-001"
+    expected_run = (
+        tmp_path
+        / "processed/cohort2/sub-02/ses-abab-random-001_date-20260824T120630"
+    )
     assert Path(str(row["run_dir"])) == expected_run
     assert Path(str(paths["plane_dir"])) == expected_run / "suite2p/plane0"
     assert Path(str(paths["qc_dir"])) == expected_run / "suite2p/qc"
@@ -360,7 +363,9 @@ def test_full_pipeline_overwrite_removes_only_suite2p(tmp_path: Path) -> None:
     funcimg = tmp_path / "rawdata/cohort2" / mouse / session / "funcimg"
     funcimg.mkdir(parents=True)
     tifffile.imwrite(funcimg / "full.tif", np.zeros((2, 3), dtype=np.uint16))
-    run_dir = tmp_path / "processed/cohort2/sub-02/full002"
+    run_dir = (
+        tmp_path / "processed/cohort2/sub-02/ses-full002_date-20260818T134310"
+    )
     suite2p_dir = run_dir / "suite2p"
     suite2p_dir.mkdir(parents=True)
     (suite2p_dir / "partial.txt").write_text("partial", encoding="utf-8")
@@ -386,7 +391,7 @@ def make_resumable_registration(
     funcimg.mkdir(parents=True)
     tiff = funcimg / "full.tif"
     tifffile.imwrite(tiff, np.zeros((2, 3), dtype=np.uint16))
-    suite2p_dir = tmp_path / "processed/cohort2" / mouse / "full002" / "suite2p"
+    suite2p_dir = tmp_path / "processed/cohort2" / mouse / session / "suite2p"
     plane_dir = suite2p_dir / "plane0"
     workflow_dir = suite2p_dir / ".workflow"
     plane_dir.mkdir(parents=True)

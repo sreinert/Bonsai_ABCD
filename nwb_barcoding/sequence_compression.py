@@ -62,7 +62,9 @@ def resolve_paths(subject, session, project_root, output_root=None):
     raw_subject = project_root / "rawdata" / "cohort2" / subject
     raw_session = resolve_raw_session(raw_subject, session)
     short_name = short_session_name(raw_session.name)
-    processed_session = project_root / "processed" / "cohort2" / subject / short_name
+    processed_session = (
+        project_root / "processed" / "cohort2" / subject / raw_session.name
+    )
     suite2p_dir = processed_session / "suite2p"
     if not suite2p_dir.is_dir():
         raise FileNotFoundError(f"Suite2p directory does not exist: {suite2p_dir}")
