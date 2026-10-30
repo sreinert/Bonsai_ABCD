@@ -52,7 +52,7 @@ def test_inventory_filters_sessions_and_reports_complete_pipeline(tmp_path: Path
     session = make_session(
         raw_root, "sub-02", "ses-full002_date-20260818T134310"
     )
-    save_complete_suite2p(processed_root / "sub-02" / "full002")
+    save_complete_suite2p(processed_root / "sub-02" / session.name)
     (raw_root / "sub-02" / ".hidden" / "funcimg").mkdir(parents=True)
     (raw_root / "sub-02" / "not-imaging").mkdir()
 
@@ -86,8 +86,8 @@ def test_inventory_filters_sessions_and_reports_complete_pipeline(tmp_path: Path
 def test_inventory_reports_partial_pipeline(tmp_path: Path) -> None:
     raw_root = tmp_path / "rawdata" / "cohort2"
     processed_root = tmp_path / "processed" / "cohort2"
-    make_session(raw_root, "sub-03", "ses-training_date-20261001")
-    plane = processed_root / "sub-03" / "training" / "suite2p" / "plane0"
+    session = make_session(raw_root, "sub-03", "ses-training_date-20261001")
+    plane = processed_root / "sub-03" / session.name / "suite2p" / "plane0"
     plane.mkdir(parents=True)
     np.save(plane / "ops.npy", {})
     (plane / "data.bin").write_bytes(b"registered")
@@ -133,8 +133,8 @@ def test_created_suite2p_path_with_incomplete_registration_is_failed(
 ) -> None:
     raw_root = tmp_path / "rawdata" / "cohort2"
     processed_root = tmp_path / "processed" / "cohort2"
-    make_session(raw_root, "sub-05", "ses-failed_date-20261003")
-    (processed_root / "sub-05" / "failed" / "suite2p").mkdir(parents=True)
+    session = make_session(raw_root, "sub-05", "ses-failed_date-20261003")
+    (processed_root / "sub-05" / session.name / "suite2p").mkdir(parents=True)
 
     [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-05")
 
@@ -187,8 +187,8 @@ def test_iscell_update_status_compares_stat_mtime(
 ) -> None:
     raw_root = tmp_path / "rawdata" / "cohort2"
     processed_root = tmp_path / "processed" / "cohort2"
-    make_session(raw_root, "sub-08", "ses-manual_date-20261006")
-    suite2p = processed_root / "sub-08" / "manual" / "suite2p"
+    session = make_session(raw_root, "sub-08", "ses-manual_date-20261006")
+    suite2p = processed_root / "sub-08" / session.name / "suite2p"
     plane = suite2p / "plane0"
     registration = suite2p / "qc" / "registration"
     plane.mkdir(parents=True)
@@ -223,8 +223,7 @@ def test_automatic_roi_detection_model_comes_from_provenance(tmp_path: Path) -> 
     }
     for session_name, model_name in expected.items():
         session = make_session(raw_root, "sub-09", session_name)
-        short_name, _ = inventory.parse_session_name(session.name)
-        processed_session = processed_root / "sub-09" / short_name
+        processed_session = processed_root / "sub-09" / session.name
         save_complete_suite2p(processed_session)
         detection_dir = processed_session / "suite2p" / "qc" / "detection"
         detection_dir.mkdir(parents=True)
@@ -253,7 +252,7 @@ def test_alignment_overview_and_valid_neuron_status_use_timestamps(
     processed_root = tmp_path / "processed" / "cohort2"
     session_name = "ses-downstream_date-20261010"
     make_session(raw_root, "sub-11", session_name)
-    processed_session = processed_root / "sub-11" / "downstream"
+    processed_session = processed_root / "sub-11" / session_name
     save_complete_suite2p(processed_session)
 
     aligned = (
@@ -307,7 +306,7 @@ def test_stale_alignment_and_overview_report_no(tmp_path: Path) -> None:
     processed_root = tmp_path / "processed" / "cohort2"
     session_name = "ses-stale_date-20261011"
     make_session(raw_root, "sub-12", session_name)
-    processed_session = processed_root / "sub-12" / "stale"
+    processed_session = processed_root / "sub-12" / session_name
     save_complete_suite2p(processed_session)
 
     aligned = (

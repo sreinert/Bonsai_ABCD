@@ -423,7 +423,7 @@ def inventory_mouse(
         if not funcimg_path.is_dir():
             continue
         short_name, date = parse_session_name(session_path.name)
-        processed_session_path = suite2p_root / mouse_id / short_name
+        processed_session_path = suite2p_root / mouse_id / session_path.name
         status = inspect_suite2p(session_path, processed_session_path)
         downstream = inspect_downstream_outputs(
             project_root,

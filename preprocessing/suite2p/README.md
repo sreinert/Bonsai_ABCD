@@ -47,7 +47,7 @@ Override it with `PROJECT_ROOT`. The input and output layouts are:
 
 ```text
 rawdata/cohort2/<mouse>/<full-session-id>/funcimg
-processed/cohort2/<mouse>/<short-session-id>/suite2p
+processed/cohort2/<mouse>/<full-session-id>/suite2p
 ```
 
 When one or more direct TIFF files whose names end in `_cropped.tif` or
@@ -108,7 +108,7 @@ project is `AtAp_20260119_SequenceCompression`, resolved automatically under
 `/Volumes/mrsic_flogel/public/projects` on macOS. Set `MRSIC_PROJECTS_ROOT` to
 override the projects mount.
 Sessions containing `funcimg` are discovered under `rawdata/cohort2`, then their
-Suite2p results are read from the matching short-name directory under
+Suite2p results are read from the identically named full-session directory under
 `processed/cohort2`. Use `--project-root PATH` for another project, or override
 the two locations separately with `--session-root` and `--suite2p-root`. Use
 `--output-dir PATH` only when all per-mouse CSVs should instead be placed in one
