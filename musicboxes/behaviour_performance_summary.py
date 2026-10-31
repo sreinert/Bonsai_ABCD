@@ -90,6 +90,10 @@ def load_raw_session(mouse, session_id, behav_root, apply_speed_threshold=True):
     ses_settings, _ = parse_nwb_functions.load_settings(session_path)
     with open(list((session_path / 'behav').glob('*.pkl'))[0], 'rb') as f:
         sess_dataframe = pickle.load(f)
+    # Pickles built before parse_bonsai_functions.load_data back-filled Position can start with
+    # NaN rows (treadmill samples before the first position sample, e.g. 001 seq2-009), which
+    # break divide_laps' int cast -- back-fill them from the first real position sample.
+    sess_dataframe['Position'] = sess_dataframe['Position'].bfill()
     if apply_speed_threshold:
         sess_dataframe = pf.threshold_lick_speed(sess_dataframe, speed_threshold=ses_settings['velocityThreshold'])
     return sess_dataframe, ses_settings

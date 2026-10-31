@@ -24,9 +24,18 @@ New here
 --------
   - Two GP "clocks": 'reward' (reward -> reward, what the mouse experienced) and 'task' (goal
     entry -> next goal entry, licked or not, what the task defines). They coincide when the
-    mouse hits every goal and diverge on misses. A "previous task" clock is NOT offered: the
-    shaping (11 slots, goals 3/7, 66 units) and ABC (8 slots, goals 1/3/6, 68 units) corridors
-    differ, so old slot indices don't refer to the same places.
+    mouse hits every goal and diverge on misses. A "previous task" clock is NOT offered from
+    shaping into ABC: the shaping (11 slots, goals 3/7, 66 units) and ABC (8 slots, goals 1/3/6,
+    68 units) corridors differ, so old slot indices don't refer to the same places. t5 -> t6 is
+    different: t6 (9 slots, goals A/B/C = 0/5/2, 99 units) keeps the identities of slots 0-7, so
+    an 'old' clock (entries into t5's goal landmarks, old_goal_slots matches them by identity)
+    is offered for t6.
+  - Active goals: in ABC only the current target of the A -> B -> C sequence pays out; it
+    advances on reward and stays put after a miss (active_goal_visits). hit / miss, the hit rate
+    and the task clock use active goal visits only. A goal landmark visited while another goal
+    is active is not a miss: it is FA / CR with role 'inactive goal'. (Before this fix, most
+    ABC "misses" were such visits, e.g. 85 of 101 in sub-001 t6. In t6 the sequence order no
+    longer matches the running order, and one A -> B -> C cycle takes about 2 laps.)
   - visit_table: one row per landmark visit with outcome hit / miss / FA / CR. Hits come from
     goal_visit_for_rewards, not session['rewarded_lms'] (which marks the NEXT visit when the
     reward lands late); FA = licked (after release) at a non-goal landmark. In the shaping
@@ -53,12 +62,19 @@ New here
     shuffle, binned by corridor position over complete laps), used in P6d to compare decoders
     on all cells with decoders on cells tuned in the reference session. held_out_bins restricts
     a decoder to odd segments / laps when cells were selected on the even ones.
+  - Position from GP cells (P7): GP cells are position-agnostic, so a position decoder built on
+    them should confuse positions that share a GP phase. gp_alias_template gives the confusion
+    expected from a phase-only code (from how often each position bin occurs at each phase) and
+    alias_score compares it with the observed confusion. landmark_position / with_landmark_position
+    give t5 and t6 a common position axis in landmark units (slots 0-7 share identities, spacing
+    differs) for decoding across the two sessions.
 """
 
 import io
 import os
 import contextlib
 import pickle
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -185,6 +201,23 @@ def rewarded_slots_from_settings(mouse, tag, behav_root=BEHAV_ROOT):
             if any(v['rewardSequencePosition'] > -1 for v in variants)]
 
 
+def landmark_identities(mouse, tag, behav_root=BEHAV_ROOT):
+    """Per slot, the set of (odour, texture) variants in the trial build."""
+    with contextlib.redirect_stdout(io.StringIO()):
+        session_path = parse_nwb_functions.find_base_path(mouse, tag, behav_root)
+        ses_settings, _ = parse_nwb_functions.load_settings(session_path)
+    trial = pfs.get_trial_settings(ses_settings)
+    return [{(v['odour'], v['texture']) for v in variants} for variants in trial['landmarks']]
+
+
+def old_goal_slots(mouse, new_tag, old_tag, old_rewarded_slots, behav_root=BEHAV_ROOT):
+    """Slots of the new session whose landmark identity was a goal in the old session, matched by
+    (odour, texture) rather than slot index (t6 adds a landmark, so slot indices could move)."""
+    new_ids, old_ids = landmark_identities(mouse, new_tag, behav_root), landmark_identities(mouse, old_tag, behav_root)
+    old_goal_ids = set().union(*[old_ids[s] for s in old_rewarded_slots])
+    return [i for i, ids in enumerate(new_ids) if ids & old_goal_ids]
+
+
 def session_exists(mouse, tag, behav_root=BEHAV_ROOT):
     with contextlib.redirect_stdout(io.StringIO()):
         return os.path.isdir(f'{behav_root}/sub-{mouse}') and \
@@ -241,6 +274,32 @@ def goal_visit_for_rewards(session):
     return goal_visits[k]
 
 
+def active_goal_visits(slots, is_goal, rewarded, goal_ids):
+    """Which goal-slot visits were the task's current target. In ABC (several goals in
+    goal_ids, ordered by rewardSequencePosition) only the active goal pays out: it starts at A,
+    advances on each reward and stays put after a miss, as in
+    parse_session_functions_cohort3.get_active_goal. A visit to B or C while A is active is
+    therefore not a miss. In shaping goal_ids has a single entry and every goal slot rewards on
+    every visit, so all goal visits are active. A reward at an inactive goal (seen once, 002 t5)
+    is kept as active with a warning, so hits always sit on active visits."""
+    seq = list(dict.fromkeys(int(g) for g in goal_ids))
+    if len(seq) <= 1:
+        return np.asarray(is_goal, bool).copy()
+    active, k, n_off = np.zeros(len(slots), bool), 0, 0
+    for i, (slot, rew) in enumerate(zip(slots, rewarded)):
+        if slot == seq[k]:
+            active[i] = True
+        elif rew:
+            active[i] = True
+            n_off += 1
+            k = seq.index(slot) if slot in seq else k
+        if rew and active[i]:
+            k = (k + 1) % len(seq)
+    if n_off:
+        warnings.warn(f'{n_off} reward(s) at an inactive goal; counted as active hits, sequence resynced there')
+    return active
+
+
 def lick_onset_mask(licks):
     onset = np.zeros(len(licks), dtype=bool)
     onset[0] = licks[0] > 0
@@ -255,7 +314,9 @@ def visit_table(loaded, anticip_window=(-1.0, 0.0), speed_windows=((-1.0, 0.0), 
     window; < 1 = slowing down). 'predicted' marks hits with >= 1 anticipatory lick onset in
     anticip_window (s, relative to entry).
 
-    Outcomes: hit / miss (goal visits), FA / CR (non-goal visits), plus two non-goal categories
+    Outcomes: hit / miss (ACTIVE goal visits, see active_goal_visits), FA / CR (all other visits,
+    including goal landmarks visited while another goal is active; 'role' tells them apart:
+    'active' / 'inactive goal' / 'non-goal'), plus two non-goal categories
     for licking that crosses into or out of an ADJACENT goal (landmarks <= max_gap units apart --
     the shaping corridor has no gaps, ABC has 2.5-unit gaps so this never applies there):
       'anticipatory' : licked non-goal visit, next landmark is a goal, and the mouse licks in the
@@ -273,7 +334,9 @@ def visit_table(loaded, anticip_window=(-1.0, 0.0), speed_windows=((-1.0, 0.0), 
     for v, r in zip(earned[::-1], rewards[::-1]):   # first reward per visit wins
         reward_frame[v] = r
     licked = np.asarray(session['licked_lms'][:n_visits]) > 0
-    outcome = np.where(is_goal, np.where(reward_frame >= 0, 'hit', 'miss'), np.where(licked, 'FA', 'CR')).astype(object)
+    active = active_goal_visits(slots, is_goal, reward_frame >= 0, session['goal_ids'])
+    outcome = np.where(active, np.where(reward_frame >= 0, 'hit', 'miss'), np.where(licked, 'FA', 'CR')).astype(object)
+    role = np.where(active, 'active', np.where(is_goal, 'inactive goal', 'non-goal')).astype(object)
 
     entry, exit_ = np.asarray(session['lm_entry']), np.asarray(session['lm_exit'])
     licks = np.asarray(session['licks'][:n]) > 0
@@ -298,8 +361,8 @@ def visit_table(loaded, anticip_window=(-1.0, 0.0), speed_windows=((-1.0, 0.0), 
         anticip[i] = onset[max(e + lo, 0):max(e + hi, 0)].sum()
         if e + b0 >= 0 and e + a1 <= n:
             speed_ratio[i] = np.mean(speed[e + a0:e + a1]) / max(np.mean(speed[e + b0:e + b1]), 1e-6)
-    vt = pd.DataFrame(dict(slot=slots, is_goal=is_goal, licked=licked, outcome=outcome, entry=entry,
-                           exit=exit_, reward_frame=reward_frame, anticip_licks=anticip,
+    vt = pd.DataFrame(dict(slot=slots, is_goal=is_goal, active=active, role=role, licked=licked, outcome=outcome,
+                           entry=entry, exit=exit_, reward_frame=reward_frame, anticip_licks=anticip,
                            speed_ratio=speed_ratio))
     vt['predicted'] = (vt.outcome == 'hit') & (vt.anticip_licks > 0)
     return vt
@@ -312,22 +375,22 @@ def dprime(hit_rate, fa_rate, clip=(0.01, 0.99)):
 
 
 def session_performance(vt):
-    """Hit rate over goal visits, FA rate over FA + CR visits (anticipatory / post-goal licks at
-    landmarks touching a goal are left out), d'."""
-    goal, non = vt[vt.is_goal], vt[vt.outcome.isin(['FA', 'CR'])]
+    """Hit rate over ACTIVE goal visits, FA rate over FA + CR visits (inactive-goal visits
+    included; anticipatory / post-goal licks at landmarks touching a goal are left out), d'."""
+    goal, non = vt[vt.active], vt[vt.outcome.isin(['FA', 'CR'])]
     h = (goal.outcome == 'hit').mean() if len(goal) else np.nan
     f = (non.outcome == 'FA').mean() if len(non) else np.nan
     return dict(hit_rate=h, fa_rate=f, dprime=dprime(h, f), n_goal=len(goal), n_hits=int((goal.outcome == 'hit').sum()))
 
 
 def rolling_performance(vt, window=20):
-    """Per visit: hit rate over a centred window of `window` GOAL visits and FA rate over a window
+    """Per visit: hit rate over a centred window of `window` ACTIVE goal visits and FA rate over a window
     of `window` NON-goal visits (goal visits are sparse in shaping, so a window of visits would
     hold too few), forward/back-filled onto every visit; plus d'."""
     def roll(mask, outcome):
         r = (vt.outcome[mask] == outcome).astype(float).rolling(window, center=True, min_periods=window // 3).mean()
         return r.reindex(vt.index).ffill().bfill().to_numpy()
-    h, f = roll(vt.is_goal, 'hit'), roll(vt.outcome.isin(['FA', 'CR']), 'FA')
+    h, f = roll(vt.active, 'hit'), roll(vt.outcome.isin(['FA', 'CR']), 'FA')
     return pd.DataFrame(dict(hit_rate=h, fa_rate=f, dprime=dprime(h, f)))
 
 
@@ -356,10 +419,23 @@ def reward_segments(loaded, dedupe=True):
 
 
 def task_segments(loaded):
-    """(start_frame, end_frame) between consecutive goal-landmark ENTRIES, rewarded or not (the
-    'task' clock)."""
+    """(start_frame, end_frame) between consecutive ACTIVE goal-landmark ENTRIES, rewarded or not
+    (the 'task' clock). In ABC, goal landmarks visited while another goal is active do not end a
+    segment (see active_goal_visits); after a miss the segment runs on to the next visit of the
+    same, still active, goal."""
     vt = loaded['visits']
-    entries = vt.entry[vt.is_goal].to_numpy()
+    entries = vt.entry[vt.active].to_numpy()
+    entries = entries[entries < loaded['n_frames']]
+    return np.stack([entries[:-1], entries[1:]], axis=1) if len(entries) > 1 else np.empty((0, 2), int)
+
+
+def old_goal_segments(loaded, old_slots):
+    """(start_frame, end_frame) between consecutive entries into the OLD goal landmarks (the
+    'old' clock, t6 only: t5's goals in the t6 corridor). Nothing is rewarded there any more, so
+    no visit can be 'active'; the old sequence (slots 1 -> 3 -> 6) also follows the running order,
+    so every entry counts."""
+    vt = loaded['visits']
+    entries = vt.entry[vt.slot.isin(old_slots)].to_numpy()
     entries = entries[entries < loaded['n_frames']]
     return np.stack([entries[:-1], entries[1:]], axis=1) if len(entries) > 1 else np.empty((0, 2), int)
 
@@ -904,6 +980,81 @@ def pseudopop_decoding(dds, target='phase', dds_test=None, n_cells=None, n_train
     confusion /= np.maximum(confusion.sum(1, keepdims=True), 1e-12)
     return dict(error=np.median(errors), errors=np.array(errors), chance=np.median(chances),
                 confusion=confusion, n_cells=n_use, n_mice=len(dds))
+
+
+# ---------------------------------------------------------------------------
+# P7: position decoded from GP cells
+# ---------------------------------------------------------------------------
+
+def landmark_position(loaded, n_slots=7):
+    """Per-frame position in landmark units: u = slot + fraction of the distance from this
+    landmark's start to the next landmark's start, for visits of slots 0 .. n_slots-1 that are
+    followed by slot + 1 (NaN elsewhere, e.g. from the last landmark through the wrap). t5 and t6
+    have the same landmark identities in slots 0-7 but different spacing (8.5 vs 11 units), so
+    u in [0, 7) is a common position axis for decoding across the two sessions."""
+    session, n = loaded['session'], loaded['n_frames']
+    vt = loaded['visits']
+    pos = np.asarray(session['position'][:n], float)
+    lms = np.asarray(session['landmarks'])[:len(vt)]
+    u = np.full(n, np.nan)
+    slots, entry = vt.slot.to_numpy(), vt.entry.to_numpy()
+    for i in range(len(vt) - 1):
+        if slots[i] < n_slots and slots[i + 1] == slots[i] + 1 and entry[i] < n:
+            f = np.arange(entry[i], min(entry[i + 1], n))
+            frac = (pos[f] - lms[i, 0]) / (lms[i + 1, 0] - lms[i, 0])
+            u[f] = slots[i] + np.clip(frac, 0, 1 - 1e-9)
+    return u
+
+
+def with_landmark_position(dd, loaded, n_slots=7, bins_per_lm=2):
+    """Copy of decoding_data `dd` whose position target is landmark_position (n_slots *
+    bins_per_lm bins); bins without a landmark position are masked out (combined with any existing
+    mask). Errors from pseudopop_decoding stay circular, which slightly underestimates errors near
+    the two ends of this non-circular axis."""
+    u = landmark_position(loaded, n_slots)[dd['frame']]
+    ok = np.isfinite(u)
+    return dict(dd, pos=np.where(ok, u / n_slots, np.nan), pos_bin=np.where(ok, np.floor(np.nan_to_num(u) * bins_per_lm), 0).astype(int),
+                n_pos_bins=n_slots * bins_per_lm, mask=ok & dd.get('mask', True))
+
+
+def phase_position_counts(dd, phase=None, n_phase_bins=10):
+    """(n_pos_bins, n_phase_bins) counts of downsampled bins by position bin and GP phase bin,
+    over the bins usable as position targets (dd mask). phase defaults to dd['phase'] (reward
+    clock); pass another clock's per-bin phase (e.g. from frame_phase on old_goal_segments)."""
+    phase = dd['phase'] if phase is None else phase
+    ok = _target(dd, 'position')[3] & np.isfinite(phase)
+    ph = np.clip(np.floor(phase[ok] * n_phase_bins).astype(int), 0, n_phase_bins - 1)
+    counts = np.zeros((dd['n_pos_bins'], n_phase_bins))
+    np.add.at(counts, (dd['pos_bin'][ok], ph), 1)
+    return counts
+
+
+def gp_alias_template(counts_test, counts_train=None):
+    """Expected position confusion of a decoder that only knows GP phase:
+    T[i, j] = sum_phi P(phi | true position i) * P(decoded position j | phi), with P(phi | i) from
+    the test session and P(j | phi) from the training session (default: the same). Inputs are
+    phase_position_counts, summed over mice to pool. Rows sum to 1 (NaN where a position bin was
+    never visited)."""
+    counts_train = counts_test if counts_train is None else counts_train
+    p_phi_given_i = counts_test / counts_test.sum(1, keepdims=True)
+    p_j_given_phi = counts_train / np.maximum(counts_train.sum(0, keepdims=True), 1e-12)
+    return p_phi_given_i @ p_j_given_phi.T
+
+
+def alias_score(conf, template, exclude=1, circular=True):
+    """dict(diag_mass, diag_chance, alias_r): posterior mass within `exclude` bins of the true
+    position (how much is decoded correctly), its chance level, and the Pearson r between the
+    observed confusion and the GP alias template OUTSIDE that band (whether the errors are the
+    ones a phase-only code predicts). circular=False for the landmark-position axis."""
+    n = conf.shape[0]
+    d = np.abs(np.arange(n)[:, None] - np.arange(n)[None])
+    if circular:
+        d = np.minimum(d, n - d)
+    band = d <= exclude
+    off = ~band & np.isfinite(conf) & np.isfinite(template)
+    r = np.corrcoef(conf[off], template[off])[0, 1] if off.sum() > 2 and np.std(template[off]) > 0 else np.nan
+    return dict(diag_mass=np.mean(np.where(band, np.nan_to_num(conf), 0).sum(1)), diag_chance=band.sum(1).mean() / n,
+                alias_r=r)
 
 
 # ---------------------------------------------------------------------------

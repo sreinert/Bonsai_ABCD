@@ -217,8 +217,10 @@ def load_data(base_path):
     
 
     sess_dataframe = pd.DataFrame(sess_data, index=all_ix)
-    sess_dataframe['Position'] = sess_dataframe['Position'].interpolate()
-    sess_dataframe['Treadmill'] = sess_dataframe['Treadmill'].interpolate()
+    # limit_direction='both' also fills rows before a stream's first sample (e.g. treadmill
+    # samples logged before the first position sample), which plain interpolate() leaves NaN
+    sess_dataframe['Position'] = sess_dataframe['Position'].interpolate(limit_direction='both')
+    sess_dataframe['Treadmill'] = sess_dataframe['Treadmill'].interpolate(limit_direction='both')
     with pd.option_context("future.no_silent_downcasting", True):
         sess_dataframe['Licks'] = sess_dataframe['Licks'].fillna(False).astype(bool) 
 
