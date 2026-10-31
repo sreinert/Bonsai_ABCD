@@ -9,6 +9,63 @@ except ImportError:  # Support legacy direct imports from sequence_compression/.
 
 np.set_printoptions(suppress=True, precision=2)
 
+
+def _match_pd_boundaries(
+    candidates,
+    expected,
+    tolerance,
+    max_observed_position,
+):
+    """Match one PD reversal to each odour-derived landmark boundary.
+
+    A photodiode transition can occasionally be absent from both channels.
+    For an internal boundary that the mouse has already passed, use the
+    odour-derived expected position as a fallback.  Do not synthesize a
+    boundary beyond the furthest observed position: that case represents a
+    session ending before the mouse reached or exited the final landmark.
+
+    Returns
+    -------
+    matched : ndarray
+        Boundary positions in visit order.  These contain a PD position when
+        one is available within ``tolerance`` and the expected position for an
+        internal missing reversal.
+    fallback_visits : ndarray
+        Visit indices for which the expected position was used.
+    """
+    candidates = np.asarray(candidates, dtype=float)
+    expected = np.asarray(expected, dtype=float)
+    matched = []
+    fallback_visits = []
+    used = set()
+
+    for visit, target in enumerate(expected):
+        available = np.array(
+            [i for i in range(len(candidates)) if i not in used],
+            dtype=int,
+        )
+        closest = None
+        if available.size:
+            distances = np.abs(candidates[available] - target)
+            candidate = available[np.argmin(distances)]
+            if np.abs(candidates[candidate] - target) <= tolerance:
+                closest = int(candidate)
+
+        if closest is not None:
+            matched.append(candidates[closest])
+            used.add(closest)
+        elif target <= max_observed_position:
+            matched.append(target)
+            fallback_visits.append(visit)
+        else:
+            # The recording ended before this boundary was reached.
+            break
+
+    return (
+        np.asarray(matched, dtype=float),
+        np.asarray(fallback_visits, dtype=int),
+    )
+
 class Session():
     def __init__(self, ses_settings, sess_dataframe, session_path, animal, cohort, session_id):
         self.settings = ses_settings
@@ -1056,9 +1113,40 @@ class ABCD_Session():
         '''Estimate lm entry and exit indices using photodiode data'''
         binary_pd = (session[pd] >= 100).astype(int)
 
-        all_lm_entry_idx = np.where(np.diff(binary_pd) == 1)[0] + 1
-        all_lm_exit_idx = np.where(np.diff(binary_pd) == -1)[0] + 1
-        if binary_pd[0] == 1:
+        pd_diff = np.diff(binary_pd)
+        rising_idx = np.where(pd_diff == 1)[0] + 1
+        falling_idx = np.where(pd_diff == -1)[0] + 1
+
+        release_positions = self.estimate_release_events()['Position'].to_numpy()
+        if len(release_positions) == 0:
+            raise ValueError('Cannot infer photodiode polarity without an odour release')
+
+        first_release_position = release_positions[0]
+        position = session['position']
+
+        def nearest_release_distance(indices):
+            if len(indices) == 0:
+                return np.inf
+            return np.min(np.abs(position[indices] - first_release_position))
+
+        rising_distance = nearest_release_distance(rising_idx)
+        falling_distance = nearest_release_distance(falling_idx)
+        if not np.isfinite(rising_distance) and not np.isfinite(falling_distance):
+            raise ValueError(f'No polarity reversals found in {pd}')
+
+        # Polarity can vary across recordings. The reversal closest to the
+        # first odour-derived landmark start defines entry polarity for this
+        # channel; the opposite reversal defines exit polarity.
+        if falling_distance <= rising_distance:
+            all_lm_entry_idx = falling_idx
+            all_lm_exit_idx = rising_idx
+            inside_state = 0
+        else:
+            all_lm_entry_idx = rising_idx
+            all_lm_exit_idx = falling_idx
+            inside_state = 1
+
+        if binary_pd[0] == inside_state:
             all_lm_entry_idx = np.insert(all_lm_entry_idx, 0, 0)
 
         offset = self.trial['offsets'][0]
@@ -1140,7 +1228,45 @@ class ABCD_Session():
 
             # --- Pair entries with the NEXT valid exit ---
             min_gap = np.median(np.diff(entry_pos)) - 1
-            if grey_landmarks_included:
+            use_min_gap_filter = len(self.trial['offsets']) == 1
+
+            if not use_min_gap_filter:
+                # Randomised offsets can place genuine consecutive landmarks
+                # closer together than the median gap. Match PD reversals to
+                # the odour-derived boundaries instead of rejecting them by
+                # spacing. Each reversal can be used only once. If both PD
+                # channels miss an internal reversal, retain that visit using
+                # its odour-derived boundary; an unfinished final landmark is
+                # still left unmatched and removed below.
+                max_observed_position = np.nanmax(session['position'])
+                all_lm_entry, pd_entry_fallback_visits = _match_pd_boundaries(
+                    entry_pos,
+                    release_positions,
+                    tol,
+                    max_observed_position,
+                )
+                all_lm_exit, pd_exit_fallback_visits = _match_pd_boundaries(
+                    exit_pos,
+                    release_positions + self.lm_size,
+                    tol,
+                    max_observed_position,
+                )
+                session['pd_fallback_visits'] = {
+                    'entry': pd_entry_fallback_visits,
+                    'exit': pd_exit_fallback_visits,
+                }
+                if pd_entry_fallback_visits.size:
+                    print(
+                        'Missing internal PD entry reversals; using odour-derived '
+                        f'entries for visits {pd_entry_fallback_visits.tolist()}'
+                    )
+                if pd_exit_fallback_visits.size:
+                    print(
+                        'Missing internal PD exit reversals; using odour-derived '
+                        f'exits for visits {pd_exit_fallback_visits.tolist()}'
+                    )
+
+            elif grey_landmarks_included:
                 # the zone between landmarks is another landmark (grey), which might give rise to strange estimates for landmark entry and exit events
                 filtered_exit_idx = []
                 last_kept = None
@@ -1154,7 +1280,7 @@ class ABCD_Session():
                         continue
                     
                     # --- condition 1: too close to previous valid exit ---
-                    if last_kept is not None:
+                    if use_min_gap_filter and last_kept is not None:
                         if (curr_exit - last_kept) < min_gap:
                             continue
 
@@ -1180,7 +1306,7 @@ class ABCD_Session():
                         continue
                     
                     # too close to previous valid event
-                    if last_kept is not None:
+                    if use_min_gap_filter and last_kept is not None:
                         if (curr_exit - last_kept) < min_gap:
                             continue
 
@@ -1197,7 +1323,7 @@ class ABCD_Session():
                         continue
                     
                     # too close to previous valid event
-                    if last_kept is not None:
+                    if use_min_gap_filter and last_kept is not None:
                         if (curr_entry - last_kept) < min_gap:
                             continue
 
@@ -1220,16 +1346,38 @@ class ABCD_Session():
                 num_releases -= 1
                 all_lm_entry = all_lm_entry[:-1]
 
-            # Fix first lm - only consider first entry and last exit idx
-            first_entries = all_lm_entry < offset
-            first_exits  = all_lm_exit  < offset
-            first_entry = all_lm_entry[first_entries][0] 
-            first_exit = all_lm_exit[first_exits][-1]
-            
-            # Concatenate all landmarks 
-            lm_entry = np.concatenate([[first_entry], all_lm_entry[~first_entries]])
-            lm_exit = np.concatenate([[first_exit], all_lm_exit[~first_exits]])
+            initial_corridor_offset = float(
+                self.settings.get('initialCorridorOffset', 0)
+            )
+            if initial_corridor_offset > 0:
+                # Cohort 2 begins before the first landmark. PD transitions in
+                # that initial corridor are acquisition artefacts, not a
+                # synthetic first landmark. The configured offset is the
+                # landmark centre, so retain the genuine leading edge at half
+                # a landmark width before it.
+                first_landmark_start = (
+                    initial_corridor_offset - self.lm_size / 2
+                )
+                lm_entry = all_lm_entry[
+                    all_lm_entry >= first_landmark_start
+                ]
+                lm_exit = all_lm_exit[
+                    all_lm_exit >= first_landmark_start
+                ]
+            else:
+                # Preserve the historical Cohort 1 behaviour: combine early
+                # PD transitions into one synthetic first landmark.
+                first_entries = all_lm_entry < offset
+                first_exits = all_lm_exit < offset
+                first_entry = all_lm_entry[first_entries][0]
+                first_exit = all_lm_exit[first_exits][-1]
 
+                lm_entry = np.concatenate(
+                    [[first_entry], all_lm_entry[~first_entries]]
+                )
+                lm_exit = np.concatenate(
+                    [[first_exit], all_lm_exit[~first_exits]]
+                )
             # Confirm number of PD events matches odour releases
             release_diff = np.diff(release_positions)
             release_outlier = np.where(release_diff < self.lm_size + offset)[0]
@@ -1271,7 +1419,11 @@ class ABCD_Session():
                 lm_entry = np.unique(session['position'][correct_entry_indices])
                 lm_exit = np.unique(session['position'][correct_exit_indices])
 
-            assert len(lm_entry) == num_releases, 'Something is wrong with the landmark entries'
+            print(lm_entry)
+            assert len(lm_entry) == num_releases, (
+                'Something is wrong with the landmark entries: '
+                f'found {len(lm_entry)} PD entries for {num_releases} odour releases'
+            )
             assert np.abs(lm_entry[first_release_idx] - first_release_considered) < 1, 'There is a large offset in the landmark entry and odour release positions'
 
             if len(lm_entry) != len(lm_exit):

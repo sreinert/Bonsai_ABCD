@@ -2001,10 +2001,13 @@ def get_goal_progress_cells(dF, neurons, session, event_frames, save_path, ngoal
     # Find goal progress tuned cells - takes long if shuffling
     t = parse_session_functions.extract_int(session['stage'])
 
-    if period == 'goal':
-        filename = f'T{t}_{ngoals}goal_progress_tracked_neurons.npz'
+    if 'stage' in session:
+        if period == 'goal':
+            filename = f'T{t}_{ngoals}goal_progress_tracked_neurons.npz'
+        else:
+            filename = f'T{t}_{ngoals}period_tracked_neurons.npz'
     else:
-        filename = f'T{t}_{ngoals}period_tracked_neurons.npz'
+        filename = f'{ngoals}goal_progress_neurons.npz'
 
     if os.path.exists(os.path.join(save_path, filename)) and not reload:
         print(f'Goal progress and tracked neurons found. Loading...')
