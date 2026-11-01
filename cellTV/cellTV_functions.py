@@ -10,7 +10,6 @@ from sklearn.utils import shuffle
 # from barcode import extract_barcodes
 sys.path.append(os.path.abspath(os.path.join(os.getcwd(), '..')))
 import pickle
-from suite2p.extraction import dcnv
 import scipy.stats as stats
 from scipy.ndimage import gaussian_filter1d
 import matplotlib.patches as patches
@@ -254,6 +253,7 @@ def get_dff_cohort2(f,fneu, frame_ix, ops):
     """
     Calculate the dF/F for the imaging data (suite2p default method).
     """
+    from suite2p.extraction import dcnv
     all_f = f[:, frame_ix['valid_frames']]
     all_fneu = fneu[:, frame_ix['valid_frames']]
     all_cells_f_corr = all_f - all_fneu*0.7
