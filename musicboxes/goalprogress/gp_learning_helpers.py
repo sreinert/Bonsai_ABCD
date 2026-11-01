@@ -91,11 +91,18 @@ New here
     should point under each hypothesis (landmark-anchored, or relative fraction of the lap from the lap
     origin or from landmark 0). One decoder, several
     readouts, so all hypotheses are scored in the same units on the same bins.
+  - cached_tuning: pickles gp_tuning / position_tuning results (the 500-shuffle significance test is
+    the slow part of the GP tuning cell, P6d and P7). The cache key covers the session (mouse, tag,
+    accepted ROIs, frame count), every argument, the actual segment frames, and the source code of
+    the tuning function and the helpers it calls, so a changed segment definition or tuning code
+    recomputes instead of reusing stale results.
 """
 
 import io
 import os
 import contextlib
+import hashlib
+import inspect
 import pickle
 import warnings
 
@@ -607,6 +614,40 @@ def position_tuning(loaded, bins=40, n_shuffles=500, alpha=0.05, seed=0, signal=
     return dict(bins=bins, laps=segments, mat=mat, tuning=observed, p=p, significant=p < alpha, shuffle_z=shuffle_z,
                 field=preferred_phase(mean_curve(mat)),
                 split_r=rowwise_corr(mean_curve(mat[:, 0::2]), mean_curve(mat[:, 1::2])))
+
+
+_TUNING_CODE = None   # filled on first use: source of the functions a tuning result depends on
+
+
+def cached_tuning(fn, loaded, cache_dir=None, **kwargs):
+    """fn(loaded, **kwargs) for fn = gp_tuning or position_tuning, pickled in cache_dir (None: no
+    cache). For gp_tuning the clock is resolved to its segment frames before hashing, so cached
+    results follow changes to reward_segments / task_segments (rebuilt on every load_session).
+    Delete the folder to force a recompute after a change the key does not see (e.g. new dF
+    from a suite2p rerun with the same ROIs and frame count)."""
+    if not cache_dir:
+        return fn(loaded, **kwargs)
+    global _TUNING_CODE
+    if _TUNING_CODE is None:
+        _TUNING_CODE = ''.join(inspect.getsource(f) for f in
+                               [gp_tuning, position_tuning, lap_segments, segment_layout, binned_from_groups,
+                                shuffled_groups, tuning_index, mean_curve, preferred_phase, rowwise_corr])
+    key = dict(kwargs)
+    if fn is gp_tuning:
+        seg = kwargs.get('segments')
+        key['segments'] = np.asarray(loaded['segments'][kwargs.get('clock', 'reward')] if seg is None else seg).tobytes()
+    digest = hashlib.sha1(repr((fn.__name__, loaded['mouse'], loaded['tag'], loaded['n_frames'],
+                                np.asarray(loaded['neurons']).tobytes(), sorted(key.items()),
+                                _TUNING_CODE)).encode()).hexdigest()[:16]
+    path = os.path.join(cache_dir, f"{fn.__name__}_sub-{loaded['mouse']}_{loaded['tag']}_{digest}.pkl")
+    if os.path.exists(path):
+        with open(path, 'rb') as f:
+            return pickle.load(f)
+    out = fn(loaded, **kwargs)
+    os.makedirs(cache_dir, exist_ok=True)
+    with open(path, 'wb') as f:
+        pickle.dump(out, f)
+    return out
 
 
 def sorted_display_curves(sort_mat, display_mat):
