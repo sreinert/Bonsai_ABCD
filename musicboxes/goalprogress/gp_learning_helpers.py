@@ -74,6 +74,23 @@ New here
     cross-validated reference panels used to set the scale and wash out every cross-session panel.
     P2's point predictions are binned as P(decoded | true) (conditional_hist) rather than as a joint
     density, so unevenly sampled true phases no longer show up as hot spots.
+  - pseudopop_decoding reports the MEAN circular error. LDA posteriors are nearly one-hot, so
+    predictions sit on class centres and errors come in steps of one bin; the median (used at first)
+    stayed at exactly one bin (0.1 for GP phase) until more than half of all predictions hit the exact
+    bin, which hid every difference between stages.
+  - gp_alias_template uses a flat prior over decoded positions, P(j | phi) proportional to
+    P(phi | j), matching the class-balanced pseudo-trial training. The first version weighted
+    P(j | phi) by occupancy, which mapped every phase onto the places the mouse sits longest (goals,
+    reward consumption): vertical stripes instead of the expected off-diagonal bands.
+  - Every ABC corridor (t4/t5: 8 slots, t6/t7: 9, t8: 7) keeps the same landmark identity in slot k,
+    so landmark_position gives a common position axis for any pair of ABC sessions (slots 0 to the
+    smaller corridor's last slot); used by P2 and P7b for cross-corridor position decoding.
+  - Which position code generalises across corridors (P8): corridor_geometry / lap_to_slot /
+    slot_to_lap convert between lap position and landmark coordinates, and expected_train_position
+    gives, for a true position in the test corridor, where a decoder trained in another corridor
+    should point under each hypothesis (landmark-anchored, or relative fraction of the lap from the lap
+    origin or from landmark 0). One decoder, several
+    readouts, so all hypotheses are scored in the same units on the same bins.
 """
 
 import io
@@ -939,8 +956,10 @@ def pseudopop_decoding(dds, target='phase', dds_test=None, n_cells=None, n_train
     mouse is used together. With dds_test (same mice, same cells in the same order, e.g. from
     tracked_rows), train on all bins of dds and test on dds_test. n_cells: random subset of the
     pooled cells per repetition (None = all), for matched-size comparisons.
-    Returns dict(error (median over reps), errors (per rep), chance, confusion (true class x
-    posterior, mean over reps), n_cells, n_mice)."""
+    Returns dict(error (median over reps of the mean circular error), errors (per rep), chance,
+    confusion (true class x posterior, mean over reps), n_cells, n_mice). The error is a mean, not a
+    median: predictions sit on class centres (near one-hot posteriors), so per-sample errors are
+    multiples of one bin and their median sticks at one bin."""
     rng = np.random.default_rng(seed)
     n_bins = _target(dds[0], target)[2]
     centres = (np.arange(n_bins) + 0.5) / n_bins
@@ -982,8 +1001,8 @@ def pseudopop_decoding(dds, target='phase', dds_test=None, n_cells=None, n_train
         if not rep_pred:
             return None
         pred, truth = np.concatenate(rep_pred), np.concatenate(rep_truth)
-        errors.append(np.median(circular_distance(pred, truth)))
-        chances.append(np.median(circular_distance(rng.permutation(pred), truth)))
+        errors.append(np.mean(circular_distance(pred, truth)))
+        chances.append(np.mean(circular_distance(rng.permutation(pred), truth)))
     confusion /= np.maximum(confusion.sum(1, keepdims=True), 1e-12)
     return dict(error=np.median(errors), errors=np.array(errors), chance=np.median(chances),
                 confusion=confusion, n_cells=n_use, n_mice=len(dds))
@@ -996,9 +1015,10 @@ def pseudopop_decoding(dds, target='phase', dds_test=None, n_cells=None, n_train
 def landmark_position(loaded, n_slots=7):
     """Per-frame position in landmark units: u = slot + fraction of the distance from this
     landmark's start to the next landmark's start, for visits of slots 0 .. n_slots-1 that are
-    followed by slot + 1 (NaN elsewhere, e.g. from the last landmark through the wrap). t5 and t6
-    have the same landmark identities in slots 0-7 but different spacing (8.5 vs 11 units), so
-    u in [0, 7) is a common position axis for decoding across the two sessions."""
+    followed by slot + 1 (NaN elsewhere, e.g. from the last landmark through the wrap). All ABC
+    corridors keep the landmark identity of slot k (t4/t5: 8 slots, t6/t7: 9, t8: 7) but differ in
+    spacing (e.g. 8.5 vs 11 units in t5 vs t6), so with n_slots = (smaller corridor's number of
+    landmarks) - 1, u in [0, n_slots) is a common position axis for decoding across two sessions."""
     session, n = loaded['session'], loaded['n_frames']
     vt = loaded['visits']
     pos = np.asarray(session['position'][:n], float)
@@ -1024,6 +1044,51 @@ def with_landmark_position(dd, loaded, n_slots=7, bins_per_lm=2):
                 n_pos_bins=n_slots * bins_per_lm, mask=ok & dd.get('mask', True))
 
 
+def corridor_geometry(loaded):
+    """dict(edges, L, n): landmark start positions in lap units, unwrapped from slot 0 (edges[k] = start
+    of slot k, edges[n] = edges[0] + L, so they increase even where the slots wrap past the lap origin)."""
+    s = loaded['session']
+    L, n = float(s['tunnel_length']), int(s['num_landmarks'])
+    starts = np.asarray(s['landmarks'])[:n, 0] % L
+    edges = starts[0] + np.r_[0, np.cumsum(np.diff(starts) % L), L]
+    return dict(edges=edges, L=L, n=n)
+
+
+def lap_to_slot(x, geo):
+    """Lap position (units, [0, L)) -> landmark coordinate u in [0, n): slot k + fraction of the way from
+    slot k's start to the next slot's start (the last slot runs to slot 0 of the next lap)."""
+    e = geo['edges']
+    return np.interp(e[0] + (np.asarray(x, float) - e[0]) % geo['L'], e, np.arange(geo['n'] + 1))
+
+
+def slot_to_lap(u, geo):
+    return np.interp(u, np.arange(geo['n'] + 1), geo['edges']) % geo['L']
+
+
+POSITION_HYPOTHESES = ['landmark', 'relative (lap start)', 'relative (landmark 0)']
+
+
+def expected_train_position(x_test, geo_train, geo_test, hypothesis):
+    """Where a lap-position decoder trained in corridor `geo_train` should point (train lap units) when the
+    mouse is at x_test in corridor `geo_test`, if the population encodes:
+      - 'landmark': landmark identity (slot k is the same landmark in every ABC corridor): same landmark
+        coordinate u. Only defined between landmark starts that both corridors share (u < shared - 1),
+        NaN elsewhere.
+      - 'relative (lap start)': the same fraction of the lap, counted from the lap origin.
+      - 'relative (landmark 0)': the same fraction of the lap, counted from landmark 0's start."""
+    x = np.asarray(x_test, float)
+    Lr, Lt = geo_train['L'], geo_test['L']
+    if hypothesis == 'landmark':
+        u = lap_to_slot(x, geo_test)
+        return np.where(u < min(geo_train['n'], geo_test['n']) - 1, slot_to_lap(u, geo_train), np.nan)
+    if hypothesis == 'relative (lap start)':
+        return x / Lt * Lr
+    if hypothesis == 'relative (landmark 0)':
+        a_r, a_t = geo_train['edges'][0], geo_test['edges'][0]
+        return (a_r + (x - a_t) % Lt / Lt * Lr) % Lr
+    raise ValueError(hypothesis)
+
+
 def phase_position_counts(dd, phase=None, n_phase_bins=10):
     """(n_pos_bins, n_phase_bins) counts of downsampled bins by position bin and GP phase bin,
     over the bins usable as position targets (dd mask). phase defaults to dd['phase'] (reward
@@ -1039,12 +1104,18 @@ def phase_position_counts(dd, phase=None, n_phase_bins=10):
 def gp_alias_template(counts_test, counts_train=None):
     """Expected position confusion of a decoder that only knows GP phase:
     T[i, j] = sum_phi P(phi | true position i) * P(decoded position j | phi), with P(phi | i) from
-    the test session and P(j | phi) from the training session (default: the same). Inputs are
-    phase_position_counts, summed over mice to pool. Rows sum to 1 (NaN where a position bin was
-    never visited)."""
+    the test session and P(j | phi) from the training session (default: the same). The decoders
+    are trained on class-balanced pseudo-trials, i.e. with a flat prior over positions, so
+    P(j | phi) is proportional to P(phi | j) (normalised over j), NOT to how often the mouse is at j
+    with phase phi: occupancy weighting maps every phase onto the slowest stretches of the
+    corridor. Positions are confused when their phase distributions overlap, which gives bands
+    offset from the diagonal (parallel to it when consecutive goal-to-goal segments are equally
+    long). Inputs are phase_position_counts, summed over mice to pool. Rows sum to 1 (NaN where a
+    position bin was never visited)."""
     counts_train = counts_test if counts_train is None else counts_train
     p_phi_given_i = counts_test / counts_test.sum(1, keepdims=True)
-    p_j_given_phi = counts_train / np.maximum(counts_train.sum(0, keepdims=True), 1e-12)
+    p_phi_given_j = counts_train / np.maximum(counts_train.sum(1, keepdims=True), 1e-12)
+    p_j_given_phi = p_phi_given_j / np.maximum(p_phi_given_j.sum(0, keepdims=True), 1e-12)
     return p_phi_given_i @ p_j_given_phi.T
 
 
