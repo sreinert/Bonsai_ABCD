@@ -3,7 +3,8 @@
 Backs musicboxes/goalprogress/GP_learning_holography.ipynb, which asks what GP-tuned cells and
 the population code do when performance is poor (t0: first shaping session; t4: first ABC
 session; t6: new sequence) compared with good sessions (t3: end of shaping; t5: ABC learned),
-and on single error trials (false alarms, misses).
+and on single error trials (false alarms, misses). sub-001 has two further ABC sessions, t7 (good)
+and t8, which run through the same analyses.
 
 Provenance
 ----------
@@ -68,6 +69,11 @@ New here
     alias_score compares it with the observed confusion. landmark_position / with_landmark_position
     give t5 and t6 a common position axis in landmark units (slots 0-7 share identities, spacing
     differs) for decoding across the two sessions.
+  - Confusion plots (P2, P6b, P7) show log2(P(decoded | true) / chance) on a fixed diverging scale
+    (confusion_image, chance_colorbar) instead of raw posteriors scaled to the brightest pixel: the sharp
+    cross-validated reference panels used to set the scale and wash out every cross-session panel.
+    P2's point predictions are binned as P(decoded | true) (conditional_hist) rather than as a joint
+    density, so unevenly sampled true phases no longer show up as hot spots.
 """
 
 import io
@@ -97,13 +103,13 @@ PROJECT_ROOT = ceph_path('/Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_202
 BEHAV_ROOT = f'{PROJECT_ROOT}/BehaviourAligned_robust'
 TRACKING_ROOT = f'{PROJECT_ROOT}/analysis'
 
-STAGES = ['t0', 't1', 't2', 't3', 't4', 't5', 't6']
-GOOD, POOR = ['t3', 't5'], ['t0', 't4', 't6']
-SHAPING, ABC = ['t0', 't1', 't2', 't3'], ['t4', 't5', 't6']
+STAGES = ['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8']   # t7, t8: extra ABC sessions (so far sub-001 only)
+GOOD, POOR = ['t3', 't5', 't7'], ['t0', 't4', 't6']
+SHAPING, ABC = ['t0', 't1', 't2', 't3'], ['t4', 't5', 't6', 't7', 't8']
 OUTCOMES = ['hit', 'miss', 'FA', 'CR', 'anticipatory', 'post-goal']
 PHASE_CLASSES = {'post-reward': (0.0, 1 / 3), 'middle': (1 / 3, 2 / 3), 'pre-reward': (2 / 3, 1.0)}
 
-SESSION_COLORS = dict(zip(STAGES, era_brewer.era_brew('SpeakNow1', n=9, brew_type='continuous')[1:8]))
+SESSION_COLORS = dict(zip(STAGES, era_brewer.era_brew('SpeakNow1', n=len(STAGES) + 2, brew_type='continuous')[1:-1]))
 MOUSE_COLORS = dict(zip(['001', '002', '003', '004'], era_brewer.era_brew('Lover2', n=4, brew_type='discrete')))
 _lover = era_brewer.era_brew('Lover1', n=5, brew_type='discrete')
 OUTCOME_COLORS = {'hit': _lover[1], 'miss': _lover[0], 'FA': _lover[3], 'CR': _lover[4], 'anticipatory': _lover[2],
@@ -111,6 +117,7 @@ OUTCOME_COLORS = {'hit': _lover[1], 'miss': _lover[0], 'FA': _lover[3], 'CR': _l
 CLASS_COLORS = dict(zip(PHASE_CLASSES, era_brewer.era_brew('Midnight1', n=3, brew_type='discrete')))
 HEATMAP_CMAP = LinearSegmentedColormap.from_list(
     'NineteenEightyNine_r', era_brewer.era_brew('NineteenEightyNine', n=256, brew_type='continuous')[::-1])
+CHANCE_LOG2_LIM = 2   # confusion plots: colour scale +/- log2 fold vs chance (1/4x ... 4x)
 PHASE_CMAP = LinearSegmentedColormap.from_list(
     'Midnight1', era_brewer.era_brew('Midnight1', n=256, brew_type='continuous'))
 
@@ -1076,6 +1083,41 @@ def heatmap_row(axes, curves_by_tag, title_fn, vmin=None, vmax=None, cmap=HEATMA
         ax.set_title(title_fn(tag), fontsize=9)
         ax.set_xlabel('GP phase')
     return im
+
+
+def conditional_hist(truth, pred, bins=10):
+    """P(decoded bin | true bin) from point predictions in [0, 1), as (true x decoded); rows sum to 1
+    (NaN for true bins without samples)."""
+    counts, _, _ = np.histogram2d(truth, pred, bins=bins, range=[[0, 1], [0, 1]])
+    total = counts.sum(axis=1, keepdims=True)
+    return counts / np.where(total > 0, total, np.nan)
+
+
+def log2_vs_chance(conf, lim=CHANCE_LOG2_LIM):
+    """log2(P(decoded | true) / chance) of a (true x decoded) matrix with rows summing to 1, chance =
+    1 / n decoded bins. Zeros are floored at -lim so they show as 'far below chance', not as missing."""
+    conf = np.asarray(conf, float)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        return np.log2(np.maximum(conf * conf.shape[1], 2.0 ** -lim))
+
+
+def confusion_image(ax, conf, extent=(0, 1, 0, 1), transpose=False, lim=CHANCE_LOG2_LIM, cmap=HEATMAP_CMAP):
+    """imshow of a (true x decoded) confusion matrix relative to chance on a fixed, symmetric scale
+    (blue below chance, grey at chance, red above), so panels with very different sharpness share one
+    colorbar. Rows (true) go on y; transpose=True puts true on x."""
+    img = log2_vs_chance(conf, lim)
+    cmap = cmap.copy()
+    cmap.set_bad('w')
+    return ax.imshow(img.T if transpose else img, origin='lower', cmap=cmap, extent=extent, vmin=-lim, vmax=lim,
+                     interpolation='none')
+
+
+def chance_colorbar(fig, im, lim=CHANCE_LOG2_LIM, **kwargs):
+    ticks = np.arange(-lim, lim + 1)
+    cb = fig.colorbar(im, ticks=ticks, extend='both', **kwargs)
+    cb.set_ticklabels([f'{2.0 ** t:g}x' if t >= 0 else f'1/{2 ** -t:g}x' for t in ticks])
+    cb.set_label('P(decoded | true) vs chance')
+    return cb
 
 
 def mean_sem(x, axis=0):
