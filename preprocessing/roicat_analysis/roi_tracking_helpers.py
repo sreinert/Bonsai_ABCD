@@ -27,6 +27,33 @@ def short_session_name(session):
     condition, number = match.groups()
     return f"{condition}_{number}"
 
+
+def get_session_key(session, cohort):
+    """Extract the cohort-specific session identifier from a name or path."""
+    session = str(session)
+
+    if cohort == 2:
+        match = re.search(r'protocol-t(\d+)', session)
+        if match:
+            return int(match.group(1))
+    elif cohort == 3:
+        match = re.search(r'(full\d+)', session)
+        if match:
+            return match.group(1)
+    elif cohort == '2b':
+        match = re.search(
+            r'(ses-[^-]+-random-\d+_date-\d{8}T\d{6})',
+            session,
+        )
+        if match:
+            return short_session_name(match.group(1))
+    else:
+        raise ValueError(f'Unsupported cohort: {cohort!r}')
+
+    raise ValueError(
+        f'Could not extract a cohort {cohort!r} session key from: {session}'
+    )
+
 def find_session_folders(basepath, session_ids):
     """
     Keep the folder with the highest ses-XXX index for each session_id.
@@ -58,19 +85,34 @@ def find_session_folders(basepath, session_ids):
     return list(selected.values())
 
 
-def load_neural_data(basepath, cohort, sessions_to_align):
-    # Load neural data 
+def _find_suite2p_file(basepath, session, filename):
+    """Return a Suite2p file from any supported session-directory layout."""
+    session_path = Path(basepath) / session
+    candidates = [
+        session_path / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / filename,
+        session_path / 'funcimg' / 'suite2p' / 'plane0' / filename,
+        session_path / 'Session' / 'suite2p' / 'plane0' / filename,
+        session_path / 'suite2p' / 'plane0' / filename,
+    ]
+
+    datapath = next((path for path in candidates if path.is_file()), None)
+    if datapath is None:
+        searched_paths = '\n'.join(f'  - {path}' for path in candidates)
+        raise FileNotFoundError(
+            f'{filename} was not found for session {session}. Searched:\n'
+            f'{searched_paths}'
+        )
+
+    return datapath
+
+
+def load_neural_data(basepath, sessions_to_align):
+    """Load ``F.npy`` for each session from any supported Suite2p layout."""
     data = [[] for _ in range(len(sessions_to_align))]
     for s, sess in enumerate(sessions_to_align):
         print(f'Loading neural data for session {sess}')
-        if cohort == 2:
-            datapath = basepath / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'F.npy'
-        elif cohort == 3:
-            datapath = basepath / sess / 'funcimg' / 'suite2p' / 'plane0' / 'F.npy'
-
-        if not os.path.exists(datapath):
-            raise FileNotFoundError(f'{datapath} not found.')
-           
+        datapath = _find_suite2p_file(basepath, sess, 'F.npy')
+        print(datapath)
         data[s] = np.load(datapath)
 
     return data
@@ -120,23 +162,7 @@ def get_neuron_count(basepath, sessions_to_align):
 
     for s, sess in enumerate(sessions_to_align):
         print(f'Loading iscell data for session {sess}')
-
-        session_path = basepath / sess
-        candidates = [
-            session_path / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy',
-            session_path / 'funcimg' / 'suite2p' / 'plane0' / 'iscell.npy',
-            session_path / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy',
-            session_path / 'suite2p' / 'plane0' / 'iscell.npy',
-        ]
-        datapath = next((path for path in candidates if path.is_file()), None)
-
-        if datapath is None:
-            searched_paths = '\n'.join(f'  - {path}' for path in candidates)
-            raise FileNotFoundError(
-                f'iscell.npy was not found for session {sess}. Searched:\n'
-                f'{searched_paths}'
-            )
-
+        datapath = _find_suite2p_file(basepath, sess, 'iscell.npy')
         print(datapath)
         iscell = np.load(datapath)[:,0]
         
@@ -464,7 +490,7 @@ def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=No
     else:
         # Load neural data
         if neural_data is None:
-            neural_data = load_neural_data(basepath, cohort, sessions_to_align)
+            neural_data = load_neural_data(basepath, sessions_to_align)
         
         # Load roicat results
         if roicat_results is None:
@@ -474,20 +500,21 @@ def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=No
             print('Loaded ROICaT results')
 
         # Sub-select sessions to align 
-        if cohort == 2:
-            session_keys = [int(re.search(r'protocol-t(\d+)', str(s)).group(1)) for s in sessions_to_align]
-            
-            # find all sessions in the roicat tracking data 
-            roicat_keys = [int(re.search(r'protocol-t(\d+)', p).group(1)) for p in roicat_results["input_data"]["paths_stat"]]
+        session_keys = [get_session_key(session, cohort) for session in sessions_to_align]
+        roicat_keys = [
+            get_session_key(path, cohort)
+            for path in roicat_results["input_data"]["paths_stat"]
+        ]
 
-        elif cohort == 3:
-            session_keys = [re.search(r'(full\d+)', str(s)).group(1) for s in sessions_to_align]
-
-            # find all sessions in the roicat tracking data 
-            roicat_keys = [re.search(r'(full\d+)', p).group(1) for p in roicat_results["input_data"]["paths_stat"]]
+        missing_keys = [key for key in session_keys if key not in roicat_keys]
+        if missing_keys:
+            raise ValueError(
+                'The requested sessions were not found in the ROICaT results: '
+                f'{missing_keys}. Available session keys: {roicat_keys}'
+            )
 
         # select roicat results using the indices of the sessions to align inside the results dict
-        selected_idx = [roicat_keys.index(k) for k in session_keys if k in roicat_keys]
+        selected_idx = [roicat_keys.index(key) for key in session_keys]
 
         # Define UCIDs 
         labels_bySession = roicat_results['clusters']['labels_bySession']#.load()
@@ -496,10 +523,7 @@ def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=No
         # Update UCIDs with valid cells
         iscell = [[] for s in range(len(sessions_to_align))]
         for s, sess in enumerate(sessions_to_align):
-            if cohort == 2:
-                datapath = basepath / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy'
-            elif cohort == 3:
-                datapath = basepath / sess / 'funcimg' / 'suite2p' / 'plane0' / 'iscell.npy'
+            datapath = _find_suite2p_file(basepath, sess, 'iscell.npy')
             iscell[s] = np.load(datapath)[:,0]
         
         # Apply the mask to the aligned data
@@ -534,20 +558,29 @@ def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=No
         
         # Visualize the alignment
         if plot_alignment:
-            fig, axs = plt.subplots(2, 2, figsize=(15, 5))
-            for i in range(2):
-                axs[0, i].imshow(neural_data[i], aspect="auto", cmap="rainbow", interpolation="none")
-                axs[1, i].imshow(data_aligned_masked[i], aspect="auto", cmap="rainbow", interpolation="none")
+            n_sessions = len(neural_data)
+            fig, axs = plt.subplots(
+                2,
+                n_sessions,
+                figsize=(7.5 * n_sessions, 5),
+                squeeze=False,
+            )
+            for i in range(n_sessions):
+                image_original = axs[0, i].imshow(
+                    neural_data[i], aspect="auto", cmap="rainbow", interpolation="none"
+                )
+                image_aligned = axs[1, i].imshow(
+                    data_aligned_masked[i], aspect="auto", cmap="rainbow", interpolation="none"
+                )
                 axs[0, i].set_title(f"Session {i+1}")
                 axs[1, i].set_title(f"Session {i+1} (aligned)")
                 axs[0, i].set_xlabel("Timepoints")
                 axs[1, i].set_xlabel("Timepoints")
                 axs[0, i].set_ylabel("ROIs")
                 axs[1, i].set_ylabel("ROIs")
-                ## Colorbar
-                if i == 2 - 1:
-                    fig.colorbar(axs[0, i].imshow(neural_data[i], aspect="auto", cmap="rainbow", interpolation="none"), ax=axs[0, i], label="ROI label")
-                    fig.colorbar(axs[1, i].imshow(data_aligned_masked[i], aspect="auto", cmap="rainbow", interpolation="none"), ax=axs[1, i], label="ROI label")
+                if i == n_sessions - 1:
+                    fig.colorbar(image_original, ax=axs[0, i], label="Activity")
+                    fig.colorbar(image_aligned, ax=axs[1, i], label="Activity")
             plt.tight_layout()
 
         # Save indices of aligned data 
@@ -559,7 +592,7 @@ def align_rois(roicat_dir, roicat_data_name, sessions_to_align=None, basepath=No
             if filename is None:
                 if cohort == 2:
                     filename = f"roicat_aligned_ROIs_{'_'.join(['t' + str(n) for n in session_keys])}.npy"
-                elif cohort == 3:
+                elif cohort in (3, '2b'):
                     filename = f"roicat_aligned_ROIs_{'_'.join([str(n) for n in session_keys])}.npy"
             np.save(os.path.join(alignment_dir, filename), idx_original_aligned)
 
