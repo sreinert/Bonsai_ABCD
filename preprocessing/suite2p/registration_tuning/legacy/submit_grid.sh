@@ -16,7 +16,8 @@ manifest_dir=$(cd "$(dirname "${manifest_arg}")" && pwd)
 manifest="${manifest_dir}/$(basename "${manifest_arg}")"
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-repo_root=$(cd "${script_dir}/../../.." && pwd)
+workflow_dir=$(cd "${script_dir}/.." && pwd)
+repo_root=$(cd "${workflow_dir}/../../.." && pwd)
 task_count=$(($(wc -l < "${manifest}") - 1))
 if (( task_count < 1 )); then
   echo "Manifest contains no tasks" >&2
@@ -73,7 +74,7 @@ if [[ -n "${exclude_nodes}" ]]; then
 fi
 
 sbatch "${sbatch_options[@]}" \
-  "${script_dir}/run_grid_array.sbatch" \
+  "${workflow_dir}/run_grid_array.sbatch" \
   "${manifest}" \
   "${repo_root}" \
   "${python_executable}"

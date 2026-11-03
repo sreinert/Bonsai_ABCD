@@ -1,4 +1,63 @@
-# Suite2p registration tuning plan
+# Suite2p registration tuning
+
+## Unified command
+
+Use `cli.py` for new registration-only tuning runs. It writes an immutable
+`experiment.json`, `tasks.csv`, task logs, and candidate run directories below
+the supplied output root. The output root must not overlap the raw TIFF input.
+
+```text
+<output-root>/
+├── experiment.json
+├── tasks.csv
+├── logs/
+└── runs/<mouse>/<session>/<candidate-id>/
+```
+
+Run a Cartesian sweep across selected parameters and selected sessions:
+
+```bash
+python preprocessing/suite2p/registration_tuning/cli.py sweep \
+  --session-dir /absolute/path/to/mouse-a/session-1 \
+  --session-dir /absolute/path/to/mouse-b/session-2 \
+  --input-kind small \
+  --config preprocessing/suite2p/registration_tuning/candidates.json \
+  --param smooth_sigma \
+  --param maxregshift \
+  --output-root /absolute/path/to/tuning-experiment \
+  --execution slurm
+```
+
+Run one session with one named preset:
+
+```bash
+python preprocessing/suite2p/registration_tuning/cli.py single \
+  --session-dir /absolute/path/to/mouse-a/session-1 \
+  --input-kind full \
+  --config preprocessing/suite2p/registration_tuning/candidates.json \
+  --preset align-chan2-sigma-3 \
+  --output-root /absolute/path/to/one-session-registration \
+  --execution direct
+```
+
+`small` selects the newest visible TIFF directly inside `funcimg/others`.
+`full` selects visible TIFFs directly inside `funcimg`, using only files whose
+stems end in `_cropped` when any are present. TIFF headers are checked, but
+pages are deliberately not counted over network storage. Manifests therefore
+record the expected two-channel sizes (2,000 timepoints/4,000 raw pages for
+small stacks and 81,000 timepoints/162,000 raw pages for full sessions) while
+leaving the actual page count blank.
+
+The JSON configuration contains fixed registration settings, a parameter grid,
+and named presets. Sweep combinations follow grid key/value order in the JSON,
+regardless of `--param` argument order. Direct execution runs tasks sequentially
+on the current node. Slurm execution defaults to six concurrent four-hour jobs
+for small stacks and four concurrent twelve-hour jobs for full sessions.
+`MAX_CONCURRENT`, `TASK_RANGE`, `SLURM_TIME`, `EXCLUDE_NODES`, and
+`PYTHON_EXECUTABLE` remain available as overrides.
+
+The commands below document the older multi-step workflow. They remain useful
+as lower-level tools, but new experiments should use the unified command.
 
 This repository contains analysis and preprocessing code for two-photon calcium
 imaging experiments in mice. The immediate development goal is to select a
@@ -155,12 +214,16 @@ Task creation rejects older session manifests containing `nchannels=1`.
 python preprocessing/suite2p/registration_tuning/make_tasks.py \
   --sessions "${TUNING_ROOT}/selected_sessions.csv" \
   --candidates preprocessing/suite2p/registration_tuning/candidates.json \
+  --param smooth_sigma \
+  --param maxregshift \
   --output-root "${TUNING_ROOT}/runs" \
   --manifest "${TUNING_ROOT}/tasks.csv"
 ```
 
 This creates one task per selected session and parameter candidate. It refuses
-an output root that overlaps any `funcimg/others` input directory.
+an output root that overlaps any `funcimg/others` input directory. Repeat
+`--param` to select grid dimensions; omitting it in this lower-level command
+expands the complete grid.
 
 To tune one mouse independently, copy `candidates.json`, edit that copy for the
 mouse, and create a mouse-specific manifest and output root:
@@ -177,6 +240,8 @@ python preprocessing/suite2p/registration_tuning/make_tasks.py \
   --sessions "${TUNING_ROOT}/selected_sessions.csv" \
   --mouse "${MOUSE}" \
   --candidates "${MOUSE_ROOT}/candidates.json" \
+  --param smooth_sigma \
+  --param maxregshift \
   --output-root "${MOUSE_ROOT}/runs" \
   --manifest "${MOUSE_ROOT}/tasks.csv" \
   --overwrite
@@ -193,7 +258,7 @@ GPU node. This bypasses Slurm log routing while checking the environment, CUDA,
 manifest paths, TIFF access, Suite2p execution, and expected output files:
 
 ```bash
-bash preprocessing/suite2p/registration_tuning/run_pilot.sh \
+bash preprocessing/suite2p/registration_tuning/legacy/run_pilot.sh \
   "${TUNING_ROOT}/tasks.csv"
 ```
 
@@ -228,7 +293,7 @@ python preprocessing/suite2p/registration_tuning/export_mean_images.py \
 Alternatively, submit task zero as a Slurm pilot:
 
 ```bash
-TASK_RANGE=0 bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
+TASK_RANGE=0 bash preprocessing/suite2p/registration_tuning/legacy/submit_grid.sh \
   "${TUNING_ROOT}/tasks.csv"
 ```
 
@@ -241,7 +306,7 @@ completes successfully, submit the full array. The completed pilot task will be
 detected and skipped:
 
 ```bash
-bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
+bash preprocessing/suite2p/registration_tuning/legacy/submit_grid.sh \
   "${TUNING_ROOT}/tasks.csv"
 ```
 
@@ -253,7 +318,7 @@ without editing the script:
 
 ```bash
 PYTHON_EXECUTABLE=/absolute/path/to/python MAX_CONCURRENT=3 \
-  bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
+  bash preprocessing/suite2p/registration_tuning/legacy/submit_grid.sh \
   "${TUNING_ROOT}/tasks.csv"
 ```
 
@@ -264,7 +329,7 @@ the default with a comma-separated list if needed:
 
 ```bash
 EXCLUDE_NODES=gpu-350-02,gpu-350-04 MAX_CONCURRENT=6 \
-  bash preprocessing/suite2p/registration_tuning/submit_grid.sh \
+  bash preprocessing/suite2p/registration_tuning/legacy/submit_grid.sh \
   "${TUNING_ROOT}/tasks.csv"
 ```
 
@@ -384,42 +449,45 @@ replace full-session validation.
 
 ## Initial registration candidates
 
-All candidates use non-rigid registration, 128 × 128 blocks, and two-step
-registration. The first pass uses an 11-candidate one-factor-at-a-time screen
-rather than the 216 jobs per session required by the full Cartesian product:
+The fixed baseline uses rigid-only, two-step registration. `candidates.json`
+exposes the following grid; only keys selected
+with repeated `--param` options participate in a run, and their values are
+expanded as a Cartesian product:
 
 | Candidate group | Values |
 |---|---|
-| Baseline | `maxregshift=0.2`, `maxregshiftNR=10`, channel 1 alignment, `smooth_sigma=1.15`, `snr_thresh=1.2` |
-| `maxregshift` | `0.1`, `0.3`, `0.4` |
-| `maxregshiftNR` | `5`, `15` |
-| Alignment channel | channel 2 |
-| `smooth_sigma` | `1.5`, `2.0` |
-| `snr_thresh` | `1.0`, `1.5` |
+| Fixed baseline | `maxregshift=0.05`, channel 2 alignment, `smooth_sigma=3.0`, `smooth_sigma_time=2`, `snr_thresh=1.2`, `nonrigid=False` |
+| `maxregshift` | `0.05`, `0.1`, `0.2`, `0.3`, `0.4` |
+| `maxregshiftNR` | `5`, `10`, `15` |
+| `align_by_chan2` | `False`, `True` |
+| `smooth_sigma` | `1.15`, `1.5`, `2.0`, `3.0` |
+| `snr_thresh` | `1.0`, `1.2`, `1.5` |
 
 Initially hold the following settings constant:
 
 | Parameter | Initial value |
 |---|---:|
-| `smooth_sigma_time` | `0` |
+| `smooth_sigma_time` | `2` |
 | `norm_frames` | `True` |
 | `nimg_init` | `1000` |
 | `do_bidiphase` | `False` |
 | `bidiphase` | `0.0` |
-| `nonrigid` | `True` |
-| `block_size` | `128 × 128` |
+| `nonrigid` | `False` |
+| `block_size` | `(128, 128)` |
 | `two_step_registration` | `True` |
+| `maxregshift` | `0.05` |
 
-Temporal smoothing is disabled for every candidate. In Suite2p 1.1.0,
-`smooth_sigma_time > 0` sends a CUDA tensor into SciPy's NumPy-only Gaussian
-filter and fails before registration. Bidirectional phase correction and its
-automatic estimation are also disabled explicitly for this project. The runner
-rejects candidate manifests that disable non-rigid or two-step registration.
+Temporal smoothing is set to 2. Suite2p 1.1.0 normally returns a NumPy array
+from its SciPy temporal-smoothing path where the rigid registration code expects
+a torch tensor. The runner installs a scoped compatibility patch that restores
+the smoothed result to the source tensor's device and dtype. Bidirectional phase
+correction remains disabled, and two-step registration remains required.
 
-These values form a controlled first screen. Run the first 11 tasks initially
-to compare all candidates on one session, then use the resulting QC to select a
-smaller combined shortlist for the full cross-mouse screen. Expand or combine
-settings only in response to a diagnosed failure:
+Select only the parameters needed for the current question to keep the product
+practical. For example, `smooth_sigma` and `maxregshift` create 20 tasks per
+session, while selecting the complete grid creates 360. Use a named preset for
+a single configuration. Expand the selected grid in response to a diagnosed
+failure:
 
 - rigid offsets reaching the search boundary: examine `maxregshift`;
 - non-rigid blocks reaching their limit: examine `maxregshiftNR`;
@@ -585,11 +653,17 @@ step after the registration parameters and version have been accepted.
 
 - `discover_sessions.py`: validates and selects the newest TIFF, optionally
   counts its pages, and performs reproducible three-session selection.
-- `candidates.json`: explicit initial parameter candidates.
+- `cli.py`: unified session selection, manifest creation, and execution entry point.
+- `tuning_config.py`: Cartesian-grid and named-preset configuration handling.
+- `session_inputs.py`: small/full TIFF selection without page counting.
+- `execution.py`: immutable manifest reuse, direct execution, and Slurm submission.
+- `candidates.json`: fixed settings, selectable parameter grid, and named presets.
 - `make_tasks.py`: creates the session-by-candidate task table and enforces the
   input/output safety boundary.
 - `run_candidate.py`: runs registration and registration metrics only.
-- `run_grid_array.sbatch` and `submit_grid.sh`: Slurm array execution.
+- `run_grid_array.sbatch`: Slurm array worker used by the unified CLI.
+- `legacy/`: superseded pilot, submission, and full-session launchers retained
+  for reproducibility.
 - `evaluate.py`: metrics, registered-frame montages, per-run QC, and the HTML
   comparison/ranking report.
 - `export_mean_images.py`: viewable TIFF and PNG exports of both channel mean
@@ -616,14 +690,15 @@ these registration overrides:
 | --- | --- |
 | `align_by_chan2` | `True` |
 | `smooth_sigma` | `3.0` |
-| `smooth_sigma_time` | `0` |
+| `smooth_sigma_time` | `2` |
 | `norm_frames` | `True` |
 | `nimg_init` | `1000` |
 | `do_bidiphase` | `False` |
 | `bidiphase` | `0.0` |
-| `nonrigid` | `True` |
+| `nonrigid` | `False` |
 | `block_size` | `(128, 128)` |
 | `two_step_registration` | `True` |
+| `maxregshift` | `0.05` |
 
 All other settings come from Suite2p 1.1.0 defaults. On the HPC system, submit
 the registration and dependent detection-only job with:

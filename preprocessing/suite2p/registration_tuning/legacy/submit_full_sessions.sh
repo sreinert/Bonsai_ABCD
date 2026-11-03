@@ -2,7 +2,8 @@
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-repo_root=$(cd "${script_dir}/../../.." && pwd)
+workflow_dir=$(cd "${script_dir}/.." && pwd)
+repo_root=$(cd "${workflow_dir}/../../.." && pwd)
 project_root=${PROJECT_ROOT:-AtAp_20260119_SequenceCompression}
 exclude_nodes=${EXCLUDE_NODES-gpu-350-02,gpu-350-04}
 
@@ -71,7 +72,7 @@ sbatch "${sbatch_options[@]}" \
   --chdir="${manifest_dir}" \
   --output="${manifest_dir}/logs/s2p_full_%A_%a.out" \
   --error="${manifest_dir}/logs/s2p_full_%A_%a.err" \
-  "${script_dir}/run_full_session_array.sbatch" \
+  "${workflow_dir}/run_full_session_array.sbatch" \
   "${manifest}" \
   "${repo_root}" \
   "${python_executable}"

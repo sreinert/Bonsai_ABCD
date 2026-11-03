@@ -51,11 +51,12 @@ def test_pilot_task_is_isolated_and_uses_fixed_registration(tmp_path: Path) -> N
         "block_size": [128, 128],
         "do_bidiphase": False,
         "nimg_init": 1000,
-        "nonrigid": True,
+        "nonrigid": False,
         "norm_frames": True,
         "smooth_sigma": 3.0,
-        "smooth_sigma_time": 0,
+        "smooth_sigma_time": 2,
         "two_step_registration": True,
+        "maxregshift": 0.05,
     }
 
 

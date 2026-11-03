@@ -29,17 +29,17 @@ import tifffile
 REGISTRATION_PARAMETERS = {
     "align_by_chan2": True,
     "smooth_sigma": 3.0,
-    "smooth_sigma_time": 0,
+    "smooth_sigma_time": 2,
     "norm_frames": True,
     "nimg_init": 1000,
     "do_bidiphase": False,
     "bidiphase": 0.0,
-    "nonrigid": True,
+    "nonrigid": False,
     "block_size": [128, 128],
     "two_step_registration": True,
+    "maxregshift": 0.05,
 
     # Uncomment/edit any settings you want to test:
-    # "maxregshift": 0.2,
     # "maxregshiftNR": 10,
     # "snr_thresh": 1.2,
 }
@@ -156,6 +156,13 @@ def main() -> None:
     parser.add_argument("output_dir", type=Path, help="new directory for this run")
     parser.add_argument("--device", choices=("cuda", "cpu"), default="cuda")
     args = parser.parse_args()
+
+    print(
+        "DEPRECATED: for session-based runs, use "
+        "preprocessing/suite2p/registration_tuning/cli.py single. "
+        "This adapter remains available for an explicitly selected TIFF.",
+        file=sys.stderr,
+    )
 
     tiff = args.tiff.expanduser().resolve()
     run_dir = args.output_dir.expanduser().resolve()

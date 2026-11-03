@@ -31,14 +31,15 @@ FUNCTIONAL_CHAN = 1
 REGISTRATION = {
     "align_by_chan2": True,
     "smooth_sigma": 3.0,
-    "smooth_sigma_time": 0,
+    "smooth_sigma_time": 2,
     "norm_frames": True,
     "nimg_init": 1000,
     "do_bidiphase": False,
     "bidiphase": 0.0,
-    "nonrigid": True,
+    "nonrigid": False,
     "block_size": [128, 128],
     "two_step_registration": True,
+    "maxregshift": 0.05,
 }
 
 DETECTION = {

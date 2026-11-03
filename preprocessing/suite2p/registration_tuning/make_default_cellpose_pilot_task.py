@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
+PIPELINE_DIR = Path(__file__).resolve().parent.parent / "full_session_pipeline"
+sys.path.insert(0, str(PIPELINE_DIR))
+
 from common import read_csv, require_columns, write_csv
-from make_full_session_tasks import REGISTRATION
+from full_session_config import REGISTRATION
 from run_candidate import TASK_COLUMNS
 
 

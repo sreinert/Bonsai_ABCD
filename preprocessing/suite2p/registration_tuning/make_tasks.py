@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from common import paths_overlap, read_csv, require_columns, slug, write_csv
+from tuning_config import build_sweep_candidates, load_config
 
 
 SESSION_COLUMNS = {
@@ -24,9 +25,15 @@ SESSION_COLUMNS = {
 }
 
 
-def load_candidates(path: Path) -> tuple[str, list[dict[str, object]]]:
+def load_candidates(
+    path: Path, selected_parameters: list[str] | None = None
+) -> tuple[str, list[dict[str, object]]]:
     config = json.loads(path.read_text(encoding="utf-8"))
     suite2p_version = str(config["suite2p_version"])
+    if "parameter_grid" in config:
+        validated = load_config(path)
+        parameters = selected_parameters or list(validated["parameter_grid"])
+        return suite2p_version, build_sweep_candidates(validated, parameters)
     fixed = config.get("fixed_registration", {})
     candidates = config.get("candidates", [])
     if not candidates:
@@ -93,6 +100,11 @@ def build_tasks(
                     "input_path": session["input_path"],
                     "tiff_files_json": session["tiff_files_json"],
                     "frame_count": session.get("frame_count", ""),
+                    "input_kind": session.get("input_kind", "legacy"),
+                    "input_selection": session.get("input_selection", ""),
+                    "expected_timepoints": session.get("expected_timepoints", ""),
+                    "expected_raw_pages": session.get("expected_raw_pages", ""),
+                    "actual_raw_pages": session.get("actual_raw_pages", ""),
                     "fs": session["fs"],
                     "tau": session["tau"],
                     "nplanes": session["nplanes"],
@@ -115,6 +127,14 @@ def main() -> None:
         action="append",
         help="Include only this mouse ID; repeat to include multiple mice",
     )
+    parser.add_argument(
+        "--param",
+        action="append",
+        help=(
+            "Parameter-grid key to include; repeat as needed. With the new "
+            "configuration schema, omission expands the complete grid."
+        ),
+    )
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -126,7 +146,7 @@ def main() -> None:
         if missing:
             raise ValueError(f"Requested mice are absent from the session manifest: {missing}")
         sessions = [row for row in sessions if row["mouse_id"] in requested]
-    suite2p_version, candidates = load_candidates(args.candidates)
+    suite2p_version, candidates = load_candidates(args.candidates, args.param)
     tasks = build_tasks(sessions, candidates, suite2p_version, args.output_root)
     write_csv(args.manifest, tasks, overwrite=args.overwrite)
     print(f"Wrote {len(tasks)} tasks to {args.manifest}")

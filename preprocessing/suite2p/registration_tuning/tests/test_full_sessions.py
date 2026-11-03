@@ -12,6 +12,7 @@ WORKFLOW_DIR = Path(__file__).parents[1]
 if WORKFLOW_DIR.name != "registration_tuning":
     WORKFLOW_DIR = Path(__file__).parent
 sys.path.insert(0, str(WORKFLOW_DIR))
+sys.path.insert(0, str(WORKFLOW_DIR / "legacy"))
 
 import make_full_session_tasks as workflow  # noqa: E402
 
@@ -75,15 +76,15 @@ def test_builds_first_last_full_session_tasks(tmp_path: Path) -> None:
     registration = json.loads(rows[0]["registration_json"])
     assert registration["align_by_chan2"] is True
     assert registration["smooth_sigma"] == 3.0
-    assert registration["smooth_sigma_time"] == 0
+    assert registration["smooth_sigma_time"] == 2
     assert registration["norm_frames"] is True
     assert registration["nimg_init"] == 1000
     assert registration["do_bidiphase"] is False
     assert registration["bidiphase"] == 0.0
-    assert registration["nonrigid"] is True
+    assert registration["nonrigid"] is False
     assert registration["block_size"] == [128, 128]
     assert registration["two_step_registration"] is True
-    assert "maxregshift" not in registration
+    assert registration["maxregshift"] == 0.05
     assert "maxregshiftNR" not in registration
     assert "snr_thresh" not in registration
     assert "batch_size" not in registration

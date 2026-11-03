@@ -5,8 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+WORKFLOW_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(WORKFLOW_DIR))
 
 from common import write_csv
 from discover_sessions import parse_date, resolve_data_root, validate_tiff_header
@@ -14,16 +18,17 @@ from discover_sessions import parse_date, resolve_data_root, validate_tiff_heade
 
 TIFF_SUFFIXES = {".tif", ".tiff"}
 REGISTRATION = {
-    "nonrigid": True,
+    "nonrigid": False,
     "block_size": [128, 128],
     "two_step_registration": True,
     "nimg_init": 1000,
     "align_by_chan2": True,
     "smooth_sigma": 3.0,
-    "smooth_sigma_time": 0,
+    "smooth_sigma_time": 2,
     "norm_frames": True,
     "do_bidiphase": False,
     "bidiphase": 0.0,
+    "maxregshift": 0.05,
 }
 
 

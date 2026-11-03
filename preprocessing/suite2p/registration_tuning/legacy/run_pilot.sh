@@ -16,7 +16,8 @@ fi
 manifest_dir=$(cd "$(dirname "${manifest_arg}")" && pwd)
 manifest="${manifest_dir}/$(basename "${manifest_arg}")"
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-repo_root=$(cd "${script_dir}/../../.." && pwd)
+workflow_dir=$(cd "${script_dir}/.." && pwd)
+repo_root=$(cd "${workflow_dir}/../../.." && pwd)
 task_id=${PILOT_TASK_ID:-0}
 conda_env=${SUITE2P_ENV:-suite2p-reg-1.1.0}
 device=${PILOT_DEVICE:-cuda}
@@ -88,7 +89,7 @@ if device == "cuda" and not cuda_available:
     )
 PY
 
-PYTHONPATH="${script_dir}${PYTHONPATH:+:${PYTHONPATH}}" \
+PYTHONPATH="${workflow_dir}${PYTHONPATH:+:${PYTHONPATH}}" \
 python - "${manifest}" "${task_id}" <<'PY'
 import sys
 from pathlib import Path
@@ -109,7 +110,7 @@ for path in files:
     print(f"Readable TIFF ({path.stat().st_size} bytes): {path}")
 PY
 
-python "${script_dir}/run_candidate.py" \
+python "${workflow_dir}/run_candidate.py" \
   --manifest "${manifest}" \
   --task-id "${task_id}" \
   --device "${device}"

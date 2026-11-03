@@ -5,7 +5,7 @@ import os
 import sys
 from copy import deepcopy
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -328,14 +328,15 @@ def test_registration_configuration_inherits_suite2p_defaults(monkeypatch, tmp_p
             {
                 "align_by_chan2": True,
                 "smooth_sigma": 3.0,
-                "smooth_sigma_time": 0,
+                "smooth_sigma_time": 2,
                 "norm_frames": True,
                 "nimg_init": 1000,
                 "do_bidiphase": False,
                 "bidiphase": 0.0,
-                "nonrigid": True,
+                "nonrigid": False,
                 "block_size": [128, 128],
                 "two_step_registration": True,
+                "maxregshift": 0.05,
             }
         ),
     }
@@ -346,7 +347,9 @@ def test_registration_configuration_inherits_suite2p_defaults(monkeypatch, tmp_p
 
     assert settings["registration"]["align_by_chan2"] is True
     assert settings["registration"]["smooth_sigma"] == 3.0
-    assert settings["registration"]["maxregshift"] == 0.1
+    assert settings["registration"]["smooth_sigma_time"] == 2
+    assert settings["registration"]["nonrigid"] is False
+    assert settings["registration"]["maxregshift"] == 0.05
     assert settings["registration"]["maxregshiftNR"] == 5
     assert settings["registration"]["snr_thresh"] == 1.2
     assert settings["registration"]["batch_size"] == 100
@@ -354,3 +357,61 @@ def test_registration_configuration_inherits_suite2p_defaults(monkeypatch, tmp_p
     assert settings["run"]["do_deconvolution"] is False
     assert db["functional_chan"] == 1
     assert db["keep_movie_raw"] is True
+
+
+def test_temporal_smoothing_patch_restores_tensor_device_and_dtype(monkeypatch) -> None:
+    class FakeTensor:
+        def __init__(self, array, *, device="cuda:0", dtype="float32"):
+            self.array = np.asarray(array)
+            self.device = device
+            self.dtype = dtype
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self.array
+
+        def to(self, *, device, dtype):
+            self.device = device
+            self.dtype = dtype
+            return self
+
+    torch = ModuleType("torch")
+    torch.Tensor = FakeTensor
+    torch.from_numpy = lambda array: FakeTensor(  # type: ignore[attr-defined]
+        array, device="cpu", dtype=str(array.dtype)
+    )
+    ndimage = ModuleType("scipy.ndimage")
+    ndimage.gaussian_filter1d = (  # type: ignore[attr-defined]
+        lambda array, sigma, axis: np.asarray(array) + sigma + axis
+    )
+    scipy = ModuleType("scipy")
+    scipy.ndimage = ndimage  # type: ignore[attr-defined]
+    rigid = SimpleNamespace(temporal_smooth=None)
+    registration = ModuleType("suite2p.registration")
+    registration.rigid = rigid  # type: ignore[attr-defined]
+    suite2p = ModuleType("suite2p")
+    suite2p.registration = registration  # type: ignore[attr-defined]
+    for name, module in {
+        "torch": torch,
+        "scipy": scipy,
+        "scipy.ndimage": ndimage,
+        "suite2p": suite2p,
+        "suite2p.registration": registration,
+    }.items():
+        monkeypatch.setitem(sys.modules, name, module)
+
+    metadata = run_candidate.install_temporal_smoothing_compatibility_patch(2)
+    source = FakeTensor(np.arange(12).reshape(2, 3, 2))
+    result = rigid.temporal_smooth(source, 2)
+
+    assert isinstance(result, FakeTensor)
+    assert result.array.shape == source.array.shape
+    assert result.device == source.device
+    assert result.dtype == source.dtype
+    assert metadata is not None
+    assert metadata["smooth_sigma_time"] == 2.0
