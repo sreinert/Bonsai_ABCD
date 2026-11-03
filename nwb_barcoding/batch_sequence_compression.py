@@ -14,6 +14,7 @@ from pathlib import Path
 from .sequence_compression import (
     build_sequence_compression_session,
     resolve_paths,
+    short_session_name,
 )
 
 
@@ -40,7 +41,9 @@ def normalize_subject(subject: str) -> str:
 
 
 def discover_sessions(
-    project_root: str | Path, subjects: list[str] | tuple[str, ...] | None = None
+    project_root: str | Path,
+    subjects: list[str] | tuple[str, ...] | None = None,
+    sessions: list[str] | tuple[str, ...] | None = None,
 ) -> list[BatchSession]:
     """Find complete Suite2p outputs and resolve each to its exact raw session."""
     project_root = Path(project_root).expanduser().resolve()
@@ -51,11 +54,36 @@ def discover_sessions(
     selected_subjects = (
         {normalize_subject(subject) for subject in subjects} if subjects else None
     )
-    sessions = []
+    selected_full_sessions = (
+        {
+            Path(session.strip()).name
+            for session in sessions
+            if session.strip() and "_date-" in session
+        }
+        if sessions
+        else set()
+    )
+    selected_short_sessions = (
+        {
+            short_session_name(session.strip())
+            for session in sessions
+            if session.strip() and "_date-" not in session
+        }
+        if sessions
+        else set()
+    )
+    if sessions and not (selected_full_sessions or selected_short_sessions):
+        raise ValueError("Session selection cannot be empty")
+    discovered = []
     for subject_dir in sorted(path for path in processed_root.iterdir() if path.is_dir()):
         if selected_subjects is not None and subject_dir.name not in selected_subjects:
             continue
         for session_dir in sorted(path for path in subject_dir.iterdir() if path.is_dir()):
+            if sessions and not (
+                session_dir.name in selected_full_sessions
+                or short_session_name(session_dir.name) in selected_short_sessions
+            ):
+                continue
             raw_session = (
                 project_root
                 / "rawdata"
@@ -69,14 +97,14 @@ def discover_sessions(
             plane0 = suite2p_dir / "plane0"
             if not all((plane0 / filename).is_file() for filename in REQUIRED_PLANE0_FILES):
                 continue
-            sessions.append(
+            discovered.append(
                 BatchSession(
                     subject=subject_dir.name,
                     session=session_dir.name,
                     suite2p_dir=suite2p_dir,
                 )
             )
-    return sessions
+    return discovered
 
 
 def write_manifest(sessions: list[BatchSession], manifest_path: str | Path) -> Path:
@@ -167,6 +195,15 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         help="Limit discovery to this subject; repeat to include multiple subjects.",
     )
+    parser.add_argument(
+        "--include-session",
+        action="append",
+        default=[],
+        help=(
+            "Limit discovery to this full or short session identifier; repeat to "
+            "include multiple sessions."
+        ),
+    )
     parser.add_argument("--task-id", type=int)
     parser.add_argument("--session")
     parser.add_argument("--force", action="store_true")
@@ -177,7 +214,9 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
 
     if args.write_manifest:
-        sessions = discover_sessions(args.project_root, args.include_subject)
+        sessions = discover_sessions(
+            args.project_root, args.include_subject, args.include_session
+        )
         manifest = write_manifest(sessions, args.write_manifest)
         print(f"Wrote {len(sessions)} task(s) to {manifest}")
         return 0
@@ -197,7 +236,9 @@ def main(argv: list[str] | None = None) -> int:
         run_session(args.project_root, args.subject, args.session, force=args.force)
         return 0
 
-    sessions = discover_sessions(args.project_root, args.include_subject)
+    sessions = discover_sessions(
+        args.project_root, args.include_subject, args.include_session
+    )
     failures = []
     for task in sessions:
         try:

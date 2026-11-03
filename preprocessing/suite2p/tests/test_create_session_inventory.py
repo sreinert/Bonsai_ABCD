@@ -74,7 +74,6 @@ def test_inventory_filters_sessions_and_reports_complete_pipeline(tmp_path: Path
             "trace_extraction": "yes",
             "number_of_rois": 2,
             "number_of_cells": 1,
-            "meanImg_chan1_seg_created": "no",
             "iscell_updated": "yes",
             "alignment_performed": "no",
             "session_overview_completed": "no",
@@ -190,19 +189,12 @@ def test_iscell_update_status_compares_stat_mtime(
     session = make_session(raw_root, "sub-08", "ses-manual_date-20261006")
     suite2p = processed_root / "sub-08" / session.name / "suite2p"
     plane = suite2p / "plane0"
-    registration = suite2p / "qc" / "registration"
     plane.mkdir(parents=True)
-    registration.mkdir(parents=True)
     np.save(plane / "iscell.npy", np.asarray([[1, 0.9]]))
     np.save(plane / "stat.npy", np.asarray([{"id": 0}], dtype=object))
-    np.save(registration / "meanImg_chan1_seg.npy", np.asarray([1]))
 
     base_time = 1_700_000_000_000_000_000
     os.utime(plane / "iscell.npy", ns=(base_time, base_time))
-    os.utime(
-        registration / "meanImg_chan1_seg.npy",
-        ns=(base_time + 1_000, base_time + 1_000),
-    )
     os.utime(
         plane / "stat.npy",
         ns=(base_time + 2_000, base_time + 2_000),
@@ -210,7 +202,6 @@ def test_iscell_update_status_compares_stat_mtime(
 
     [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-08")
 
-    assert row["meanImg_chan1_seg_created"] == "yes"
     assert row["iscell_updated"] == "no"
 
 

@@ -47,7 +47,6 @@ FIELDNAMES = (
     "trace_extraction",
     "number_of_rois",
     "number_of_cells",
-    "meanImg_chan1_seg_created",
     "iscell_updated",
     "alignment_performed",
     "session_overview_completed",
@@ -63,7 +62,6 @@ class Suite2pStatus:
     trace_extraction: bool
     number_of_rois: int | None
     number_of_cells: int | None
-    segmentation_created: bool
     iscell_updated_after_stat: bool | None
     automatic_roi_detection_model: str | None
 
@@ -127,23 +125,6 @@ def all_nonempty_files(directory: Path, names: Iterable[str]) -> bool:
         (path := directory / name).is_file() and path.stat().st_size > 0
         for name in names
     )
-
-
-def find_segmentation_file(
-    suite2p_path: Path,
-    raw_session_path: Path,
-    processed_session_path: Path,
-) -> Path | None:
-    """Return the newest manual Cellpose segmentation in supported locations."""
-    filename = "meanImg_chan1_seg.npy"
-    candidates = (
-        suite2p_path / "qc" / "registration" / filename,
-        suite2p_path / "registration" / filename,
-        processed_session_path / "registration" / filename,
-        raw_session_path / "registration" / filename,
-    )
-    existing = [path for path in candidates if path.is_file()]
-    return max(existing, key=lambda path: path.stat().st_mtime_ns) if existing else None
 
 
 def iscell_newer_than_stat(plane: Path) -> bool | None:
@@ -233,15 +214,11 @@ def inspect_suite2p(
     suite2p_path = find_suite2p_path(raw_session_path, processed_session_path)
     if suite2p_path is None:
         return Suite2pStatus(
-            False, False, False, False, None, None, False, None, None
+            False, False, False, False, None, None, None, None
         )
 
     plane = suite2p_path / "plane0"
     detection_model = automatic_detection_model(suite2p_path, processed_session_path)
-    segmentation = find_segmentation_file(
-        suite2p_path, raw_session_path, processed_session_path
-    )
-    segmentation_created = segmentation is not None
     iscell_updated_after_stat = iscell_newer_than_stat(plane)
     if not plane.is_dir():
         return Suite2pStatus(
@@ -251,7 +228,6 @@ def inspect_suite2p(
             False,
             None,
             None,
-            segmentation_created,
             iscell_updated_after_stat,
             detection_model,
         )
@@ -294,7 +270,6 @@ def inspect_suite2p(
         trace_extraction,
         number_of_rois,
         number_of_cells,
-        segmentation_created,
         iscell_updated_after_stat,
         detection_model,
     )
@@ -463,9 +438,6 @@ def inventory_mouse(
                 ),
                 "number_of_cells": (
                     "" if status.number_of_cells is None else status.number_of_cells
-                ),
-                "meanImg_chan1_seg_created": (
-                    "yes" if status.segmentation_created else "no"
                 ),
                 "iscell_updated": (
                     ""

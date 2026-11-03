@@ -65,8 +65,9 @@ bash nwb_barcoding/hpc/submit_sequence_compression_batch.sh \
 
 The `Aimbot_barcoding` repository must be a sibling of this repository. The launcher
 validates Python 3.12 and all required imports before submitting anything. The subject may
-also be written as `07`. A different interpreter can still be supplied as the optional
-third argument or through `PYTHON_EXECUTABLE`.
+also be written as `07`. With only subject IDs supplied, every completed session belonging
+to those subjects is submitted. A different interpreter can be supplied after the optional
+session argument or through `PYTHON_EXECUTABLE`.
 
 Alignment outputs are written to:
 
@@ -80,6 +81,16 @@ To deliberately submit multiple completed mice together, use a comma-separated a
 bash nwb_barcoding/hpc/submit_sequence_compression_batch.sh \
   /ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression \
   sub-02,sub-07
+```
+
+To submit only selected sessions for one mouse, add a comma-separated session argument.
+Both short and full session directory names are accepted:
+
+```bash
+bash nwb_barcoding/hpc/submit_sequence_compression_batch.sh \
+  /ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression \
+  sub-07 \
+  full002,full004
 ```
 
 Useful submission environment variables:
@@ -117,12 +128,16 @@ It saves its caches under
 `BehaviourAligned_robust/cohort2/<subject>/<full-session>/funcimg/`:
 
 ```text
-celltv_green_delta_v4.npy
-celltv_red_delta_v4.npy
-celltv_green_red_ratio_delta_v4.npy
-celltv_green_red_ratio_diagnostics_v4.npz
+celltv_green_delta_v5.npy
+celltv_red_delta_v5.npy
+celltv_green_red_ratio_delta_v5.npy
+celltv_green_red_ratio_diagnostics_v5.npz
 valid_neurons.npy
 ```
+
+The three `v5` signal arrays contain every Suite2p frame: baseline preprocessing and
+G/R are calculated before any behaviour-frame selection. The overview applies
+`valid_frames.npz` only after loading these caches.
 
 `valid_neurons.npy` contains original Suite2p ROI indices returned by CellTV's
 `get_responsive_neurons`; both the high-green-SNR and reproducibly random selected-cell

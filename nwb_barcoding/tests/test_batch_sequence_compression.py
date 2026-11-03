@@ -47,6 +47,38 @@ def test_discover_sessions_can_be_limited_to_subject(tmp_path):
     ]
 
 
+def test_discover_sessions_can_be_limited_to_multiple_sessions(tmp_path):
+    first_raw = _session_tree(tmp_path, "sub-07", "full001")
+    _session_tree(tmp_path, "sub-07", "full002")
+    third_raw = _session_tree(tmp_path, "sub-07", "full003")
+
+    found = batch.discover_sessions(
+        tmp_path,
+        ["sub-07"],
+        ["full001", third_raw.name],
+    )
+
+    assert [(item.subject, item.session) for item in found] == [
+        ("sub-07", first_raw.name),
+        ("sub-07", third_raw.name),
+    ]
+
+
+def test_full_session_selection_does_not_select_another_date(tmp_path):
+    selected_raw = _session_tree(tmp_path, "sub-07", "full001")
+    other_name = "ses-full001_date-20260102T120000"
+    other_processed = tmp_path / "processed" / "cohort2" / "sub-07" / other_name
+    plane0 = other_processed / "suite2p" / "plane0"
+    plane0.mkdir(parents=True)
+    for filename in batch.REQUIRED_PLANE0_FILES:
+        (plane0 / filename).touch()
+    (tmp_path / "rawdata" / "cohort2" / "sub-07" / other_name).mkdir(parents=True)
+
+    found = batch.discover_sessions(tmp_path, ["sub-07"], [selected_raw.name])
+
+    assert [item.session for item in found] == [selected_raw.name]
+
+
 def test_discover_sessions_uses_full_processed_name_for_restart(tmp_path):
     first_raw = _session_tree(tmp_path, "sub-07", "full007")
     second_raw = first_raw.with_name("ses-full007_date-20260102T120000")

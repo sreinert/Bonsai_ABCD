@@ -1,20 +1,50 @@
 #!/bin/bash
 set -euo pipefail
 
-if [[ $# -lt 2 || $# -gt 3 ]]; then
-  echo "Usage: $0 PROJECT_ROOT SUBJECT [PYTHON_EXECUTABLE]" >&2
-  echo "SUBJECT may be 07, sub-07, or a comma-separated list such as sub-02,sub-07." >&2
+if [[ $# -lt 2 ]]; then
+  echo "Usage: $0 PROJECT_ROOT SUBJECT[,SUBJECT...] [SESSION[,SESSION...]] [PYTHON_EXECUTABLE]" >&2
+  echo "With subjects only, all completed sessions for those subjects are submitted." >&2
+  echo "With sessions, exactly one subject must be supplied." >&2
+  echo "Subjects may be 07 or sub-07; sessions may be short or full identifiers." >&2
   echo "The default environment is /ceph/python_envs/\$USER/nwb_barcoding." >&2
   exit 2
 fi
 
 project_root=$(cd "$1" && pwd)
-subjects_csv=$2
+shift
+subjects_csv=$1
+shift
+# Also tolerate an unquoted space after a subject-list comma: "sub-02, sub-07".
+while [[ "${subjects_csv}" == *, && $# -gt 0 ]]; do
+  subjects_csv+=$1
+  shift
+done
+sessions_csv=
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "${script_dir}/../.." && pwd)
 environment_user=${USER:-$(id -un)}
 default_environment=/ceph/python_envs/${environment_user}/nwb_barcoding
-python_executable=${3:-${PYTHON_EXECUTABLE:-${default_environment}/bin/python}}
+python_executable=${PYTHON_EXECUTABLE:-${default_environment}/bin/python}
+
+if [[ $# -eq 1 ]] && { [[ "$1" == */* || -x "$1" ]] || command -v "$1" >/dev/null 2>&1; }; then
+  # Preserve the old PROJECT_ROOT SUBJECT PYTHON_EXECUTABLE form.
+  python_executable=$1
+elif [[ $# -gt 0 ]]; then
+  sessions_csv=$1
+  shift
+  # Likewise tolerate "full001, full002" without requiring shell quotes.
+  while [[ "${sessions_csv}" == *, && $# -gt 0 ]]; do
+    sessions_csv+=$1
+    shift
+  done
+  if [[ $# -gt 1 ]]; then
+    echo "Too many arguments." >&2
+    echo "Usage: $0 PROJECT_ROOT SUBJECT[,SUBJECT...] [SESSION[,SESSION...]] [PYTHON_EXECUTABLE]" >&2
+    exit 2
+  elif [[ $# -eq 1 ]]; then
+    python_executable=$1
+  fi
+fi
 
 if ! command -v sbatch >/dev/null 2>&1; then
   echo "sbatch is required; run this launcher on a Slurm submission host." >&2
@@ -61,6 +91,26 @@ if [[ ${#manifest_options[@]} -eq 0 ]]; then
   exit 2
 fi
 
+if [[ -n "${sessions_csv}" ]]; then
+  if [[ ${#manifest_options[@]} -ne 1 ]]; then
+    echo "Explicit sessions require exactly one subject." >&2
+    exit 2
+  fi
+  IFS=',' read -r -a selected_sessions <<< "${sessions_csv}"
+  session_option_count=0
+  for session in "${selected_sessions[@]}"; do
+    session=${session//[[:space:]]/}
+    if [[ -n "${session}" ]]; then
+      manifest_options+=(--include-session "${session}")
+      session_option_count=$((session_option_count + 1))
+    fi
+  done
+  if [[ ${session_option_count} -eq 0 ]]; then
+    echo "SESSION did not contain a session identifier." >&2
+    exit 2
+  fi
+fi
+
 "${python_executable}" -m nwb_barcoding.batch_sequence_compression \
   --project-root "${project_root}" \
   --write-manifest "${manifest}" \
@@ -96,6 +146,11 @@ job_id=${submission%%;*}
 
 echo "Submitted ${task_count} alignment session(s) as Slurm array job ${job_id}."
 echo "Subjects: ${subjects_csv}"
+if [[ -n "${sessions_csv}" ]]; then
+  echo "Sessions: ${sessions_csv}"
+else
+  echo "Sessions: all completed sessions for the selected subject(s)"
+fi
 echo "Manifest: ${manifest}"
 echo "Array: ${array_spec}"
 echo "Logs: ${log_dir}/nwb_align_${job_id}_<task>.{out,err}"
