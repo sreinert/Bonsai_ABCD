@@ -80,19 +80,21 @@ mkdir -p "${log_dir}"
 
 IFS=',' read -r -a selected_subjects <<< "${subjects_csv}"
 manifest_options=()
+subject_count=0
 for subject in "${selected_subjects[@]}"; do
   subject=${subject//[[:space:]]/}
   if [[ -n "${subject}" ]]; then
     manifest_options+=(--include-subject "${subject}")
+    subject_count=$((subject_count + 1))
   fi
 done
-if [[ ${#manifest_options[@]} -eq 0 ]]; then
+if [[ ${subject_count} -eq 0 ]]; then
   echo "SUBJECT did not contain a subject identifier." >&2
   exit 2
 fi
 
 if [[ -n "${sessions_csv}" ]]; then
-  if [[ ${#manifest_options[@]} -ne 1 ]]; then
+  if [[ ${subject_count} -ne 1 ]]; then
     echo "Explicit sessions require exactly one subject." >&2
     exit 2
   fi
