@@ -16,6 +16,17 @@ import torch
 import datetime
 import hashlib
 
+def short_session_name(session):
+    match = re.fullmatch(
+        r"ses-([^-]+)-random-(\d+)_date-\d{8}T\d{6}",
+        session,
+    )
+    if not match:
+        raise ValueError(f"Unexpected session name: {session}")
+
+    condition, number = match.groups()
+    return f"{condition}_{number}"
+
 def find_session_folders(basepath, session_ids):
     """
     Keep the folder with the highest ses-XXX index for each session_id.
@@ -81,26 +92,52 @@ def delete_mac_hidden_files(folder_path):
 
 
 def load_roicat_results(roicat_dir, roicat_data_name):
-    delete_mac_hidden_files(f'{roicat_dir}/{roicat_data_name}.tracking.results_all.richfile')
+    base_path = Path(roicat_dir) / (
+        f"{roicat_data_name}.tracking.results_all.richfile"
+    )
+    zip_path = Path(f"{base_path}.zip")
 
-    results = roicat.util.RichFile_ROICaT(path=f'{roicat_dir}/{roicat_data_name}.tracking.results_all.richfile').load()
+    if zip_path.is_file():
+        results_path = zip_path
+    elif base_path.is_dir():
+        delete_mac_hidden_files(base_path)
+        results_path = base_path
+    else:
+        raise FileNotFoundError(
+            f"Could not find {zip_path} or {base_path}"
+        )
 
-    return results
+    return roicat.util.RichFile_ROICaT(
+        path=str(results_path)
+    ).load()
 
 
-def get_neuron_count(basepath, cohort, sessions_to_align):
-    # Load iscell data 
-    num_valid_neurons = np.zeros(len(sessions_to_align))
-    num_neurons = np.zeros(len(sessions_to_align))
+def get_neuron_count(basepath, sessions_to_align):
+    """Count Suite2p ROIs across supported ``funcimg``/``Session`` layouts."""
+    basepath = Path(basepath)
+    num_valid_neurons = np.zeros(len(sessions_to_align), dtype=int)
+    num_neurons = np.zeros(len(sessions_to_align), dtype=int)
+
     for s, sess in enumerate(sessions_to_align):
         print(f'Loading iscell data for session {sess}')
-        if cohort == 2:
-            datapath = basepath / sess / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy'
-        elif cohort == 3:
-            datapath = basepath / sess / 'funcimg' / 'suite2p' / 'plane0' / 'iscell.npy'
+
+        session_path = basepath / sess
+        candidates = [
+            session_path / 'funcimg' / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy',
+            session_path / 'funcimg' / 'suite2p' / 'plane0' / 'iscell.npy',
+            session_path / 'Session' / 'suite2p' / 'plane0' / 'iscell.npy',
+            session_path / 'suite2p' / 'plane0' / 'iscell.npy',
+        ]
+        datapath = next((path for path in candidates if path.is_file()), None)
+
+        if datapath is None:
+            searched_paths = '\n'.join(f'  - {path}' for path in candidates)
+            raise FileNotFoundError(
+                f'iscell.npy was not found for session {sess}. Searched:\n'
+                f'{searched_paths}'
+            )
+
         print(datapath)
-        if not os.path.exists(datapath):
-            raise FileNotFoundError('The iscell.npy file does not exist in this directory.')
         iscell = np.load(datapath)[:,0]
         
         # Select ROIs that are classified as neurons
