@@ -566,6 +566,31 @@ def test_extraction_rerun_backup_and_restore(tmp_path: Path) -> None:
         )
 
 
+def test_gui_stat_normalization_reconstructs_overlap() -> None:
+    stat = np.asarray(
+        [
+            {
+                "ypix": np.asarray([0, 1]),
+                "xpix": np.asarray([0, 1]),
+                "lam": np.asarray([1.0, 0.5]),
+                "overlap": np.asarray([False, False]),
+            },
+            {
+                "ypix": np.asarray([1, 2]),
+                "xpix": np.asarray([1, 2]),
+                "lam": np.asarray([0.8, 0.4]),
+            },
+        ],
+        dtype=object,
+    )
+
+    normalized = run_trace_extraction.normalize_gui_stat(stat, Ly=3, Lx=3)
+
+    np.testing.assert_array_equal(normalized[0]["overlap"], [False, True])
+    np.testing.assert_array_equal(normalized[1]["overlap"], [True, False])
+    assert "overlap" not in stat[1]
+
+
 def test_full_pipeline_resume_and_overwrite_are_mutually_exclusive(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="mutually exclusive"):
         prepare_full_session_pipeline.build_pipeline(

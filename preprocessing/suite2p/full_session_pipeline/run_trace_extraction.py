@@ -182,6 +182,59 @@ def validate_stat(stat: np.ndarray) -> None:
             raise ValueError(f"ROI {index} has empty or inconsistent pixel arrays")
 
 
+def normalize_gui_stat(stat: np.ndarray, Ly: int, Lx: int) -> np.ndarray:
+    """Return GUI ROIs with a current per-pixel overlap mask.
+
+    Suite2p GUI-added ROIs can omit ``overlap`` even though the extraction API
+    expects it. Recompute the field for every ROI so merges, additions, and
+    splits use overlap information matching the current ROI geometry.
+    """
+    stat = np.asarray(stat, dtype=object)
+    if stat.ndim != 1 or len(stat) == 0:
+        raise ValueError(f"Expected a non-empty 1-D stat array, got shape {stat.shape}")
+    normalized = np.empty_like(stat)
+    pixel_counts = np.zeros((Ly, Lx), dtype=np.uint32)
+    coordinates: list[tuple[np.ndarray, np.ndarray]] = []
+    for index, original in enumerate(stat):
+        if not isinstance(original, dict):
+            raise TypeError(f"ROI {index} is not a dictionary")
+        roi = dict(original)
+        missing = {"ypix", "xpix", "lam"} - set(roi)
+        if missing:
+            raise ValueError(
+                f"ROI {index} is missing Suite2p fields: {sorted(missing)}"
+            )
+        ypix = np.asarray(roi["ypix"], dtype=int)
+        xpix = np.asarray(roi["xpix"], dtype=int)
+        lam = np.asarray(roi["lam"])
+        if (
+            ypix.ndim != 1
+            or xpix.ndim != 1
+            or lam.ndim != 1
+            or len({len(ypix), len(xpix), len(lam)}) != 1
+            or len(ypix) == 0
+        ):
+            raise ValueError(f"ROI {index} has empty or inconsistent pixel arrays")
+        if (
+            ypix.min() < 0
+            or xpix.min() < 0
+            or ypix.max() >= Ly
+            or xpix.max() >= Lx
+        ):
+            raise IndexError(
+                f"ROI {index} pixels fall outside registered image shape {(Ly, Lx)}"
+            )
+        np.add.at(pixel_counts, (ypix, xpix), 1)
+        roi["ypix"] = ypix
+        roi["xpix"] = xpix
+        normalized[index] = roi
+        coordinates.append((ypix, xpix))
+    for roi, (ypix, xpix) in zip(normalized, coordinates, strict=True):
+        roi["overlap"] = pixel_counts[ypix, xpix] > 1
+    validate_stat(normalized)
+    return normalized
+
+
 def validate_outputs(
     stat: np.ndarray,
     F: np.ndarray,
@@ -322,14 +375,15 @@ def main() -> None:
         if not required.is_file():
             raise FileNotFoundError(f"Required registered input is missing: {required}")
 
+    db = np.load(db_path, allow_pickle=True).item()
     if args.use_current_stat:
-        stat = np.load(stat_path, allow_pickle=True)
-        validate_stat(stat)
+        stat = normalize_gui_stat(
+            np.load(stat_path, allow_pickle=True), int(db["Ly"]), int(db["Lx"])
+        )
         detection_status = {"state": "current_gui_stat", "n_rois": len(stat)}
     else:
         stat, detection_status = load_reviewed_detection(detection_dir, stat_path)
     resolved_stat_path = stat_path or detection_dir / "stat.npy"
-    db = np.load(db_path, allow_pickle=True).item()
     reg_outputs = np.load(reg_outputs_path, allow_pickle=True).item()
     detect_outputs_path = detection_dir / "detect_outputs.npy"
     detect_outputs = (
