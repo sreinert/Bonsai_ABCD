@@ -241,6 +241,19 @@ def main() -> None:
         help="Detected stat.npy when it is stored outside DETECTION_DIR.",
     )
     parser.add_argument(
+        "--use-current-stat",
+        action="store_true",
+        help=(
+            "Use --stat-path without requiring matching automatic-detection "
+            "metadata. Intended only for ROI sets saved by the Suite2p GUI."
+        ),
+    )
+    parser.add_argument(
+        "--iscell-path",
+        type=Path,
+        help="Preserve classifications from this iscell.npy instead of reclassifying.",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         help="Isolated output directory (default: RUN_DIR/trace_extraction/cpsam).",
@@ -286,6 +299,8 @@ def main() -> None:
         args.metadata_dir.resolve() if args.metadata_dir else output_dir
     )
     stat_path = args.stat_path.resolve() if args.stat_path else None
+    if args.use_current_stat and stat_path is None:
+        parser.error("--use-current-stat requires --stat-path")
     if (
         not args.allow_output_dir_nonempty
         and output_dir.exists()
@@ -307,7 +322,12 @@ def main() -> None:
         if not required.is_file():
             raise FileNotFoundError(f"Required registered input is missing: {required}")
 
-    stat, detection_status = load_reviewed_detection(detection_dir, stat_path)
+    if args.use_current_stat:
+        stat = np.load(stat_path, allow_pickle=True)
+        validate_stat(stat)
+        detection_status = {"state": "current_gui_stat", "n_rois": len(stat)}
+    else:
+        stat, detection_status = load_reviewed_detection(detection_dir, stat_path)
     resolved_stat_path = stat_path or detection_dir / "stat.npy"
     db = np.load(db_path, allow_pickle=True).item()
     reg_outputs = np.load(reg_outputs_path, allow_pickle=True).item()
@@ -367,13 +387,24 @@ def main() -> None:
             roi["std"] = float(standard_deviation[index])
 
         classification_started = time.time()
-        iscell = suite2p.classify(
-            stat=stat,
-            classfile=suite2p.classification.builtin_classfile,
-        )
-        iscell = apply_cell_probability_threshold(
-            iscell, CLASSIFICATION["cell_probability_threshold"]
-        )
+        if args.iscell_path is not None:
+            iscell = np.load(args.iscell_path.resolve())
+            if iscell.shape != (len(stat), 2):
+                raise RuntimeError(
+                    f"Preserved iscell has shape {iscell.shape}; expected "
+                    f"{(len(stat), 2)}"
+                )
+            if not np.all(np.isfinite(iscell)):
+                raise RuntimeError("Preserved iscell contains non-finite values")
+            iscell = np.asarray(iscell).copy()
+        else:
+            iscell = suite2p.classify(
+                stat=stat,
+                classfile=suite2p.classification.builtin_classfile,
+            )
+            iscell = apply_cell_probability_threshold(
+                iscell, CLASSIFICATION["cell_probability_threshold"]
+            )
         classification_seconds = time.time() - classification_started
 
         deconvolution_started = time.time()
@@ -447,6 +478,11 @@ def main() -> None:
             "detection_dir": str(detection_dir),
             "detection_stat_sha256": file_sha256(resolved_stat_path),
             "detection_state": detection_status.get("state"),
+            "iscell_source": (
+                str(args.iscell_path.resolve())
+                if args.iscell_path is not None
+                else "suite2p_builtin_classifier"
+            ),
             "output_dir": str(output_dir),
             "n_rois": int(len(stat)),
             "n_cells": int(np.count_nonzero(iscell[:, 0])),

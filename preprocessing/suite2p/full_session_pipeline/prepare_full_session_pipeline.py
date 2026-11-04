@@ -188,10 +188,12 @@ def build_pipeline(
     overwrite: bool = False,
     resume: bool = False,
     rerun_detection: bool = False,
+    rerun_extraction: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    if sum((overwrite, resume, rerun_detection)) > 1:
+    if sum((overwrite, resume, rerun_detection, rerun_extraction)) > 1:
         raise ValueError(
-            "--overwrite, --resume, and --rerun-detection are mutually exclusive"
+            "--overwrite, --resume, --rerun-detection, and --rerun-extraction "
+            "are mutually exclusive"
         )
     project = resolve_data_root(project_root)
     for label, value in (("mouse ID", mouse_id), ("session ID", session_id)):
@@ -239,10 +241,35 @@ def build_pipeline(
     elif existing_output and rerun_detection:
         resume_validation = validate_registration_for_resume(suite2p_dir, tiffs)
         complete = False
+    elif existing_output and rerun_extraction:
+        resume_validation = validate_registration_for_resume(suite2p_dir, tiffs)
+        for name in ("stat.npy", "iscell.npy"):
+            path = plane_dir / name
+            if not path.is_file():
+                raise FileNotFoundError(
+                    f"Cannot rerun extraction without the current GUI ROI file: {path}"
+                )
+        stat = np.load(plane_dir / "stat.npy", allow_pickle=True)
+        iscell = np.load(plane_dir / "iscell.npy")
+        if stat.ndim != 1 or len(stat) == 0:
+            raise ValueError(
+                f"Cannot rerun extraction from stat.npy shape {stat.shape}"
+            )
+        if iscell.shape != (len(stat), 2):
+            raise ValueError(
+                f"Current iscell.npy shape {iscell.shape} does not match "
+                f"{len(stat)} current ROIs"
+            )
+        complete = False
     elif rerun_detection and not existing_output:
         raise FileNotFoundError(
             "Cannot rerun detection because no existing Suite2p registration "
             f"was found: {suite2p_dir}"
+        )
+    elif rerun_extraction and not existing_output:
+        raise FileNotFoundError(
+            "Cannot rerun extraction because no existing Suite2p output was found: "
+            f"{suite2p_dir}"
         )
     elif existing_output and resume and not complete:
         resume_validation = validate_registration_for_resume(suite2p_dir, tiffs)
@@ -291,7 +318,12 @@ def build_pipeline(
         "overwrote_existing": bool(existing_output and overwrite),
         "resume": bool(resume_validation),
         "rerun_detection": rerun_detection,
-        "start_stage": "detection" if resume_validation else "registration",
+        "rerun_extraction": rerun_extraction,
+        "start_stage": (
+            "trace_extraction"
+            if rerun_extraction
+            else "detection" if resume_validation else "registration"
+        ),
         "resume_validation": resume_validation,
     }
     return row, paths
@@ -326,6 +358,14 @@ def main() -> None:
             "detection, trace-extraction, and QC outputs."
         ),
     )
+    parser.add_argument(
+        "--rerun-extraction",
+        action="store_true",
+        help=(
+            "Preserve validated registration plus the current GUI-edited stat.npy "
+            "and iscell.npy, then replace trace-extraction and QC outputs."
+        ),
+    )
     args = parser.parse_args()
 
     row, paths = build_pipeline(
@@ -335,6 +375,7 @@ def main() -> None:
         overwrite=args.overwrite,
         resume=args.resume,
         rerun_detection=args.rerun_detection,
+        rerun_extraction=args.rerun_extraction,
     )
     if paths["already_complete"]:
         if args.paths_json:
@@ -346,7 +387,7 @@ def main() -> None:
     write_csv(
         manifest,
         [row],
-        overwrite=args.resume or args.rerun_detection,
+        overwrite=args.resume or args.rerun_detection or args.rerun_extraction,
     )
     paths["manifest"] = str(manifest.resolve())
     if args.paths_json:

@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -23,6 +25,86 @@ from prepare_full_session_pipeline import (  # noqa: E402
     clean_downstream_outputs,
     validate_registration_for_resume,
 )
+
+
+TRACE_BUNDLE_NAMES = (
+    "F.npy",
+    "Fneu.npy",
+    "F_chan2.npy",
+    "Fneu_chan2.npy",
+    "spks.npy",
+    "iscell.npy",
+    "stat.npy",
+    "ops.npy",
+)
+
+
+def backup_trace_bundle(plane_dir: Path, backup_root: Path) -> Path:
+    """Keep a recoverable snapshot of the current trace/ROI bundle."""
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_dir = backup_root / timestamp
+    suffix = 1
+    while backup_dir.exists():
+        backup_dir = backup_root / f"{timestamp}-{suffix}"
+        suffix += 1
+    backup_dir.mkdir(parents=True)
+    for name in TRACE_BUNDLE_NAMES:
+        source = plane_dir / name
+        if source.is_file():
+            destination = backup_dir / name
+            try:
+                os.link(source, destination)
+            except OSError:
+                shutil.copy2(source, destination)
+    return backup_dir
+
+
+def restore_trace_bundle(plane_dir: Path, backup_dir: Path) -> None:
+    """Restore a saved bundle atomically per file after a failed rerun."""
+    for name in TRACE_BUNDLE_NAMES:
+        backup = backup_dir / name
+        target = plane_dir / name
+        if backup.is_file():
+            temporary = target.with_name(f".{target.name}.restore-{os.getpid()}")
+            shutil.copy2(backup, temporary)
+            os.replace(temporary, target)
+        else:
+            target.unlink(missing_ok=True)
+
+
+def prepare_extraction_rerun(suite2p_dir: Path) -> tuple[Path, Path, Path]:
+    """Back up traces and clear only outputs that extraction/QC will replace."""
+    plane_dir = suite2p_dir / "plane0"
+    workflow_dir = suite2p_dir / ".workflow"
+    qc_dir = suite2p_dir / "qc"
+    backup_dir = backup_trace_bundle(
+        plane_dir, workflow_dir / "extraction_rerun_backups"
+    )
+    stat_backup = backup_dir / "stat.npy"
+    iscell_backup = backup_dir / "iscell.npy"
+    if not stat_backup.is_file() or not iscell_backup.is_file():
+        raise FileNotFoundError(
+            "Extraction rerun requires current stat.npy and iscell.npy"
+        )
+    for name in TRACE_BUNDLE_NAMES:
+        if name not in {"stat.npy", "ops.npy"}:
+            (plane_dir / name).unlink(missing_ok=True)
+    for path in (
+        qc_dir / "traces",
+        workflow_dir / "trace_extraction",
+    ):
+        if path.exists():
+            shutil.rmtree(path)
+    for path in (
+        qc_dir / "index.html",
+        qc_dir / "summary.png",
+        qc_dir / "session_metrics.csv",
+        qc_dir / "calculation.json",
+        workflow_dir / "provenance.json",
+        workflow_dir / "qc_provenance.json",
+    ):
+        path.unlink(missing_ok=True)
+    return backup_dir, stat_backup, iscell_backup
 
 
 def run_stage(name: str, command: list[str], state: dict[str, Any], status_path: Path) -> None:
@@ -57,7 +139,9 @@ def main() -> None:
     parser.add_argument("--script-dir", type=Path, required=True)
     parser.add_argument("--python-executable", type=Path, required=True)
     parser.add_argument(
-        "--start-stage", choices=("registration", "detection"), default="registration"
+        "--start-stage",
+        choices=("registration", "detection", "trace_extraction"),
+        default="registration",
     )
     args = parser.parse_args()
 
@@ -113,7 +197,7 @@ def main() -> None:
                     ],
                     check=True,
                 )
-        else:
+        elif args.start_stage == "detection":
             rows = read_csv(args.manifest.resolve())
             if len(rows) != 1:
                 raise ValueError(
@@ -132,47 +216,84 @@ def main() -> None:
             state["resume_cleanup"] = removed
             write_json_atomic(status_path, state)
 
-        run_stage(
-            "detection",
-            [
-                python_executable,
-                "-u",
-                str(script_dir / "run_roi_detection.py"),
-                "--run-dir",
-                str(run_dir),
-                "--output-dir",
-                str(qc_dir / "detection"),
-                "--stat-output",
-                str(plane_dir / "stat.npy"),
-                "--device",
-                "cuda",
-            ],
-            state,
-            status_path,
-        )
+        else:
+            rows = read_csv(args.manifest.resolve())
+            if len(rows) != 1:
+                raise ValueError(
+                    f"Rerun manifest must contain exactly one row: {args.manifest}"
+                )
+            tiffs = [
+                Path(value).resolve()
+                for value in json.loads(rows[0]["tiff_files_json"])
+            ]
+            validation = validate_registration_for_resume(suite2p_dir, tiffs)
+            backup_dir, stat_backup, iscell_backup = prepare_extraction_rerun(
+                suite2p_dir
+            )
+            state["stages"]["registration"] = {
+                "state": "reused",
+                "registration_status": validation["registration_status"],
+            }
+            state["stages"]["detection"] = {
+                "state": "preserved_gui_rois",
+                "stat_source": str(stat_backup),
+                "iscell_source": str(iscell_backup),
+            }
+            state["trace_bundle_backup"] = str(backup_dir)
+            write_json_atomic(status_path, state)
+
+        if args.start_stage != "trace_extraction":
+            run_stage(
+                "detection",
+                [
+                    python_executable,
+                    "-u",
+                    str(script_dir / "run_roi_detection.py"),
+                    "--run-dir",
+                    str(run_dir),
+                    "--output-dir",
+                    str(qc_dir / "detection"),
+                    "--stat-output",
+                    str(plane_dir / "stat.npy"),
+                    "--device",
+                    "cuda",
+                ],
+                state,
+                status_path,
+            )
+        extraction_command = [
+            python_executable,
+            "-u",
+            str(script_dir / "run_trace_extraction.py"),
+            "--run-dir",
+            str(run_dir),
+            "--detection-dir",
+            str(qc_dir / "detection"),
+            "--stat-path",
+            str(
+                stat_backup
+                if args.start_stage == "trace_extraction"
+                else plane_dir / "stat.npy"
+            ),
+            "--output-dir",
+            str(plane_dir),
+            "--metadata-dir",
+            str(workflow_dir / "trace_extraction"),
+            "--allow-output-dir-nonempty",
+            "--device",
+            "cuda",
+        ]
+        if args.start_stage == "trace_extraction":
+            extraction_command.extend(
+                ["--use-current-stat", "--iscell-path", str(iscell_backup)]
+            )
         run_stage(
             "trace_extraction",
-            [
-                python_executable,
-                "-u",
-                str(script_dir / "run_trace_extraction.py"),
-                "--run-dir",
-                str(run_dir),
-                "--detection-dir",
-                str(qc_dir / "detection"),
-                "--stat-path",
-                str(plane_dir / "stat.npy"),
-                "--output-dir",
-                str(plane_dir),
-                "--metadata-dir",
-                str(workflow_dir / "trace_extraction"),
-                "--allow-output-dir-nonempty",
-                "--device",
-                "cuda",
-            ],
+            extraction_command,
             state,
             status_path,
         )
+        extraction_completed = True
         run_stage(
             "qc",
             [
@@ -202,6 +323,13 @@ def main() -> None:
         print(f"Full Suite2p pipeline complete: {plane_dir}")
         print(f"QC report: {qc_dir / 'index.html'}")
     except Exception as exc:
+        if (
+            args.start_stage == "trace_extraction"
+            and "backup_dir" in locals()
+            and not locals().get("extraction_completed", False)
+        ):
+            restore_trace_bundle(plane_dir, backup_dir)
+            state["trace_bundle_restored_after_failure"] = True
         state.update(
             {
                 "state": "failed",

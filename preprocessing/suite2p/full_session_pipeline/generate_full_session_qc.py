@@ -132,6 +132,34 @@ def write_metrics(path: Path, metrics: dict[str, Any]) -> None:
         writer.writerow(metrics)
 
 
+def roi_geometry_from_stat(
+    stat_path: Path, image_shape: tuple[int, int]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Build current ROI labels and geometry from Suite2p's editable stat.npy."""
+    stat = np.load(stat_path, allow_pickle=True)
+    if stat.ndim != 1 or len(stat) == 0:
+        raise ValueError(f"Expected a non-empty 1-D stat array, got {stat.shape}")
+    masks = np.zeros(image_shape, dtype=np.int32)
+    areas = np.empty(len(stat), dtype=float)
+    diameters = np.empty(len(stat), dtype=float)
+    for index, roi in enumerate(stat):
+        ypix = np.asarray(roi["ypix"], dtype=int)
+        xpix = np.asarray(roi["xpix"], dtype=int)
+        if ypix.shape != xpix.shape or ypix.ndim != 1 or ypix.size == 0:
+            raise ValueError(f"ROI {index} has invalid pixel arrays")
+        if (
+            ypix.min() < 0
+            or xpix.min() < 0
+            or ypix.max() >= image_shape[0]
+            or xpix.max() >= image_shape[1]
+        ):
+            raise IndexError(f"ROI {index} pixels fall outside image shape {image_shape}")
+        masks[ypix, xpix] = index + 1
+        areas[index] = ypix.size
+        diameters[index] = 2.0 * np.sqrt(areas[index] / np.pi)
+    return masks, areas, diameters
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run-dir", type=Path, required=True)
@@ -168,7 +196,14 @@ def main() -> None:
     ops, outputs = load_ops(plane_dir / "ops.npy")
     reg_metrics = compute_metrics(ops, outputs)
     iscell = np.load(plane_dir / "iscell.npy")
-    masks = np.load(detection_dir / "roi_masks.npy")
+    mean_image = array_from(outputs, ops, key="meanImg")
+    masks, areas, diameters = roi_geometry_from_stat(
+        plane_dir / "stat.npy", tuple(mean_image.shape)
+    )
+    if len(iscell) != len(areas):
+        raise ValueError(
+            f"iscell.npy has {len(iscell)} ROIs but stat.npy has {len(areas)}"
+        )
     trace_metrics = load_trace_metrics(
         trace_qc_dir / "additional_two_channel" / "trace_metrics.csv"
     )
@@ -177,9 +212,6 @@ def main() -> None:
     )
     classified = [row for row in trace_metrics if row["iscell"]]
     selected = classified or trace_metrics
-    areas = np.load(detection_dir / "roi_areas.npy")
-    diameters = np.load(detection_dir / "roi_diameters.npy")
-
     registration_dir = qc_dir / "registration"
     registration_dir.mkdir(parents=True, exist_ok=True)
     save_registration_qc(registration_dir / "registration_qc.png", ops, outputs, reg_metrics)

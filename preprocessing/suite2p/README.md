@@ -41,6 +41,23 @@ If registration finished but a later stage failed, add `--resume`. To discard
 the selected session's existing Suite2p output and start again, add
 `--overwrite`. These two options cannot be combined.
 
+If ROIs were edited, added, split, or merged in the Suite2p GUI, rerun only
+trace extraction from the current `stat.npy` with:
+
+```bash
+bash preprocessing/suite2p/submit_full_session_pipeline.sh \
+  --rerun-extraction \
+  sub-07 \
+  ses-abab-random-028_date-20261021T091227
+```
+
+This mode validates and reuses registration, preserves the current GUI-edited
+`stat.npy` and `iscell.npy`, and extracts both channels from `data.bin` and
+`data_chan2.bin` together. The previous trace/ROI bundle is retained under
+`suite2p/.workflow/extraction_rerun_backups`. It does not rerun automatic ROI
+detection. The mode is mutually exclusive with `--resume`, `--overwrite`, and
+`--rerun-detection`.
+
 By default the project is
 `/ceph/mrsic_flogel/public/projects/AtAp_20260119_SequenceCompression`.
 Override it with `PROJECT_ROOT`. The input and output layouts are:

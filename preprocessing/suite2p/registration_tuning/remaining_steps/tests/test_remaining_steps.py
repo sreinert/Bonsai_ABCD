@@ -502,6 +502,70 @@ def test_full_pipeline_can_rerun_detection_after_completion(tmp_path: Path) -> N
     assert (plane_dir / "stat.npy").is_file()
 
 
+def test_full_pipeline_can_rerun_extraction_from_current_gui_rois(
+    tmp_path: Path,
+) -> None:
+    mouse = "sub-02"
+    session = "ses-full002_date-20260818T134310"
+    suite2p_dir, _ = make_resumable_registration(tmp_path, mouse, session)
+    plane_dir = suite2p_dir / "plane0"
+    stat = np.asarray(
+        [
+            {
+                "ypix": np.asarray([0]),
+                "xpix": np.asarray([0]),
+                "lam": np.asarray([1.0]),
+                "overlap": np.asarray([False]),
+            },
+            {
+                "ypix": np.asarray([1]),
+                "xpix": np.asarray([1]),
+                "lam": np.asarray([1.0]),
+                "overlap": np.asarray([False]),
+            },
+        ],
+        dtype=object,
+    )
+    np.save(plane_dir / "stat.npy", stat)
+    np.save(plane_dir / "iscell.npy", np.asarray([[1, 0.9], [0, 0.2]]))
+
+    _, paths = prepare_full_session_pipeline.build_pipeline(
+        tmp_path, mouse, session, rerun_extraction=True
+    )
+
+    assert paths["already_complete"] is False
+    assert paths["rerun_extraction"] is True
+    assert paths["start_stage"] == "trace_extraction"
+    assert len(np.load(plane_dir / "stat.npy", allow_pickle=True)) == 2
+
+
+def test_extraction_rerun_backup_and_restore(tmp_path: Path) -> None:
+    suite2p_dir = tmp_path / "suite2p"
+    plane_dir = suite2p_dir / "plane0"
+    plane_dir.mkdir(parents=True)
+    originals = {}
+    for index, name in enumerate(run_full_session_pipeline.TRACE_BUNDLE_NAMES):
+        value = np.asarray([index])
+        np.save(plane_dir / name, value)
+        originals[name] = value
+
+    backup_dir, stat_backup, iscell_backup = (
+        run_full_session_pipeline.prepare_extraction_rerun(suite2p_dir)
+    )
+
+    assert stat_backup.is_file()
+    assert iscell_backup.is_file()
+    assert (plane_dir / "stat.npy").is_file()
+    assert (plane_dir / "ops.npy").is_file()
+    assert not (plane_dir / "F.npy").exists()
+
+    run_full_session_pipeline.restore_trace_bundle(plane_dir, backup_dir)
+    for name, expected in originals.items():
+        np.testing.assert_array_equal(
+            np.load(plane_dir / name, allow_pickle=True), expected
+        )
+
+
 def test_full_pipeline_resume_and_overwrite_are_mutually_exclusive(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="mutually exclusive"):
         prepare_full_session_pipeline.build_pipeline(
@@ -569,6 +633,7 @@ def test_full_pipeline_launcher_submits_one_job() -> None:
     assert "--mail-type=BEGIN,END,FAIL" in text
     assert "--resume" in text
     assert "--rerun-detection" in text
+    assert "--rerun-extraction" in text
     assert "--current-node" in text
     assert "torch.cuda.is_available()" in text
     assert "Refusing current-node analysis on excluded host" in text
@@ -615,6 +680,16 @@ def test_combined_report_writes_html_png_and_metrics(
     }
     np.save(plane_dir / "ops.npy", ops)
     np.save(plane_dir / "iscell.npy", np.asarray([[1, 0.9], [0, 0.2]]))
+    np.save(
+        plane_dir / "stat.npy",
+        np.asarray(
+            [
+                {"ypix": np.asarray([0]), "xpix": np.asarray([0])},
+                {"ypix": np.asarray([2, 2]), "xpix": np.asarray([3, 4])},
+            ],
+            dtype=object,
+        ),
+    )
     np.save(detection_dir / "roi_masks.npy", np.zeros((4, 5), dtype=np.int32))
     np.save(detection_dir / "roi_areas.npy", np.asarray([10.0, 12.0]))
     np.save(detection_dir / "roi_diameters.npy", np.asarray([3.5, 3.9]))

@@ -4,6 +4,7 @@ set -euo pipefail
 overwrite=false
 resume=false
 rerun_detection=false
+rerun_extraction=false
 current_node=false
 positional=()
 for argument in "$@"; do
@@ -16,6 +17,9 @@ for argument in "$@"; do
       ;;
     --rerun-detection)
       rerun_detection=true
+      ;;
+    --rerun-extraction)
+      rerun_extraction=true
       ;;
     --current-node)
       current_node=true
@@ -31,17 +35,17 @@ for argument in "$@"; do
 done
 
 if [[ ${#positional[@]} -lt 2 ]]; then
-  echo "Usage: $0 [--overwrite|--resume|--rerun-detection] [--current-node] MOUSE_ID FULL_RAW_SESSION_ID [FULL_RAW_SESSION_ID ...]" >&2
+  echo "Usage: $0 [--overwrite|--resume|--rerun-detection|--rerun-extraction] [--current-node] MOUSE_ID FULL_RAW_SESSION_ID [FULL_RAW_SESSION_ID ...]" >&2
   exit 2
 fi
 mode_count=0
-for selected_mode in "${overwrite}" "${resume}" "${rerun_detection}"; do
+for selected_mode in "${overwrite}" "${resume}" "${rerun_detection}" "${rerun_extraction}"; do
   if [[ "${selected_mode}" == true ]]; then
     mode_count=$((mode_count + 1))
   fi
 done
 if [[ ${mode_count} -gt 1 ]]; then
-  echo "--overwrite, --resume, and --rerun-detection are mutually exclusive" >&2
+  echo "--overwrite, --resume, --rerun-detection, and --rerun-extraction are mutually exclusive" >&2
   exit 2
 fi
 
@@ -83,6 +87,9 @@ if [[ ${#positional[@]} -gt 2 ]]; then
     fi
     if [[ "${rerun_detection}" == true ]]; then
       submission_command+=(--rerun-detection)
+    fi
+    if [[ "${rerun_extraction}" == true ]]; then
+      submission_command+=(--rerun-extraction)
     fi
     if [[ "${current_node}" == true ]]; then
       submission_command+=(--current-node)
@@ -166,6 +173,9 @@ if [[ "${resume}" == true ]]; then
 fi
 if [[ "${rerun_detection}" == true ]]; then
   prepare_options+=(--rerun-detection)
+fi
+if [[ "${rerun_extraction}" == true ]]; then
+  prepare_options+=(--rerun-extraction)
 fi
 
 "${python_executable}" "${pipeline_dir}/prepare_full_session_pipeline.py" \
@@ -264,9 +274,11 @@ payload = {
         "hours": 24 if execution_mode == "slurm" else None,
         "start_stage": start_stage,
         "stages": (
-            ["detection", "trace_extraction", "qc"]
-            if start_stage == "detection"
-            else ["registration", "detection", "trace_extraction", "qc"]
+            ["trace_extraction", "qc"]
+            if start_stage == "trace_extraction"
+            else (["detection", "trace_extraction", "qc"]
+                  if start_stage == "detection"
+                  else ["registration", "detection", "trace_extraction", "qc"])
         ),
     },
 }
@@ -281,10 +293,13 @@ echo "Mouse/session:    ${mouse_id} / ${session_id}"
 echo "Overwrite:        ${overwrite}"
 echo "Resume:           ${resume} (start stage: ${start_stage})"
 echo "Rerun detection:  ${rerun_detection}"
+echo "Rerun extraction: ${rerun_extraction}"
 echo "Execution mode:   ${execution_mode}"
 echo "Suite2p output:   ${plane_dir}"
 if [[ "${execution_mode}" == current_node ]]; then
   echo "Current host:     $(hostname -s)"
+elif [[ "${start_stage}" == trace_extraction ]]; then
+  echo "Pipeline job:     ${job_id} / ${job_name} (reuse registration + current GUI ROIs -> traces -> QC)"
 elif [[ "${start_stage}" == detection ]]; then
   echo "Pipeline job:     ${job_id} / ${job_name} (reuse registration -> detection -> traces -> QC)"
 else
