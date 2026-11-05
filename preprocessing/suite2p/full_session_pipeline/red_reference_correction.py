@@ -1,10 +1,8 @@
-"""Two-channel fluorescence calculations with explicit safety diagnostics.
+"""Independent channel dF calculation and legacy reference-correction helpers.
 
-The functions in this module deliberately do not alter CellTV's historical G/R
-functions. They provide separately testable implementations of the same
-baseline-subtracted fluorescence calculation used by ``nwb_barcoding``, the
-CellTV ``get_dff_GR`` calculation, and the earlier opt-in robust
-reference-channel regression.
+The production channel calculation matches the Suite2p baseline-subtracted
+fluorescence method used by ``nwb_barcoding``. The robust reference regression
+is retained as a standalone legacy helper but is not used by the pipeline.
 """
 
 from __future__ import annotations
@@ -20,7 +18,6 @@ from scipy.ndimage import (
     median_filter,
     minimum_filter1d,
 )
-from scipy.signal import medfilt
 
 
 @dataclass(frozen=True)
@@ -45,22 +42,6 @@ class ReferenceCorrectionResult:
     max_iterations: int
     tolerance: float
     scale_epsilon: float
-
-
-@dataclass(frozen=True)
-class SafeRatioResult:
-    """CellTV baseline-subtracted G/R plus denominator-floor diagnostics."""
-
-    delta_ratio: np.ndarray
-    ratio: np.ndarray
-    smoothed_red: np.ndarray
-    denominator_floor: np.ndarray
-    floor_fraction: np.ndarray
-    typical_red: np.ndarray
-    status: np.ndarray
-    smoothing_kernel_frames: int
-    floor_percentile: float
-    absolute_floor: float
 
 
 def _validate_trace_pair(left: np.ndarray, right: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -197,99 +178,6 @@ def compute_channel_delta(
             f"Suite2p preprocessing changed trace shape from {corrected.shape} to {delta.shape}"
         )
     return delta.astype(np.float32, copy=False)
-
-
-def compute_celltv_ratio_delta(
-    green_fluorescence: np.ndarray,
-    green_neuropil: np.ndarray,
-    red_fluorescence: np.ndarray,
-    red_neuropil: np.ndarray,
-    ops: dict[str, Any],
-    neuropil_coefficient: float | None = 0.7,
-    *,
-    smoothing_seconds: float = 0.25,
-    floor_percentile: float = 5.0,
-    absolute_floor: float = 1e-3,
-) -> SafeRatioResult:
-    """Reproduce CellTV ``get_dff_GR`` without interpolation or ROI rejection.
-
-    CellTV neuropil-corrects both channels, median-filters red with
-    :func:`scipy.signal.medfilt`, floors red at the larger of its per-ROI fifth
-    percentile and ``1e-3``, divides green by that floored denominator, and
-    applies Suite2p baseline preprocessing to G/R. The default neuropil
-    coefficient is CellTV's hard-coded ``0.7``.
-    """
-
-    green_fluorescence, green_neuropil = _validate_trace_pair(
-        green_fluorescence, green_neuropil
-    )
-    red_fluorescence, red_neuropil = _validate_trace_pair(
-        red_fluorescence, red_neuropil
-    )
-    if green_fluorescence.shape != red_fluorescence.shape:
-        raise ValueError(
-            "Green and red fluorescence arrays must have equal shapes; got "
-            f"{green_fluorescence.shape} and {red_fluorescence.shape}"
-        )
-    fs = float(_baseline_parameters(ops)[3])
-    if not np.isfinite(smoothing_seconds) or smoothing_seconds < 0:
-        raise ValueError("Smoothing duration must be finite and non-negative")
-    if not 0 <= floor_percentile <= 100:
-        raise ValueError("Denominator floor percentile must be in [0, 100]")
-    if not np.isfinite(absolute_floor) or absolute_floor <= 0:
-        raise ValueError("Absolute denominator floor must be finite and positive")
-
-    coefficient = _neuropil_coefficient(ops, neuropil_coefficient)
-    green = np.asarray(green_fluorescence, dtype=np.float32) - coefficient * np.asarray(
-        green_neuropil, dtype=np.float32
-    )
-    red = np.asarray(red_fluorescence, dtype=np.float32) - coefficient * np.asarray(
-        red_neuropil, dtype=np.float32
-    )
-    kernel = max(1, int(fs * smoothing_seconds) | 1)
-    smoothed_red = medfilt(red, kernel_size=(1, kernel))
-    typical_red = np.median(np.abs(smoothed_red), axis=1)
-    denominator_floor = np.maximum(
-        np.percentile(smoothed_red, floor_percentile, axis=1),
-        absolute_floor,
-    )
-    low_red = smoothed_red < denominator_floor[:, None]
-    floor_fraction = np.mean(low_red, axis=1)
-    guarded_red = np.maximum(smoothed_red, denominator_floor[:, None])
-    ratio = green / guarded_red
-    status = np.full(green.shape[0], "ok", dtype="U32")
-    nonfinite_input = ~(
-        np.all(np.isfinite(green), axis=1)
-        & np.all(np.isfinite(smoothed_red), axis=1)
-    )
-    status[nonfinite_input] = "nonfinite_input"
-
-    baseline_method, window, sigma, _, percentile = _baseline_parameters(ops)
-    delta_ratio = np.asarray(
-        _suite2p_preprocess(
-            ratio, baseline_method, window, sigma, fs, percentile
-        )
-    ).astype(np.float32, copy=False)
-    nonfinite_output = ~np.all(np.isfinite(delta_ratio), axis=1)
-    status[nonfinite_output] = "nonfinite_output"
-
-    return SafeRatioResult(
-        delta_ratio=delta_ratio,
-        ratio=ratio,
-        smoothed_red=smoothed_red.astype(np.float32, copy=False),
-        denominator_floor=denominator_floor,
-        floor_fraction=floor_fraction,
-        typical_red=typical_red,
-        status=status,
-        smoothing_kernel_frames=kernel,
-        floor_percentile=float(floor_percentile),
-        absolute_floor=float(absolute_floor),
-    )
-
-
-# Backward-compatible import for code written while this calculation included
-# additional interpolation/rejection guards. It now returns exact CellTV G/R.
-compute_safe_ratio_delta = compute_celltv_ratio_delta
 
 
 def _robust_center_scale(values: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

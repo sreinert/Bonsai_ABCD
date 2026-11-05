@@ -46,7 +46,7 @@ def load_trace_metrics(path: Path) -> list[dict[str, Any]]:
             for key, value in raw.items():
                 if key in {"roi", "iscell"}:
                     row[key] = int(float(value))
-                elif key in {"reference_status", "safe_ratio_status"}:
+                elif key == "reference_status":
                     row[key] = value
                 else:
                     row[key] = float(value)
@@ -229,10 +229,8 @@ def main() -> None:
         "cell_probability_median": float(np.median(iscell[:, 1])),
         "roi_area_median_pixels": float(np.median(areas)),
         "roi_diameter_median_pixels": float(np.median(diameters)),
-        "additional_green_red_correlation_median": float(np.median([row["green_red_correlation"] for row in selected])),
-        "additional_ratio_red_floor_fraction_median": float(np.median([row["ratio_red_floor_fraction"] for row in selected])),
-        "additional_safe_ratio_robust_sigma_median": float(np.median([row["safe_ratio_robust_sigma"] for row in selected])),
-        "additional_celltv_ratio_nonfinite_fraction": float(np.mean([row["safe_ratio_status"] != "ok" for row in selected])),
+        "additional_green_dff_robust_sigma_median": float(np.median([row["green_dff_robust_sigma"] for row in selected])),
+        "additional_red_dff_robust_sigma_median": float(np.median([row["red_dff_robust_sigma"] for row in selected])),
         "elapsed_registration_seconds": float(read_json(workflow_dir / "registration_status.json")["elapsed_seconds"]),
         "elapsed_detection_seconds": float(detection_status["elapsed_seconds"]),
         "elapsed_trace_seconds": float(trace_status["elapsed_seconds"]),
@@ -265,10 +263,9 @@ th,td{{padding:.35rem .6rem;border:1px solid #ccc;text-align:right}} th{{text-al
 <h2>ROI detection</h2><img src="detection/qc.png" alt="Detection QC">
 <h2>Raw signal quality</h2><img src="traces/signal_quality_metrics.png" alt="Raw signal-quality metrics">
 <h3>Highest-SNR traces</h3><img src="traces/high_snr_traces.png" alt="Highest-SNR raw traces">
-<h2>Additional two-channel/CellTV diagnostics</h2>
+<h2>Additional two-channel diagnostics</h2>
 <img src="traces/additional_two_channel/summary.png" alt="Additional two-channel summary">
-<h3>Full-session CellTV-style traces</h3><img src="traces/additional_two_channel/selected_cells_celltv.png" alt="Full-session CellTV traces">
-<h3>Full-session CellTV <code>get_dff_GR</code></h3><img src="traces/additional_two_channel/selected_cells_safe_ratio.png" alt="Full-session CellTV G/R traces">
+<h3>Full-session independent green/red dF traces</h3><img src="traces/additional_two_channel/selected_cells_channels.png" alt="Full-session green and red traces">
 <p><a href="session_metrics.csv">Session metrics CSV</a> · <a href="traces/signal_quality_metrics.csv">Raw signal metrics CSV</a> · <a href="traces/additional_two_channel/trace_metrics.csv">Additional per-ROI metrics CSV</a> · <a href="calculation.json">Calculation settings</a></p>
 </body></html>"""
     (qc_dir / "index.html").write_text(document, encoding="utf-8")

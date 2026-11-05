@@ -1,5 +1,4 @@
 from pathlib import Path
-from types import SimpleNamespace
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -58,7 +57,7 @@ def test_trace_selection_ranks_all_finite_snr_and_respects_eligibility():
     np.testing.assert_array_equal(random_a, random_b)
 
 
-def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypatch):
+def test_channel_dff_is_saved_full_frame_and_legacy_files_are_cleaned(tmp_path, monkeypatch):
     plane = tmp_path / "suite2p" / "plane0"
     plane.mkdir(parents=True)
     F = np.array([[10, 12, 14, 16], [20, 23, 26, 29]], dtype=float)
@@ -90,23 +89,7 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
         corrected = signal - ops["neucoeff"] * neuropil
         return corrected - np.min(corrected, axis=1, keepdims=True)
 
-    def fake_safe_ratio(green, green_neuropil, red, red_neuropil, ops):
-        del green_neuropil, red_neuropil, ops
-        ratio = green / red
-        n_rois = green.shape[0]
-        return SimpleNamespace(
-            delta_ratio=ratio,
-            denominator_floor=np.ones(n_rois),
-            floor_fraction=np.zeros(n_rois),
-            typical_red=np.ones(n_rois),
-            status=np.full(n_rois, "ok"),
-            smoothing_kernel_frames=1,
-            floor_percentile=5.0,
-            absolute_floor=1e-3,
-        )
-
     monkeypatch.setattr(overview, "compute_channel_delta", fake_channel_delta)
-    monkeypatch.setattr(overview, "compute_celltv_ratio_delta", fake_safe_ratio)
     responsive_calls = []
 
     def fake_responsive(dff, imaging_path):
@@ -118,7 +101,7 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
     aligned_funcimg.mkdir(parents=True)
     for legacy_name in ("DF_F0.npy", "DF_F02.npy", "DG_R.npy"):
         np.save(aligned_funcimg / legacy_name, np.full((2, 2), 999))
-    result = overview._load_or_extract_ratio_signals(
+    result = overview._load_or_extract_channel_dff(
         plane, aligned_funcimg, accepted=[1], valid_frames=[1, 3]
     )
 
@@ -130,29 +113,71 @@ def test_safe_ratio_signals_use_new_api_and_are_saved_aligned(tmp_path, monkeypa
     expected_red_full = red_full - np.min(red_full, axis=1, keepdims=True)
     expected_green = expected_green_full[:, [1, 3]]
     expected_red = expected_red_full[:, [1, 3]]
-    expected_ratio = (F / F2)[:, [1, 3]]
-    np.testing.assert_allclose(result["green_delta"], expected_green[[1]])
-    np.testing.assert_allclose(result["red_delta"], expected_red[[1]])
-    np.testing.assert_allclose(
-        result["ratio_delta"], expected_ratio[[1]]
-    )
+    np.testing.assert_allclose(result["green_dff"], expected_green[[1]])
+    np.testing.assert_allclose(result["red_dff"], expected_red[[1]])
     np.testing.assert_array_equal(result["valid_neurons"], [1])
-    np.testing.assert_allclose(responsive_calls[0][0], expected_green_full[:, [1, 3]])
+    np.testing.assert_allclose(responsive_calls[0][0], expected_green_full)
     assert responsive_calls[0][1] == plane
     assert len(delta_calls) == 2
     np.testing.assert_array_equal(delta_calls[0][0], F)
     np.testing.assert_array_equal(delta_calls[1][0], F2)
     assert {path.name for path in aligned_funcimg.glob("*.npy")} == {
-        "DF_F0.npy",
-        "DF_F02.npy",
-        "DG_R.npy",
-        "celltv_green_delta_v4.npy",
-        "celltv_red_delta_v4.npy",
-        "celltv_green_red_ratio_delta_v4.npy",
+        "dff.npy",
+        "dff2.npy",
         "valid_neurons.npy",
     }
+    np.testing.assert_allclose(
+        np.load(aligned_funcimg / "dff.npy"),
+        expected_green_full,
+    )
+    np.testing.assert_allclose(
+        np.load(aligned_funcimg / "dff2.npy"),
+        expected_red_full,
+    )
     np.testing.assert_array_equal(np.load(aligned_funcimg / "valid_neurons.npy"), [1])
-    assert (aligned_funcimg / "celltv_green_red_ratio_diagnostics_v4.npz").is_file()
+
+    def unexpected_recalculation(*args, **kwargs):
+        raise AssertionError("full-frame cache should be reusable across frame selections")
+
+    monkeypatch.setattr(overview, "compute_channel_delta", unexpected_recalculation)
+    cached = overview._load_or_extract_channel_dff(
+        plane, aligned_funcimg, accepted=[1], valid_frames=[0, 2]
+    )
+    np.testing.assert_allclose(cached["green_dff"], expected_green_full[[1]][:, [0, 2]])
+    np.testing.assert_allclose(cached["red_dff"], expected_red_full[[1]][:, [0, 2]])
+
+
+def test_channel_dff_failure_preserves_legacy_files(tmp_path, monkeypatch):
+    plane = tmp_path / "suite2p" / "plane0"
+    plane.mkdir(parents=True)
+    values = np.ones((1, 4), dtype=float)
+    for name in ("F.npy", "Fneu.npy", "F_chan2.npy", "Fneu_chan2.npy"):
+        np.save(plane / name, values)
+    np.save(plane / "iscell.npy", np.array([[1, 0.9]]))
+    np.save(plane / "ops.npy", {"neucoeff": 0.25})
+    aligned_funcimg = tmp_path / "aligned" / "funcimg"
+    aligned_funcimg.mkdir(parents=True)
+    legacy = aligned_funcimg / "celltv_green_delta_v5.npy"
+    np.save(legacy, values)
+
+    calls = 0
+
+    def fail_on_red(*_args):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("red calculation failed")
+        return values
+
+    monkeypatch.setattr(overview, "compute_channel_delta", fail_on_red)
+    with pytest.raises(RuntimeError, match="red calculation failed"):
+        overview._load_or_extract_channel_dff(
+            plane, aligned_funcimg, accepted=[0], valid_frames=[0, 1]
+        )
+
+    assert legacy.is_file()
+    assert not (aligned_funcimg / "dff.npy").exists()
+    assert not (aligned_funcimg / "dff2.npy").exists()
 
 
 def test_accepted_cells_and_empirical_frame_rate():
@@ -390,7 +415,7 @@ def test_reward_psth_subplots_only_tick_window_limits_and_reward():
     plt.close(figure)
 
 
-def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, monkeypatch):
+def test_run_overview_uses_paired_channel_traces_and_green_only_analysis(tmp_path, monkeypatch):
     session_path = tmp_path / "aligned" / "sub-07" / "ses-full001_date-test"
     session_path.mkdir(parents=True)
     save_dir = tmp_path / "analysis"
@@ -406,9 +431,7 @@ def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, mon
         "load_session_data",
         lambda *args, **kwargs: {
             "dF": np.arange(120, dtype=float).reshape(3, 40),
-            "green_red_ratio_dF": (
-                np.arange(120, dtype=float).reshape(3, 40) / 10
-            ),
+            "red_dF": np.arange(120, dtype=float).reshape(3, 40) / 10,
             "valid_cell_mask": np.array([True, False, True]),
             "neurons": np.array([2, 5, 9]),
             "mean_img": np.zeros((2, 2)),
@@ -427,46 +450,32 @@ def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, mon
         calls.append(("fov", kwargs["save_path"]))
         return plt.figure()
 
-    def fake_traces(*args, **kwargs):
-        name = (
-            "ratio_traces"
-            if kwargs.get("signal_label", "").startswith("Safe")
-            else "traces"
-        )
-        calls.append((name, kwargs["save_path"]))
+    def fake_traces(green, red, **kwargs):
+        calls.append(("paired_traces", kwargs["save_path"]))
+        np.testing.assert_array_equal(red, green / 10)
         selected = np.array([0, 2])
         np.testing.assert_array_equal(kwargs["cell_indices"], selected)
         np.testing.assert_array_equal(kwargs["cell_labels"], np.array([2, 5, 9])[selected])
         return plt.figure()
 
     def fake_reward(*args, **kwargs):
-        prefix = (
-            "ratio_"
-            if kwargs.get("signal_label", "").startswith("Safe")
-            else ""
-        )
         calls.append(
             (
-                prefix + ("reward_cv" if kwargs["cross_validated"] else "reward"),
+                "reward_cv" if kwargs["cross_validated"] else "reward",
                 kwargs["save_path"],
             )
         )
         return plt.figure()
 
     def fake_reward_psth(*args, **kwargs):
-        prefix = (
-            "ratio_"
-            if kwargs.get("signal_label", "").startswith("Safe")
-            else ""
-        )
-        calls.append((prefix + "reward_psth", kwargs["save_path"]))
+        calls.append(("reward_psth", kwargs["save_path"]))
         selected = np.array([0, 2])
         np.testing.assert_array_equal(args[1], selected)
         np.testing.assert_array_equal(kwargs["cell_labels"], np.array([2, 5, 9])[selected])
         return plt.figure()
 
     monkeypatch.setattr(overview, "plot_fov_masks", fake_fov)
-    monkeypatch.setattr(overview, "plot_raw_traces", fake_traces)
+    monkeypatch.setattr(overview, "plot_two_channel_raw_traces", fake_traces)
     monkeypatch.setattr(overview, "plot_reward_heatmap", fake_reward)
     monkeypatch.setattr(overview, "plot_selected_cell_reward_psths", fake_reward_psth)
 
@@ -502,18 +511,12 @@ def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, mon
 
     assert [name for name, _ in calls] == [
         "fov",
-        "traces",
-        "traces",
+        "paired_traces",
+        "paired_traces",
         "reward",
         "reward_cv",
         "reward_psth",
         "reward_psth",
-        "ratio_traces",
-        "ratio_traces",
-        "ratio_reward",
-        "ratio_reward_cv",
-        "ratio_reward_psth",
-        "ratio_reward_psth",
         "behaviour_alignment",
         "behaviour_speed_lick_psth",
         "behaviour_transition_matrix",
@@ -527,12 +530,6 @@ def test_run_overview_adds_four_safe_ratio_plots_and_cleans_legacy(tmp_path, mon
         "reward_cv",
         "reward_psth_high_snr",
         "reward_psth_random",
-        "safe_gr_raw_traces_high_snr",
-        "safe_gr_raw_traces_random",
-        "safe_gr_reward",
-        "safe_gr_reward_cv",
-        "safe_gr_reward_psth_high_snr",
-        "safe_gr_reward_psth_random",
         "behaviour_alignment",
         "behaviour_speed_lick_psth",
         "behaviour_transition_matrix",
@@ -552,6 +549,7 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
         "load_session_data",
         lambda *args, **kwargs: {
             "dF": np.ones((2, 20)),
+            "red_dF": np.ones((2, 20)),
             "valid_cell_mask": np.array([True, True]),
             "neurons": np.array([1, 4]),
             "mean_img": np.zeros((2, 2)),
@@ -566,7 +564,7 @@ def test_sparse_reward_plot_is_skipped_without_failing(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(overview, "plot_fov_masks", lambda *a, **k: plt.figure())
-    monkeypatch.setattr(overview, "plot_raw_traces", lambda *a, **k: plt.figure())
+    monkeypatch.setattr(overview, "plot_two_channel_raw_traces", lambda *a, **k: plt.figure())
     monkeypatch.setattr(
         overview,
         "plot_reward_heatmap",
@@ -631,6 +629,7 @@ def test_behaviour_failure_propagates_and_stale_outputs_are_removed(
         "load_session_data",
         lambda *args, **kwargs: {
             "dF": np.ones((2, 40)),
+            "red_dF": np.ones((2, 40)),
             "valid_cell_mask": np.array([True, True]),
             "neurons": np.array([1, 4]),
             "mean_img": np.zeros((2, 2)),
@@ -645,7 +644,7 @@ def test_behaviour_failure_propagates_and_stale_outputs_are_removed(
         },
     )
     monkeypatch.setattr(overview, "plot_fov_masks", lambda *a, **k: plt.figure())
-    monkeypatch.setattr(overview, "plot_raw_traces", lambda *a, **k: plt.figure())
+    monkeypatch.setattr(overview, "plot_two_channel_raw_traces", lambda *a, **k: plt.figure())
     monkeypatch.setattr(overview, "plot_reward_heatmap", lambda *a, **k: plt.figure())
     monkeypatch.setattr(
         overview, "plot_selected_cell_reward_psths", lambda *a, **k: plt.figure()

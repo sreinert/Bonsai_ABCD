@@ -74,15 +74,14 @@ th,td{{padding:.35rem .6rem;border:1px solid #ccc;text-align:right}} th{{text-al
 <p><b>Input:</b> <code>{html.escape(str(trace_dir))}</code></p>
 <div class="note"><b>Primary metrics:</b> Sandra-analysis raw-F definitions: eighth-percentile
 baseline, frame-difference MAD noise, p99 peak SNR, skew and event fractions. These are deliberately
-independent of neuropil correction. Corrected green/red/G/R and CellTV-style calculations are retained
-separately below.</div>
+independent of neuropil correction. Independently neuropil- and baseline-corrected green and red
+calculations are retained separately below.</div>
 <h2>Raw signal-quality metrics</h2><img src="signal_quality_metrics.png" alt="Raw signal-quality metrics">
 <table>{metric_rows}</table>
 <h2>Highest-SNR raw traces</h2><img src="high_snr_traces.png" alt="Highest-SNR traces">
-<h2>Additional two-channel/CellTV diagnostics</h2>
+<h2>Additional two-channel diagnostics</h2>
 <img src="additional_two_channel/summary.png" alt="Additional two-channel summary">
-<h3>CellTV-style traces</h3><img src="additional_two_channel/selected_cells_celltv.png" alt="CellTV traces">
-<h3>CellTV <code>get_dff_GR</code></h3><img src="additional_two_channel/selected_cells_safe_ratio.png" alt="CellTV G/R traces">
+<h3>Independent green/red dF traces</h3><img src="additional_two_channel/selected_cells_channels.png" alt="Green and red traces">
 <p><a href="signal_quality_metrics.csv">Raw session metrics CSV</a> ·
 <a href="additional_two_channel/trace_metrics.csv">Additional per-ROI metrics CSV</a> ·
 <a href="calculation.json">Calculation settings and provenance</a></p>

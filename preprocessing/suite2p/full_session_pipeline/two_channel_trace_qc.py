@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the supplementary two-channel/CellTV Suite2p trace QC report."""
+"""Generate the supplementary independent-channel Suite2p trace QC report."""
 
 from __future__ import annotations
 
@@ -18,26 +18,16 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.ndimage import gaussian_filter, maximum_filter1d, minimum_filter1d
-from scipy.signal import medfilt
 
 try:
-    from .red_reference_correction import (
-        SafeRatioResult,
-        compute_celltv_ratio_delta,
-        compute_channel_delta,
-    )
+    from .red_reference_correction import compute_channel_delta
 except ImportError:  # Direct script execution on the HPC.
-    from red_reference_correction import (
-        SafeRatioResult,
-        compute_celltv_ratio_delta,
-        compute_channel_delta,
-    )
+    from red_reference_correction import compute_channel_delta
 
 
 REQUIRED_FILES = ("F.npy", "Fneu.npy", "iscell.npy", "ops.npy", "stat.npy")
 CHANNEL2_FILES = ("F_chan2.npy", "Fneu_chan2.npy")
-COLORS = {"green": "#16853b", "red": "#d43f3a", "ratio": "#272727"}
+COLORS = {"green": "#16853b", "red": "#d43f3a"}
 
 
 def neuropil_coefficient(ops: dict[str, Any], override: float | None = None) -> float:
@@ -51,54 +41,8 @@ def neuropil_coefficient(ops: dict[str, Any], override: float | None = None) -> 
         return float(extraction["neuropil_coefficient"])
     raise KeyError(
         "ops.npy has no 'neucoeff' or extraction['neuropil_coefficient']; "
-        "cannot reproduce CellTV neuropil correction"
+        "cannot reproduce Suite2p neuropil correction"
     )
-
-
-def baseline(signal: np.ndarray, ops: dict[str, Any]) -> np.ndarray:
-    """Return Suite2p's baseline without subtracting it from the signal."""
-    dcnv = ops.get("dcnv_preprocess", {})
-    if not isinstance(dcnv, dict):
-        dcnv = {}
-    method = str(ops.get("baseline", dcnv.get("baseline", "maximin")))
-    sigma = float(ops.get("sig_baseline", dcnv.get("sig_baseline", 10.0)))
-    fs = float(ops["fs"])
-    window = max(
-        1, int(float(ops.get("win_baseline", dcnv.get("win_baseline", 60.0))) * fs)
-    )
-    percentile = float(
-        ops.get("prctile_baseline", dcnv.get("prctile_baseline", 8.0))
-    )
-
-    if method == "maximin":
-        result = gaussian_filter(signal, sigma=(0.0, sigma))
-        result = minimum_filter1d(result, size=window, axis=1)
-        return maximum_filter1d(result, size=window, axis=1)
-    if method == "constant":
-        smoothed = gaussian_filter(signal, sigma=(0.0, sigma))
-        return np.broadcast_to(
-            np.min(smoothed, axis=1, keepdims=True), signal.shape
-        )
-    if method == "constant_prctile":
-        return np.broadcast_to(
-            np.percentile(signal, percentile, axis=1, keepdims=True), signal.shape
-        )
-    if method in {"none", "None", ""}:
-        return np.zeros_like(signal)
-    raise ValueError(f"Unsupported Suite2p baseline method: {method!r}")
-
-
-def normalized_dff(
-    signal: np.ndarray, ops: dict[str, Any]
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    base = baseline(signal, ops)
-    # A relative epsilon prevents division by exact zero without masking a genuinely
-    # weak/unstable baseline. The latter remains visible in metrics and plot limits.
-    scale = np.maximum(np.median(np.abs(base), axis=1, keepdims=True), 1.0)
-    denominator = np.maximum(np.abs(base), scale * 1e-6)
-    dff = (signal - base) / denominator
-    clipped = np.abs(base) < scale * 1e-6
-    return dff.astype(np.float32), base, clipped
 
 
 def channel_signals(
@@ -106,50 +50,16 @@ def channel_signals(
     Fneu: np.ndarray,
     F2: np.ndarray,
     Fneu2: np.ndarray,
-    ops: dict[str, Any],
     neucoeff: float,
 ) -> dict[str, np.ndarray]:
     green = np.asarray(F, dtype=np.float32) - neucoeff * np.asarray(Fneu, dtype=np.float32)
     red = np.asarray(F2, dtype=np.float32) - neucoeff * np.asarray(Fneu2, dtype=np.float32)
-
-    # Match get_dff_GR in cellTV_functions_cohort3.py: smooth only red,
-    # then floor each ROI's denominator at its fifth percentile (and 1e-3).
-    kernel = max(1, int(float(ops["fs"]) * 0.25) | 1)
-    red_smoothed = medfilt(red, kernel_size=(1, kernel)).astype(np.float32)
-    red_floor = np.maximum(
-        np.percentile(red_smoothed, 5, axis=1, keepdims=True), 1e-3
-    ).astype(np.float32)
-    ratio_floor_mask = red_smoothed < red_floor
-    ratio = green / np.maximum(red_smoothed, red_floor)
-    return {
-        "green": green,
-        "red": red,
-        "red_smoothed": red_smoothed,
-        "red_floor": red_floor,
-        "ratio_floor_mask": ratio_floor_mask,
-        "ratio": ratio.astype(np.float32),
-        "red_median_kernel_frames": np.asarray(kernel),
-    }
+    return {"green": green, "red": red}
 
 
 def robust_sigma(values: np.ndarray, axis: int = 1) -> np.ndarray:
     q16, q84 = np.percentile(values, (16, 84), axis=axis)
     return (q84 - q16) / 2.0
-
-
-def row_correlation(left: np.ndarray, right: np.ndarray) -> np.ndarray:
-    left_centered = left - np.mean(left, axis=1, keepdims=True)
-    right_centered = right - np.mean(right, axis=1, keepdims=True)
-    numerator = np.sum(left_centered * right_centered, axis=1)
-    denominator = np.sqrt(
-        np.sum(left_centered**2, axis=1) * np.sum(right_centered**2, axis=1)
-    )
-    return np.divide(
-        numerator,
-        denominator,
-        out=np.full(left.shape[0], np.nan, dtype=float),
-        where=denominator > 0,
-    )
 
 
 def select_rois(iscell: np.ndarray, green_dff: np.ndarray, count: int) -> np.ndarray:
@@ -194,30 +104,19 @@ def plot_selected(
     traces: dict[str, np.ndarray],
     iscell: np.ndarray,
     fs: float,
-    trace_kind: str,
     frame_slice: slice = slice(None),
     title: str = "Deterministically selected classified cells; y-axis robustly scaled per panel",
 ) -> None:
-    if trace_kind == "celltv":
-        column_titles = {
-            "green": "Green ΔF (channel 1; CellTV)",
-            "red": "Red ΔF (channel 2; CellTV)",
-            "ratio": "Δ(G/R) (CellTV)",
-        }
-    elif trace_kind == "safe_ratio":
-        column_titles = {
-            "green": "Green ΔF (channel 1)",
-            "red": "Red ΔF (channel 2)",
-            "ratio": "CellTV get_dff_GR Δ(G/R)",
-        }
-    else:
-        raise ValueError(f"Unknown trace kind: {trace_kind!r}")
+    column_titles = {
+        "green": "Green dF (channel 1; Suite2p baseline)",
+        "red": "Red dF (channel 2; Suite2p baseline)",
+    }
     figure, axes = plt.subplots(
-        len(selected), 3, figsize=(16, max(3.0, 2.35 * len(selected))), sharex=True
+        len(selected), 2, figsize=(12, max(3.0, 2.35 * len(selected))), sharex=True
     )
-    axes = np.asarray(axes).reshape(len(selected), 3)
+    axes = np.asarray(axes).reshape(len(selected), 2)
     start = int(frame_slice.start or 0)
-    for column, name in enumerate(("green", "red", "ratio")):
+    for column, name in enumerate(("green", "red")):
         sampled, step = decimated(traces[name][selected, frame_slice])
         time_minutes = (
             start + np.arange(sampled.shape[1]) * step + (step - 1) / 2
@@ -265,24 +164,17 @@ def plot_summary(
     axes[0, 1].axvline(0.5, color="#d43f3a", linestyle="--", linewidth=1)
     axes[0, 1].set(xlabel="Suite2p cell probability", ylabel="ROIs", title="Classification")
 
-    correlations = np.asarray([row["green_red_correlation"] for row in metrics])
     classified = iscell[:, 0] > 0.5
-    axes[1, 0].hist(correlations[np.isfinite(correlations)], bins=20, color="#7e57c2")
-    axes[1, 0].set(
-        xlabel="Correlation of neuropil-corrected G and R",
-        ylabel="ROIs",
-        title=f"Channel coupling ({classified.sum()} classified cells)",
-    )
-
-    floor_fraction = np.asarray(
-        [row["safe_ratio_red_floor_fraction"] for row in metrics]
-    )
-    axes[1, 1].hist(floor_fraction, bins=np.linspace(0, 1, 21), color="#e07a2f")
-    axes[1, 1].set(
-        xlabel="Fraction of frames using red denominator floor",
-        ylabel="ROIs",
-        title="CellTV G/R denominator-floor usage",
-    )
+    for axis, name in zip(axes[1], ("green", "red")):
+        activity = np.asarray(
+            [row[f"{name}_dff_robust_sigma"] for row in metrics]
+        )
+        axis.hist(activity[np.isfinite(activity)], bins=20, color=COLORS[name])
+        axis.set(
+            xlabel=f"{name.title()} dF robust sigma",
+            ylabel="ROIs",
+            title=f"{name.title()} activity ({classified.sum()} classified cells)",
+        )
     figure.tight_layout()
     figure.savefig(path, dpi=160)
     plt.close(figure)
@@ -290,40 +182,23 @@ def plot_summary(
 
 def metric_rows(
     signals: dict[str, np.ndarray],
-    celltv_delta: dict[str, np.ndarray],
-    safe_ratio: SafeRatioResult,
+    channel_dff: dict[str, np.ndarray],
     iscell: np.ndarray,
 ) -> list[dict[str, Any]]:
-    correlation_before = row_correlation(celltv_delta["green"], celltv_delta["red"])
-    ratio_red_correlation = row_correlation(
-        safe_ratio.delta_ratio, celltv_delta["red"]
-    )
     rows: list[dict[str, Any]] = []
     for roi in range(len(iscell)):
         row: dict[str, Any] = {
             "roi": roi,
             "iscell": int(iscell[roi, 0] > 0.5),
             "cell_probability": float(iscell[roi, 1]),
-            "green_red_correlation": float(correlation_before[roi]),
-            "safe_ratio_red_correlation": float(ratio_red_correlation[roi]),
-            "ratio_red_floor": float(signals["red_floor"][roi, 0]),
-            "ratio_red_floor_fraction": float(np.mean(signals["ratio_floor_mask"][roi])),
-            "safe_ratio_red_floor": float(safe_ratio.denominator_floor[roi]),
-            "safe_ratio_red_floor_fraction": float(safe_ratio.floor_fraction[roi]),
-            "safe_ratio_typical_red": float(safe_ratio.typical_red[roi]),
-            "safe_ratio_status": str(safe_ratio.status[roi]),
-            "safe_ratio_robust_sigma": float(
-                robust_sigma(safe_ratio.delta_ratio[roi : roi + 1])[0]
-            ),
-            "safe_ratio_p99": float(np.percentile(safe_ratio.delta_ratio[roi], 99)),
         }
-        for name in ("green", "red", "ratio"):
+        for name in ("green", "red"):
             row[f"{name}_corrected_median"] = float(np.median(signals[name][roi]))
-            row[f"{name}_celltv_delta_robust_sigma"] = float(
-                robust_sigma(celltv_delta[name][roi : roi + 1])[0]
+            row[f"{name}_dff_robust_sigma"] = float(
+                robust_sigma(channel_dff[name][roi : roi + 1])[0]
             )
-            row[f"{name}_celltv_delta_p99"] = float(
-                np.percentile(celltv_delta[name][roi], 99)
+            row[f"{name}_dff_p99"] = float(
+                np.percentile(channel_dff[name][roi], 99)
             )
         rows.append(row)
     return rows
@@ -347,27 +222,14 @@ def report_html(
         "<tr>"
         f"<td>{roi}</td>"
         f"<td>{selected_rows[int(roi)]['cell_probability']:.3f}</td>"
-        f"<td>{selected_rows[int(roi)]['green_red_correlation']:.3f}</td>"
-        f"<td>{selected_rows[int(roi)]['ratio_red_floor_fraction']:.3f}</td>"
-        f"<td>{selected_rows[int(roi)]['green_celltv_delta_robust_sigma']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['red_celltv_delta_robust_sigma']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['ratio_celltv_delta_robust_sigma']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['safe_ratio_red_floor']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['safe_ratio_red_floor_fraction']:.3g}</td>"
-        f"<td>{selected_rows[int(roi)]['safe_ratio_robust_sigma']:.3g}</td>"
-        f"<td>{html.escape(str(selected_rows[int(roi)]['safe_ratio_status']))}</td>"
+        f"<td>{selected_rows[int(roi)]['green_dff_robust_sigma']:.3g}</td>"
+        f"<td>{selected_rows[int(roi)]['green_dff_p99']:.3g}</td>"
+        f"<td>{selected_rows[int(roi)]['red_dff_robust_sigma']:.3g}</td>"
+        f"<td>{selected_rows[int(roi)]['red_dff_p99']:.3g}</td>"
         "</tr>"
         for roi in selected
     )
     n_cells = sum(row["iscell"] for row in metrics)
-    classified_rows = [row for row in metrics if row["iscell"]]
-    summary_rows = classified_rows or metrics
-    median_correlation = float(np.median([row["green_red_correlation"] for row in summary_rows]))
-    safe_count = sum(row["safe_ratio_status"] == "ok" for row in summary_rows)
-    nonfinite_count = sum(
-        row["safe_ratio_status"] != "ok" for row in summary_rows
-    )
-    unstable_ratio_count = sum(row["ratio_red_floor_fraction"] > 0.05 for row in summary_rows)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>Trace extraction QC</title>
 <style>body{{font:15px system-ui,sans-serif;max-width:1200px;margin:2rem auto;padding:0 1rem;color:#222}}
@@ -380,36 +242,19 @@ code{{background:#f2f2f2;padding:.1rem .3rem}} .note{{background:#eef6ff;padding
 <b>ROIs:</b> {len(metrics)}; <b>classified cells:</b> {n_cells};
 <b>frames:</b> {settings['n_frames']}; <b>sampling:</b> {settings['fs']:.3g} Hz</p>
 <div class="note"><b>Calculation.</b> Green and red are corrected as <code>F − {settings['neucoeff']:.3g} × Fneu</code>.
-The red trace alone is median-filtered over {settings['red_kernel_frames']} frames before G/R, matching
-<code>get_dff_GR</code>. Its denominator is floored at each ROI's fifth percentile or 1e−3, whichever is larger.
-The <b>CellTV-style</b> plots show <code>signal − F0</code>, exactly matching the baseline-subtracted output
-of Suite2p <code>preprocess</code> used by <code>get_dff</code> and <code>get_dff_GR</code>; despite historical
-naming, these are ΔF and are not divided by F0. The ratio reproduces the current CellTV
-<code>get_dff_GR</code>: use a 0.7 neuropil coefficient, smooth red with
-<code>scipy.signal.medfilt</code>, clamp red to the larger of its fifth percentile and 1e−3,
-divide green by that clamped red trace, then apply Suite2p preprocessing. No frames are
-interpolated and no low-red ROI is replaced by zero.</div>
+Each channel is then passed independently through Suite2p <code>dcnv.preprocess</code> using
+the baseline settings stored in <code>ops.npy</code>. The result is baseline-subtracted dF;
+no green/red ratio or reference-channel subtraction is calculated.</div>
 <h2>Overview</h2><img src="summary.png" alt="QC summary">
 <h2>Example classified cells</h2><p>Selected reproducibly by descending Suite2p cell probability,
 then green-trace robust activity—not by manual choice. Plot limits use each panel's 0.5–99.5th percentiles;
 traces are non-overlapping mean-binned to at most 1,500 points for display, and the CSV metrics use the
-unbinned traces. Classified-cell median G/R channel correlation is
-{median_correlation:.3f}. A finite CellTV ratio was produced for {safe_count}/{len(summary_rows)}
-classified cells; {nonfinite_count}/{len(summary_rows)} had non-finite input or output.
-The legacy ratio used its denominator floor in more than 5% of frames for
-{unstable_ratio_count}/{len(summary_rows)} cells.</p>
-<h3>Exact CellTV-style baseline-subtracted traces</h3>
-<p>These reproduce what the current CellTV functions return, although those functions call the result dF/F.</p>
-<img src="selected_cells_celltv_zoom.png" alt="CellTV-style selected cell trace zoom">
-<details><summary>Show full CellTV-style traces</summary><img src="selected_cells_celltv.png" alt="Full CellTV-style selected cell traces"></details>
-<h3>CellTV <code>get_dff_GR</code></h3>
-<p>Green and red use the Suite2p baseline-subtracted ΔF calculation for comparison. The third column is
-the fifth-percentile-floored, baseline-subtracted G/R ratio, with no interpolation.</p>
-<img src="selected_cells_safe_ratio_zoom.png" alt="CellTV G/R selected cell trace zoom">
-<details><summary>Show full CellTV G/R traces</summary><img src="selected_cells_safe_ratio.png" alt="Full CellTV G/R selected cell traces"></details>
-<h2>Selected-cell metrics</h2><table><thead><tr><th>ROI</th><th>p(cell)</th><th>corr(G,R)</th>
-<th>red floor fraction</th><th>CellTV green σ</th><th>CellTV red σ</th><th>CellTV ratio σ</th>
-<th>CellTV red floor</th><th>CellTV floor fraction</th><th>CellTV ratio σ</th><th>status</th></tr></thead><tbody>
+unbinned traces.</p>
+<h3>Independent channel baseline-subtracted traces</h3>
+<img src="selected_cells_channels_zoom.png" alt="Selected green and red trace zoom">
+<details><summary>Show full channel traces</summary><img src="selected_cells_channels.png" alt="Full green and red traces"></details>
+<h2>Selected-cell metrics</h2><table><thead><tr><th>ROI</th><th>p(cell)</th>
+<th>green dF σ</th><th>green dF p99</th><th>red dF σ</th><th>red dF p99</th></tr></thead><tbody>
 {table_rows}</tbody></table>
 <h2>Files</h2><ul><li><a href="trace_metrics.csv">trace_metrics.csv</a>: metrics for every ROI</li>
 <li><a href="calculation.json">calculation.json</a>: exact calculation settings and selected ROI indices</li></ul>
@@ -458,26 +303,16 @@ def generate_two_channel_qc(
     if not isinstance(dcnv, dict):
         dcnv = {}
 
-    signals = channel_signals(F, Fneu, F2, Fneu2, ops, neucoeff)
-    celltv_delta: dict[str, np.ndarray] = {
+    signals = channel_signals(F, Fneu, F2, Fneu2, neucoeff)
+    channel_dff: dict[str, np.ndarray] = {
         "green": compute_channel_delta(F, Fneu, ops, neucoeff),
         "red": compute_channel_delta(F2, Fneu2, ops, neucoeff),
     }
-    ratio_baseline = baseline(signals["ratio"], ops)
-    celltv_delta["ratio"] = (signals["ratio"] - ratio_baseline).astype(np.float32)
-    for name in ("green", "red", "ratio"):
-        if not np.all(np.isfinite(celltv_delta[name])):
-            raise RuntimeError(f"Non-finite values found in CellTV-style {name} ΔF")
-    safe_ratio = compute_celltv_ratio_delta(F, Fneu, F2, Fneu2, ops)
-    if not np.all(np.isfinite(safe_ratio.delta_ratio)):
-        raise RuntimeError("Non-finite values found in CellTV get_dff_GR output")
-    safe_ratio_traces = {
-        "green": celltv_delta["green"],
-        "red": celltv_delta["red"],
-        "ratio": safe_ratio.delta_ratio,
-    }
-    selected = select_rois(iscell, celltv_delta["green"], n_cells)
-    metrics = metric_rows(signals, celltv_delta, safe_ratio, iscell)
+    for name in ("green", "red"):
+        if not np.all(np.isfinite(channel_dff[name])):
+            raise RuntimeError(f"Non-finite values found in {name} dF")
+    selected = select_rois(iscell, channel_dff["green"], n_cells)
+    metrics = metric_rows(signals, channel_dff, iscell)
 
     output_dir.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=f".{output_dir.name}-", dir=output_dir.parent))
@@ -485,32 +320,23 @@ def generate_two_channel_qc(
         zoom_frames = min(F.shape[1], int(round(2.0 * 60.0 * float(ops["fs"]))))
         zoom_start = max(0, (F.shape[1] - zoom_frames) // 2)
         zoom_stop = zoom_start + zoom_frames
-        for trace_kind, traces in (("celltv", celltv_delta), ("safe_ratio", safe_ratio_traces)):
-            stem = "celltv" if trace_kind == "celltv" else "safe_ratio"
-            label = (
-                "CellTV-style ΔF"
-                if trace_kind == "celltv"
-                else "CellTV get_dff_GR"
-            )
-            plot_selected(
-                temporary / f"selected_cells_{stem}.png",
-                selected,
-                traces,
-                iscell,
-                float(ops["fs"]),
-                trace_kind,
-                title=f"Full session: {label}; y-axis robustly scaled per panel",
-            )
-            plot_selected(
-                temporary / f"selected_cells_{stem}_zoom.png",
-                selected,
-                traces,
-                iscell,
-                float(ops["fs"]),
-                trace_kind,
-                frame_slice=slice(zoom_start, zoom_stop),
-                title=f"Central two-minute window: {label}; y-axis robustly scaled per panel",
-            )
+        plot_selected(
+            temporary / "selected_cells_channels.png",
+            selected,
+            channel_dff,
+            iscell,
+            float(ops["fs"]),
+            title="Full session: independent green/red dF; y-axis robustly scaled per panel",
+        )
+        plot_selected(
+            temporary / "selected_cells_channels_zoom.png",
+            selected,
+            channel_dff,
+            iscell,
+            float(ops["fs"]),
+            frame_slice=slice(zoom_start, zoom_stop),
+            title="Central two-minute window: independent green/red dF; y-axis robustly scaled per panel",
+        )
         plot_summary(temporary / "summary.png", ops, stat, selected, iscell, metrics)
         write_csv(temporary / "trace_metrics.csv", metrics)
         settings = {
@@ -523,27 +349,10 @@ def generate_two_channel_qc(
             "win_baseline": float(ops.get("win_baseline", dcnv.get("win_baseline", 60.0))),
             "sig_baseline": float(ops.get("sig_baseline", dcnv.get("sig_baseline", 10.0))),
             "prctile_baseline": float(ops.get("prctile_baseline", dcnv.get("prctile_baseline", 8.0))),
-            "red_kernel_frames": int(signals["red_median_kernel_frames"]),
-            "red_ratio_floor_percentile": 5.0,
-            "red_ratio_absolute_floor": 1e-3,
             "selected_rois": selected.tolist(),
             "zoom_frame_range": [zoom_start, zoom_stop],
             "selection_rule": "iscell first; descending cell probability, green robust sigma, ROI index",
-            "celltv_formula": "signal - Suite2p baseline (matches dcnv.preprocess output)",
-            "safe_ratio": {
-                "method": "Exact CellTV get_dff_GR order",
-                "formula": "dcnv.preprocess((G - 0.7*Gneu) / max(medfilt(R - 0.7*Rneu), percentile_5, 1e-3))",
-                "neuropil_coefficient": 0.7,
-                "red_smoothing_seconds": 0.25,
-                "red_smoothing_kernel_frames": safe_ratio.smoothing_kernel_frames,
-                "red_smoothing_boundary": "scipy.signal.medfilt zero padding",
-                "floor_percentile": safe_ratio.floor_percentile,
-                "absolute_floor": safe_ratio.absolute_floor,
-                "status_counts": {
-                    str(name): int(np.sum(safe_ratio.status == name))
-                    for name in np.unique(safe_ratio.status)
-                },
-            },
+            "channel_formula": "dcnv.preprocess(F - neucoeff * Fneu) independently per channel",
         }
         (temporary / "calculation.json").write_text(
             json.dumps(settings, indent=2) + "\n", encoding="utf-8"
