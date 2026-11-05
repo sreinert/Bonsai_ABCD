@@ -29,6 +29,7 @@ export PYTHONPATH="${repo_root}${PYTHONPATH:+:${PYTHONPATH}}"
 export MPLBACKEND=Agg
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
+export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-4}"
 
 scratch_root=${SLURM_TMPDIR:-${TMPDIR:-/tmp}}
 export MPLCONFIGDIR="${scratch_root}/matplotlib-nwb-${SLURM_JOB_ID:-$$}-${SLURM_ARRAY_TASK_ID}"

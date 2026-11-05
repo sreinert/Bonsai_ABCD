@@ -58,7 +58,7 @@ fi
 export PYTHONNOUSERSITE=1
 export PYTHONPATH="${repo_root}${PYTHONPATH:+:${PYTHONPATH}}"
 "${python_executable}" - <<'PY'
-import importlib
+import importlib.util
 import sys
 
 if sys.version_info[:2] != (3, 12):
@@ -67,9 +67,10 @@ if sys.version_info[:2] != (3, 12):
         f"Python {sys.version.split()[0]}"
     )
 required = ("aeon", "h5py", "matplotlib", "neuroconv", "numpy", "pynwb", "scipy", "suite2p")
-for name in required:
-    importlib.import_module(name)
-print("Validated batch Python:", sys.executable)
+missing = [name for name in required if importlib.util.find_spec(name) is None]
+if missing:
+    raise RuntimeError(f"Required Python packages are not installed: {', '.join(missing)}")
+print("Validated batch Python and package availability:", sys.executable)
 PY
 
 manifest_root=${project_root}/analysis/cohort2/.nwb_barcoding_manifests

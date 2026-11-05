@@ -64,10 +64,11 @@ bash nwb_barcoding/hpc/submit_sequence_compression_batch.sh \
 ```
 
 The `Aimbot_barcoding` repository must be a sibling of this repository. The launcher
-validates Python 3.12 and all required imports before submitting anything. The subject may
-also be written as `07`. With only subject IDs supplied, every completed session belonging
-to those subjects is submitted. A different interpreter can be supplied after the optional
-session argument or through `PYTHON_EXECUTABLE`.
+checks Python 3.12 and required-package availability without importing scientific packages
+on the gateway node; full imports and processing happen inside the allocated Slurm job.
+The subject may also be written as `07`. With only subject IDs supplied, every completed
+session belonging to those subjects is submitted. A different interpreter can be supplied
+after the optional session argument or through `PYTHON_EXECUTABLE`.
 
 Alignment outputs are written to:
 
