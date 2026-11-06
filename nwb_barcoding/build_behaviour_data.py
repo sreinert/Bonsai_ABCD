@@ -121,8 +121,8 @@ def detect_rising_edges(signal, min_refractory_samples=5, height=1):
     n_merged = len(idx) - len(keep)
     if n_merged > 0:
         print(f"  merged {n_merged} event(s) detected within {min_refractory_samples} "
-              f"sample(s) of a preceding one (likely a multi-sample TTL rise, not a real "
-              f"second event)")
+              f"sample(s) of a preceding one (likely a multi-sample TTL rise or brief "
+              f"dropout/re-rise, not a real second event)")
     return np.array(keep)
 
 
@@ -212,7 +212,8 @@ def _atomic_csv(dataframe, path):
 
 
 def build_behaviour_data(raw_session_path, output_session_path, suite2p_plane_path,
-                          save_npz=True, save_csv=True, event_refractory_samples=5):
+                          save_npz=True, save_csv=True, event_refractory_samples=5,
+                          lick_refractory_samples=500):
     """Build behaviour_data.npz/.csv + valid_frames.npz for one session.
 
     :param raw_session_path: true rawdata session path (raw analog .bin, behav CSVs).
@@ -222,10 +223,13 @@ def build_behaviour_data(raw_session_path, output_session_path, suite2p_plane_pa
     :param suite2p_plane_path: suite2p plane folder holding spks.npy -- the SAME one
         used to build the funcimg NWB (see build_session_nwb.py's funcimg_source_session).
     :param event_refractory_samples: minimum analog-sample gap required between two
-        detected reward/lick/MODD1/MODD2 events for both to count (see
+        detected reward/MODD1/MODD2 events for both to count (see
         detect_rising_edges()) -- guards against a single slow/staircased TTL rise
-        being double-counted as two events. Default 5 samples (<1ms at ~9000Hz),
-        well under any physically real re-triggering interval for these channels.
+        being double-counted as two events. Default 5 samples (<1ms at ~9000Hz).
+    :param lick_refractory_samples: minimum analog-sample gap required between two
+        detected lick rising edges for both to count. Default 500 samples (~56ms at
+        ~9000Hz), which prevents a brief contact dropout and re-rise from being counted
+        as two physical licks while remaining shorter than a plausible inter-lick gap.
 
     Returns a dict of the key intermediates, reused by verify_behaviour_data.py so it
     doesn't have to redo this work.
@@ -284,7 +288,7 @@ def build_behaviour_data(raw_session_path, output_session_path, suite2p_plane_pa
                                            min_refractory_samples=event_refractory_samples)
     print("Detecting lick events...")
     raw_licks_idx = detect_rising_edges(remapped_analog_data['licks'].values,
-                                         min_refractory_samples=event_refractory_samples)
+                                         min_refractory_samples=lick_refractory_samples)
     print("Detecting MODD1 events...")
     raw_modd1_idx = detect_rising_edges(remapped_analog_data['modd1'].values,
                                          min_refractory_samples=event_refractory_samples)

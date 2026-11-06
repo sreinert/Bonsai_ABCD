@@ -216,10 +216,11 @@ def check_reward_positions_and_metrics(built, behav_data):
               f"npz ({npz_distance:.1f} cm).")
     if raw_licks_logged != npz_licks:
         _flag(flags, f"Total licks differ between the raw Bonsai 'Licks' column ({raw_licks_logged}) and "
-              f"npz ({npz_licks}) -- in a mouse 002/t3 case this turned out to be the raw-analog "
-              f"edge detector over-counting a multi-sample TTL rise as two events (now guarded "
-              f"against via detect_rising_edges()'s refractory merge in build_behaviour_data.py, "
-              f"see event_refractory_samples), not a Bonsai logging issue -- check that first.")
+              f"npz ({npz_licks}) -- the raw-analog edge detector can over-count a multi-sample "
+              f"TTL rise or a brief contact dropout and re-rise as two events (guarded against "
+              f"via detect_rising_edges()'s lick-specific refractory merge in "
+              f"build_behaviour_data.py; see lick_refractory_samples). Inspect the unmatched "
+              f"analog waveform before treating this as a Bonsai logging issue.")
     if npz_mean_speed > 0 and abs(raw_mean_speed - npz_mean_speed) / npz_mean_speed > 0.25:
         _flag(flags, f"Mean speed differs substantially between raw Treadmill ({raw_mean_speed:.2f} cm/s) "
               f"and npz derived speed ({npz_mean_speed:.2f} cm/s) -- confirm which is the intended "

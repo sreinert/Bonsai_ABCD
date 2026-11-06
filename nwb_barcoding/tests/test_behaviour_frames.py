@@ -1,8 +1,12 @@
+import inspect
+
 import numpy as np
 import pytest
 
 from nwb_barcoding.build_behaviour_data import (
     _atomic_savez,
+    build_behaviour_data,
+    detect_rising_edges,
     frame_bins_for_behaviour,
 )
 
@@ -33,4 +37,18 @@ def test_atomic_npz_uses_correct_pd2_key(tmp_path):
     with np.load(output) as saved:
         assert set(saved.files) == {"pd1", "pd2"}
     assert not (tmp_path / ".behaviour_data.npz.partial").exists()
+
+
+def test_lick_refractory_merges_brief_dropout_rerise():
+    signal = np.zeros(600)
+    signal[11:460] = 5
+    signal[474:] = 5
+
+    assert detect_rising_edges(signal, min_refractory_samples=5).tolist() == [10, 473]
+    assert detect_rising_edges(signal, min_refractory_samples=500).tolist() == [10]
+
+
+def test_build_behaviour_data_has_lick_specific_refractory_default():
+    parameter = inspect.signature(build_behaviour_data).parameters["lick_refractory_samples"]
+    assert parameter.default == 500
 
