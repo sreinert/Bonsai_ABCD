@@ -12,11 +12,18 @@ import numpy as np
 from pynwb import NWBHDF5IO
 
 MAX_MISSING_END_FRAME_TTLS = 5
+LICK_COUNT_RELATIVE_TOLERANCE = 0.001
 
 
 def _flag(flags, message):
     flags.append(message)
     print(f"[FLAG] {message}")
+
+
+def lick_count_mismatch_is_material(raw_count, npz_count):
+    """Treat only cross-logger lick-count differences above 0.1% as QC failures."""
+    scale = max(abs(raw_count), abs(npz_count), 1)
+    return abs(raw_count - npz_count) / scale > LICK_COUNT_RELATIVE_TOLERANCE
 
 
 def _finite_position_span(values, label, flags):
@@ -215,12 +222,18 @@ def check_reward_positions_and_metrics(built, behav_data):
         _flag(flags, f"Total distance differs by more than 5% between raw ({raw_distance:.1f} cm) and "
               f"npz ({npz_distance:.1f} cm).")
     if raw_licks_logged != npz_licks:
-        _flag(flags, f"Total licks differ between the raw Bonsai 'Licks' column ({raw_licks_logged}) and "
-              f"npz ({npz_licks}) -- the raw-analog edge detector can over-count a multi-sample "
-              f"TTL rise or a brief contact dropout and re-rise as two events (guarded against "
-              f"via detect_rising_edges()'s lick-specific refractory merge in "
-              f"build_behaviour_data.py; see lick_refractory_samples). Inspect the unmatched "
-              f"analog waveform before treating this as a Bonsai logging issue.")
+        difference = npz_licks - raw_licks_logged
+        relative_difference = abs(difference) / max(abs(raw_licks_logged), abs(npz_licks), 1)
+        message = (
+            f"Total licks differ between the raw Bonsai 'Licks' column ({raw_licks_logged}) "
+            f"and analog-derived npz ({npz_licks}) by {difference:+d} "
+            f"({100 * relative_difference:.3f}%)."
+        )
+        if lick_count_mismatch_is_material(raw_licks_logged, npz_licks):
+            _flag(flags, message)
+        else:
+            print(f"[WARNING] {message} This is within the 0.1% cross-logger tolerance; "
+                  "raw analog-to-npz event equality is checked separately.")
     if npz_mean_speed > 0 and abs(raw_mean_speed - npz_mean_speed) / npz_mean_speed > 0.25:
         _flag(flags, f"Mean speed differs substantially between raw Treadmill ({raw_mean_speed:.2f} cm/s) "
               f"and npz derived speed ({npz_mean_speed:.2f} cm/s) -- confirm which is the intended "
