@@ -220,7 +220,12 @@ def build_session_from_paths(subject, full_session_name, raw_session_path, suite
 
     scanimage_tif = select_scanimage_tif(raw_session_path, suite2p_plane_path)
     metadata_tif = resolve_scanimage_metadata_tif(scanimage_tif)
-    vdaq_h5 = resolve_vdaq_h5(scanimage_tif)
+    import numpy as np
+    suite2p_ops = np.load(suite2p_plane_path / "ops.npy", allow_pickle=True).item()
+    expected_frame_count = int(suite2p_ops["nframes"])
+    vdaq_h5 = resolve_vdaq_h5(
+        scanimage_tif, expected_frame_count=expected_frame_count
+    )
     output_session.mkdir(parents=True, exist_ok=True)
     (output_session / "funcimg").mkdir(parents=True, exist_ok=True)
     (output_session / "behav").mkdir(parents=True, exist_ok=True)

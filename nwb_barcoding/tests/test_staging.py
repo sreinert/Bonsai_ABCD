@@ -111,22 +111,45 @@ def test_cropped_tiff_requires_original_for_scanimage_metadata(tmp_path):
         staging.resolve_scanimage_metadata_tif(cropped)
 
 
-def test_cropped_tiff_prefers_unique_recovered_vdaq(tmp_path):
+def test_cropped_tiff_prefers_complete_original_vdaq(tmp_path, monkeypatch):
     cropped = tmp_path / "recording_cropped.tif"
     cropped.write_bytes(b"cropped")
-    damaged = tmp_path / "recording.h5"
-    damaged.write_bytes(b"damaged")
+    original = tmp_path / "recording.h5"
+    original.write_bytes(b"original")
     recovered = tmp_path / "recording_recovered_syncG1_upto_0534.h5"
     recovered.write_bytes(b"recovered")
+    counts = {original: 76_953, recovered: 44_538}
+    monkeypatch.setattr(staging, "_vdaq_frame_count", counts.__getitem__)
 
-    assert staging.resolve_vdaq_h5(cropped) == recovered
+    assert staging.resolve_vdaq_h5(cropped, expected_frame_count=76_953) == original
 
 
-def test_cropped_tiff_rejects_ambiguous_recovered_vdaq(tmp_path):
+def test_cropped_tiff_uses_recovery_when_original_is_unreadable(tmp_path, monkeypatch):
     cropped = tmp_path / "recording_cropped.tif"
     cropped.write_bytes(b"cropped")
-    (tmp_path / "recording_recovered_syncG1_upto_0520.h5").write_bytes(b"first")
-    (tmp_path / "recording_recovered_syncG1_upto_0534.h5").write_bytes(b"second")
+    original = tmp_path / "recording.h5"
+    original.write_bytes(b"damaged")
+    recovered = tmp_path / "recording_recovered_syncG1_upto_0860.h5"
+    recovered.write_bytes(b"recovered")
 
-    with pytest.raises(RuntimeError, match="Multiple recovered vDAQ recordings"):
-        staging.resolve_vdaq_h5(cropped)
+    def inspect(path):
+        if path == original:
+            raise OSError("corrupt chunk")
+        return 76_953
+
+    monkeypatch.setattr(staging, "_vdaq_frame_count", inspect)
+    assert staging.resolve_vdaq_h5(cropped, expected_frame_count=76_953) == recovered
+
+
+def test_cropped_tiff_rejects_truncated_recovery(tmp_path, monkeypatch):
+    cropped = tmp_path / "recording_cropped.tif"
+    cropped.write_bytes(b"cropped")
+    original = tmp_path / "recording.h5"
+    original.write_bytes(b"damaged")
+    recovered = tmp_path / "recording_recovered_syncG1_upto_0534.h5"
+    recovered.write_bytes(b"recovered")
+    counts = {original: 76_000, recovered: 44_538}
+    monkeypatch.setattr(staging, "_vdaq_frame_count", counts.__getitem__)
+
+    with pytest.raises(RuntimeError, match=r"76953 frames.*44538 FrameTTL onsets"):
+        staging.resolve_vdaq_h5(cropped, expected_frame_count=76_953)

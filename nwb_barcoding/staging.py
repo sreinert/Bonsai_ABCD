@@ -68,35 +68,73 @@ def select_scanimage_tif(raw_session, suite2p_plane_path):
     )
 
 
-def resolve_vdaq_h5(scanimage_tif):
-    """Resolve vDAQ data, preferring an explicitly recovered recording."""
+def _vdaq_frame_count(path):
+    """Read the timing datasets fully and count FrameTTL rising edges."""
+    import h5py
+    import numpy as np
+
+    with h5py.File(path, "r") as handle:
+        missing = {"FrameTTL", "SyncTTL"}.difference(handle.keys())
+        if missing:
+            raise KeyError(f"missing datasets {sorted(missing)}")
+        frame_ttl = np.asarray(handle["FrameTTL"])
+        # Reading SyncTTL is intentional: it verifies every compressed chunk now,
+        # before conversion fails much later while decoding barcodes.
+        np.asarray(handle["SyncTTL"])
+    if frame_ttl.size < 2:
+        return 0
+    return int(np.count_nonzero((frame_ttl[:-1] < 3.5) & (frame_ttl[1:] >= 3.5)))
+
+
+def resolve_vdaq_h5(scanimage_tif, expected_frame_count=None, frame_tolerance=5):
+    """Choose a readable vDAQ file whose FrameTTL count matches Suite2p.
+
+    The original recording is preferred when it is complete. Recovered files
+    are fallbacks only; their presence alone does not make them authoritative.
+    """
     scanimage_tif = Path(scanimage_tif)
     source_stem = scanimage_tif.stem
     if source_stem.lower().endswith("_cropped"):
         source_stem = source_stem[:-len("_cropped")]
 
+    original_candidates = [
+        scanimage_tif.with_name(source_stem + ".h5"),
+        scanimage_tif.with_suffix(".h5"),
+    ]
     recovered = sorted(
         scanimage_tif.parent.glob(f"{source_stem}_recovered_syncG*_upto_*.h5")
     )
-    if len(recovered) == 1:
-        return recovered[0]
-    if len(recovered) > 1:
-        raise RuntimeError(
-            f"Multiple recovered vDAQ recordings match {scanimage_tif}: "
-            f"{[path.name for path in recovered]}. Keep only the intended recovery "
-            "or select it explicitly in the pipeline."
+    candidates = []
+    for candidate in [*original_candidates, *recovered]:
+        if candidate.is_file() and candidate not in candidates:
+            candidates.append(candidate)
+    if not candidates:
+        raise FileNotFoundError(
+            f"No original or recovered vDAQ recording exists for {scanimage_tif}."
         )
 
-    candidates = [
-        scanimage_tif.with_suffix(".h5"),
-        scanimage_tif.with_name(source_stem + ".h5"),
-    ]
+    # Backward-compatible path for callers that only need filename pairing.
+    # The NWB builder always supplies Suite2p's frame count and gets full validation.
+    if expected_frame_count is None:
+        return candidates[0]
+
+    inspections = []
+    matches = []
     for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise FileNotFoundError(
-        f"Matching vDAQ recording does not exist for {scanimage_tif}; tried "
-        f"{[str(path) for path in candidates]}"
+        try:
+            frame_count = _vdaq_frame_count(candidate)
+            inspections.append(f"{candidate.name}: {frame_count} FrameTTL onsets")
+            if abs(frame_count - int(expected_frame_count)) <= frame_tolerance:
+                matches.append(candidate)
+        except Exception as exc:
+            inspections.append(f"{candidate.name}: unreadable ({type(exc).__name__}: {exc})")
+
+    if matches:
+        # Candidate order deliberately puts the original acquisition first.
+        return matches[0]
+    raise RuntimeError(
+        f"No readable vDAQ file matches Suite2p's {expected_frame_count} frames for "
+        f"{scanimage_tif.name}. Inspected: {'; '.join(inspections)}"
     )
 
 
