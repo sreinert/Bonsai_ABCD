@@ -51,7 +51,12 @@ from . import barcode_alignment as ba
 from . import verify_session
 from . import build_behaviour_data
 from . import verify_behaviour_data
-from .staging import staged_tracking_layout, stage_raw_funcimg
+from .staging import (
+    resolve_vdaq_h5,
+    select_scanimage_tif,
+    staged_tracking_layout,
+    stage_raw_funcimg,
+)
 
 
 def _resolve_session_from_tag(subject_dir: Path, session_tag: str) -> str:
@@ -212,20 +217,15 @@ def build_session_from_paths(subject, full_session_name, raw_session_path, suite
             f"Suite2p plane is incomplete at {suite2p_plane_path}; missing {missing}"
         )
 
-    raw_tifs = sorted(
-        p for p in (raw_session_path / "funcimg").glob("*.tif")
-        if not p.name.startswith("._")
-    )
-    if len(raw_tifs) != 1:
-        raise RuntimeError(
-            f"Expected exactly one ScanImage .tif in {raw_session_path / 'funcimg'}, "
-            f"found {[p.name for p in raw_tifs]} -- move test acquisitions into a subfolder."
-        )
+    scanimage_tif = select_scanimage_tif(raw_session_path, suite2p_plane_path)
+    vdaq_h5 = resolve_vdaq_h5(scanimage_tif)
     output_session.mkdir(parents=True, exist_ok=True)
     (output_session / "funcimg").mkdir(parents=True, exist_ok=True)
     (output_session / "behav").mkdir(parents=True, exist_ok=True)
 
     print(f"Raw session:      {raw_session_path}")
+    print(f"ScanImage source: {scanimage_tif}")
+    print(f"vDAQ source:      {vdaq_h5}")
     print(f"Suite2p source:   {suite2p_dir}")
     print(f"Output session:   {output_session}")
     n_steps = 7 if build_behaviour_data_files else 5
@@ -246,7 +246,7 @@ def build_session_from_paths(subject, full_session_name, raw_session_path, suite
         ) as tracking_root:
             print(f"\n=== Step 2/{n_steps}: funcimg NWB (suite2p + vDAQ TTLs) ===")
             raw_funcimg_view = stage_raw_funcimg(
-                raw_session_path, tracking_root, raw_tifs[0]
+                raw_session_path, tracking_root, scanimage_tif, vdaq_h5=vdaq_h5
             )
             with tempfile.TemporaryDirectory(
                 prefix=".partial-funcimg-", dir=output_session
@@ -260,6 +260,7 @@ def build_session_from_paths(subject, full_session_name, raw_session_path, suite
                     subject_id=subject,
                     session_id=full_session_name,
                     ophys_meta_filename="",
+                    vDAQ_file_path=raw_funcimg_view / "funcimg" / vdaq_h5.name,
                 )
                 _publish_build_files(partial / "funcimg", output_session / "funcimg")
 

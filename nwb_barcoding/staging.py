@@ -7,16 +7,93 @@ import tempfile
 from . import compute_dff
 
 
-def stage_raw_funcimg(raw_session, staging_root, scanimage_tif):
+TIFF_SUFFIXES = {".tif", ".tiff"}
+
+
+def _visible_tiffs(funcimg):
+    return sorted(
+        path for path in Path(funcimg).iterdir()
+        if path.is_file()
+        and not path.name.startswith("._")
+        and path.suffix.lower() in TIFF_SUFFIXES
+    )
+
+
+def select_scanimage_tif(raw_session, suite2p_plane_path):
+    """Select the TIFF recorded by Suite2p, including a cropped derivative.
+
+    A raw directory may legitimately contain both ``movie.tif`` and
+    ``movie_cropped.tif``.  In that case Suite2p's ``ops.npy`` is the source of
+    truth; guessing would risk combining traces from one movie with vDAQ timing
+    from another acquisition.
+    """
+    funcimg = Path(raw_session) / "funcimg"
+    tiffs = _visible_tiffs(funcimg)
+    if not tiffs:
+        raise FileNotFoundError(f"No ScanImage TIFF found in {funcimg}")
+    if len(tiffs) == 1:
+        return tiffs[0]
+
+    import numpy as np
+
+    ops_path = Path(suite2p_plane_path) / "ops.npy"
+    ops = np.load(ops_path, allow_pickle=True).item()
+    files_processed = ops.get("file_list", ops.get("filelist"))
+    if files_processed is None:
+        raise RuntimeError(
+            f"Found multiple ScanImage TIFFs in {funcimg}, but {ops_path} does not "
+            "record Suite2p's input file list. Cannot safely choose between "
+            f"{[path.name for path in tiffs]}."
+        )
+    processed = [
+        Path(value.decode() if isinstance(value, bytes) else str(value))
+        for value in files_processed
+    ]
+    if len(processed) != 1:
+        raise RuntimeError(
+            f"Suite2p processed {len(processed)} TIFFs ({[str(path) for path in processed]}); "
+            "the NWB pipeline requires exactly one acquisition."
+        )
+
+    processed_path = processed[0]
+    exact_matches = [path for path in tiffs if path.resolve() == processed_path.resolve()]
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    name_matches = [path for path in tiffs if path.name == processed_path.name]
+    if len(name_matches) == 1:
+        return name_matches[0]
+    raise RuntimeError(
+        f"Suite2p says it processed {processed_path}, but that TIFF is not one of "
+        f"{[path.name for path in tiffs]} in {funcimg}."
+    )
+
+
+def resolve_vdaq_h5(scanimage_tif):
+    """Resolve vDAQ data for a TIFF, falling back from ``*_cropped`` to its source."""
+    scanimage_tif = Path(scanimage_tif)
+    candidates = [scanimage_tif.with_suffix(".h5")]
+    if scanimage_tif.stem.lower().endswith("_cropped"):
+        source_stem = scanimage_tif.stem[:-len("_cropped")]
+        candidates.append(scanimage_tif.with_name(source_stem + ".h5"))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"Matching vDAQ recording does not exist for {scanimage_tif}; tried "
+        f"{[str(path) for path in candidates]}"
+    )
+
+
+def stage_raw_funcimg(raw_session, staging_root, scanimage_tif, vdaq_h5=None):
     """Create a minimal raw-session view containing one validated imaging acquisition."""
     raw_session = Path(raw_session)
     scanimage_tif = Path(scanimage_tif)
     source_funcimg = raw_session / "funcimg"
     if scanimage_tif.parent != source_funcimg:
         raise ValueError(f"TIFF {scanimage_tif} is not directly inside {source_funcimg}")
-    vdaq_h5 = scanimage_tif.with_suffix(".h5")
-    if not vdaq_h5.is_file():
-        raise FileNotFoundError(f"Matching vDAQ recording does not exist: {vdaq_h5}")
+    vdaq_h5 = Path(vdaq_h5) if vdaq_h5 is not None else resolve_vdaq_h5(scanimage_tif)
+    if vdaq_h5.parent != source_funcimg or not vdaq_h5.is_file():
+        raise FileNotFoundError(f"Resolved vDAQ recording is invalid: {vdaq_h5}")
 
     raw_view = Path(staging_root) / "rawdata"
     staged_funcimg = raw_view / "funcimg"
