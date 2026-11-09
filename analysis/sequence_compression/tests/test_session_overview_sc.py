@@ -322,6 +322,32 @@ def test_paired_behaviour_figures_use_raw_and_aligned_calculations(
     plt.close(sliding)
 
 
+def test_target_distractor_plots_are_unsupported_for_full_reward_sequences():
+    class FullSession:
+        sequence = "full"
+        reward_seq = np.zeros(9, dtype=int)
+
+    context = {
+        "raw_session": FullSession(),
+        "aligned_session": FullSession(),
+    }
+
+    assert not overview.supports_target_distractor_analysis(context)
+
+
+def test_target_distractor_plots_are_supported_for_a_b_sequences():
+    class ABSession:
+        sequence = "ABAB"
+        reward_seq = np.array([0, -1, 0, -1])
+
+    context = {
+        "raw_session": ABSession(),
+        "aligned_session": ABSession(),
+    }
+
+    assert overview.supports_target_distractor_analysis(context)
+
+
 def test_behaviour_alignment_plot_contains_four_comparison_panels(tmp_path):
     raw = pd.DataFrame(
         {

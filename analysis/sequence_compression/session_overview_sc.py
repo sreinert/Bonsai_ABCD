@@ -1353,6 +1353,25 @@ def plot_behaviour_sliding_performance(context, save_path=None):
     return fig
 
 
+def supports_target_distractor_analysis(context):
+    """Whether both paired sessions define an A/B discrimination sequence."""
+    supported_sequences = {"AABB", "ABBB", "ABAB", "ABB", "AAB"}
+    sessions = [
+        context.get("raw_session"),
+        context.get("aligned_session"),
+    ]
+    # Keep lightweight/mocked callers backward compatible; production contexts
+    # always contain both sessions.
+    if any(session is None for session in sessions):
+        return True
+    return all(
+        session.sequence in supported_sequences
+        and np.any(np.asarray(session.reward_seq) == 0)
+        and np.any(np.asarray(session.reward_seq) == -1)
+        for session in sessions
+    )
+
+
 def remove_legacy_overview_plots(save_dir):
     """Remove only known outputs from previous overview implementations."""
     save_dir = Path(save_dir)
@@ -1542,17 +1561,37 @@ def run_overview(
     print(
         f"Plot {behaviour_start + 2}/{n_plots}: raw/aligned transition matrices..."
     )
-    figures["behaviour_transition_matrix"] = (
-        plot_behaviour_transition_comparison(
-            context, save_path=output_path(BEHAVIOUR_OUTPUT_NAMES[2][:-4])
+    if supports_target_distractor_analysis(context):
+        figures["behaviour_transition_matrix"] = (
+            plot_behaviour_transition_comparison(
+                context, save_path=output_path(BEHAVIOUR_OUTPUT_NAMES[2][:-4])
+            )
         )
-    )
+    else:
+        print(
+            "  skipping plot: this session has no A/B target–distractor "
+            "sequence"
+        )
+        figures["behaviour_transition_matrix"] = None
+        skipped_output = output_path(BEHAVIOUR_OUTPUT_NAMES[2][:-4])
+        if skipped_output:
+            Path(skipped_output).unlink(missing_ok=True)
     print(
         f"Plot {behaviour_start + 3}/{n_plots}: raw/aligned sliding performance..."
     )
-    figures["behaviour_sliding_performance"] = plot_behaviour_sliding_performance(
-        context, save_path=output_path(BEHAVIOUR_OUTPUT_NAMES[3][:-4])
-    )
+    if supports_target_distractor_analysis(context):
+        figures["behaviour_sliding_performance"] = plot_behaviour_sliding_performance(
+            context, save_path=output_path(BEHAVIOUR_OUTPUT_NAMES[3][:-4])
+        )
+    else:
+        print(
+            "  skipping plot: hit/false-alarm performance requires both "
+            "target and distractor landmarks"
+        )
+        figures["behaviour_sliding_performance"] = None
+        skipped_output = output_path(BEHAVIOUR_OUTPUT_NAMES[3][:-4])
+        if skipped_output:
+            Path(skipped_output).unlink(missing_ok=True)
 
     if save_dir:
         remove_legacy_overview_plots(save_dir)
