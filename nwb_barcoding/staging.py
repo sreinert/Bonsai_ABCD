@@ -69,17 +69,63 @@ def select_scanimage_tif(raw_session, suite2p_plane_path):
 
 
 def resolve_vdaq_h5(scanimage_tif):
-    """Resolve vDAQ data for a TIFF, falling back from ``*_cropped`` to its source."""
+    """Resolve vDAQ data, preferring an explicitly recovered recording."""
     scanimage_tif = Path(scanimage_tif)
-    candidates = [scanimage_tif.with_suffix(".h5")]
-    if scanimage_tif.stem.lower().endswith("_cropped"):
-        source_stem = scanimage_tif.stem[:-len("_cropped")]
-        candidates.append(scanimage_tif.with_name(source_stem + ".h5"))
+    source_stem = scanimage_tif.stem
+    if source_stem.lower().endswith("_cropped"):
+        source_stem = source_stem[:-len("_cropped")]
+
+    recovered = sorted(
+        scanimage_tif.parent.glob(f"{source_stem}_recovered_syncG*_upto_*.h5")
+    )
+    if len(recovered) == 1:
+        return recovered[0]
+    if len(recovered) > 1:
+        raise RuntimeError(
+            f"Multiple recovered vDAQ recordings match {scanimage_tif}: "
+            f"{[path.name for path in recovered]}. Keep only the intended recovery "
+            "or select it explicitly in the pipeline."
+        )
+
+    candidates = [
+        scanimage_tif.with_suffix(".h5"),
+        scanimage_tif.with_name(source_stem + ".h5"),
+    ]
     for candidate in candidates:
         if candidate.is_file():
             return candidate
     raise FileNotFoundError(
         f"Matching vDAQ recording does not exist for {scanimage_tif}; tried "
+        f"{[str(path) for path in candidates]}"
+    )
+
+
+def resolve_scanimage_metadata_tif(scanimage_tif):
+    """Use the uncropped source TIFF when a crop has lost ScanImage metadata.
+
+    The NWB conversion does not embed the raw movie, but Aimbot still opens one
+    TIFF to read its ScanImage header. Rewritten recovery TIFFs commonly lose
+    that private metadata, while their source TIFF remains the correct metadata
+    companion for the Suite2p traces.
+    """
+    scanimage_tif = Path(scanimage_tif)
+    if not scanimage_tif.stem.lower().endswith("_cropped"):
+        return scanimage_tif
+
+    source_stem = scanimage_tif.stem[:-len("_cropped")]
+    candidates = [
+        scanimage_tif.with_name(source_stem + scanimage_tif.suffix),
+        *(
+            scanimage_tif.with_name(source_stem + suffix)
+            for suffix in sorted(TIFF_SUFFIXES.difference({scanimage_tif.suffix.lower()}))
+        ),
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"The cropped Suite2p input {scanimage_tif} has no uncropped TIFF available "
+        "for ScanImage metadata; tried "
         f"{[str(path) for path in candidates]}"
     )
 

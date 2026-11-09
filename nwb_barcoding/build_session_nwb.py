@@ -52,6 +52,7 @@ from . import verify_session
 from . import build_behaviour_data
 from . import verify_behaviour_data
 from .staging import (
+    resolve_scanimage_metadata_tif,
     resolve_vdaq_h5,
     select_scanimage_tif,
     staged_tracking_layout,
@@ -218,13 +219,15 @@ def build_session_from_paths(subject, full_session_name, raw_session_path, suite
         )
 
     scanimage_tif = select_scanimage_tif(raw_session_path, suite2p_plane_path)
+    metadata_tif = resolve_scanimage_metadata_tif(scanimage_tif)
     vdaq_h5 = resolve_vdaq_h5(scanimage_tif)
     output_session.mkdir(parents=True, exist_ok=True)
     (output_session / "funcimg").mkdir(parents=True, exist_ok=True)
     (output_session / "behav").mkdir(parents=True, exist_ok=True)
 
     print(f"Raw session:      {raw_session_path}")
-    print(f"ScanImage source: {scanimage_tif}")
+    print(f"Suite2p TIFF:     {scanimage_tif}")
+    print(f"ScanImage header: {metadata_tif}")
     print(f"vDAQ source:      {vdaq_h5}")
     print(f"Suite2p source:   {suite2p_dir}")
     print(f"Output session:   {output_session}")
@@ -246,7 +249,7 @@ def build_session_from_paths(subject, full_session_name, raw_session_path, suite
         ) as tracking_root:
             print(f"\n=== Step 2/{n_steps}: funcimg NWB (suite2p + vDAQ TTLs) ===")
             raw_funcimg_view = stage_raw_funcimg(
-                raw_session_path, tracking_root, scanimage_tif, vdaq_h5=vdaq_h5
+                raw_session_path, tracking_root, metadata_tif, vdaq_h5=vdaq_h5
             )
             with tempfile.TemporaryDirectory(
                 prefix=".partial-funcimg-", dir=output_session

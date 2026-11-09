@@ -87,14 +87,46 @@ def test_cropped_tiff_uses_original_vdaq_and_stages_both(tmp_path):
     raw_session = tmp_path / "raw" / "session"
     funcimg = raw_session / "funcimg"
     funcimg.mkdir(parents=True)
+    original = funcimg / "recording.tif"
+    original.write_bytes(b"original with ScanImage metadata")
     cropped = funcimg / "recording_cropped.tif"
     cropped.write_bytes(b"cropped")
     original_h5 = funcimg / "recording.h5"
     original_h5.write_bytes(b"h5")
 
+    assert staging.resolve_scanimage_metadata_tif(cropped) == original
     assert staging.resolve_vdaq_h5(cropped) == original_h5
-    view = staging.stage_raw_funcimg(raw_session, tmp_path / "stage", cropped)
+    view = staging.stage_raw_funcimg(raw_session, tmp_path / "stage", original)
     assert sorted(path.name for path in (view / "funcimg").iterdir()) == [
         "recording.h5",
-        "recording_cropped.tif",
+        "recording.tif",
     ]
+
+
+def test_cropped_tiff_requires_original_for_scanimage_metadata(tmp_path):
+    cropped = tmp_path / "recording_cropped.tif"
+    cropped.write_bytes(b"cropped")
+
+    with pytest.raises(FileNotFoundError, match="no uncropped TIFF"):
+        staging.resolve_scanimage_metadata_tif(cropped)
+
+
+def test_cropped_tiff_prefers_unique_recovered_vdaq(tmp_path):
+    cropped = tmp_path / "recording_cropped.tif"
+    cropped.write_bytes(b"cropped")
+    damaged = tmp_path / "recording.h5"
+    damaged.write_bytes(b"damaged")
+    recovered = tmp_path / "recording_recovered_syncG1_upto_0534.h5"
+    recovered.write_bytes(b"recovered")
+
+    assert staging.resolve_vdaq_h5(cropped) == recovered
+
+
+def test_cropped_tiff_rejects_ambiguous_recovered_vdaq(tmp_path):
+    cropped = tmp_path / "recording_cropped.tif"
+    cropped.write_bytes(b"cropped")
+    (tmp_path / "recording_recovered_syncG1_upto_0520.h5").write_bytes(b"first")
+    (tmp_path / "recording_recovered_syncG1_upto_0534.h5").write_bytes(b"second")
+
+    with pytest.raises(RuntimeError, match="Multiple recovered vDAQ recordings"):
+        staging.resolve_vdaq_h5(cropped)
