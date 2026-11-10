@@ -62,7 +62,7 @@ class Suite2pStatus:
     trace_extraction: bool
     number_of_rois: int | None
     number_of_cells: int | None
-    iscell_updated_after_stat: bool | None
+    iscell_updated_after_db: bool | None
     automatic_roi_detection_model: str | None
 
 
@@ -127,13 +127,13 @@ def all_nonempty_files(directory: Path, names: Iterable[str]) -> bool:
     )
 
 
-def iscell_newer_than_stat(plane: Path) -> bool | None:
-    """Compare iscell.npy and stat.npy modification timestamps when both exist."""
+def iscell_newer_than_db(plane: Path) -> bool | None:
+    """Compare iscell.npy with the immutable registration database timestamp."""
     iscell_path = plane / "iscell.npy"
-    stat_path = plane / "stat.npy"
-    if not iscell_path.is_file() or not stat_path.is_file():
+    db_path = plane / "db.npy"
+    if not iscell_path.is_file() or not db_path.is_file():
         return None
-    return iscell_path.stat().st_mtime_ns > stat_path.stat().st_mtime_ns
+    return iscell_path.stat().st_mtime_ns > db_path.stat().st_mtime_ns
 
 
 def model_name_from_metadata(value: object) -> str | None:
@@ -219,7 +219,7 @@ def inspect_suite2p(
 
     plane = suite2p_path / "plane0"
     detection_model = automatic_detection_model(suite2p_path, processed_session_path)
-    iscell_updated_after_stat = iscell_newer_than_stat(plane)
+    iscell_updated_after_db = iscell_newer_than_db(plane)
     if not plane.is_dir():
         return Suite2pStatus(
             True,
@@ -228,7 +228,7 @@ def inspect_suite2p(
             False,
             None,
             None,
-            iscell_updated_after_stat,
+            iscell_updated_after_db,
             detection_model,
         )
 
@@ -270,7 +270,7 @@ def inspect_suite2p(
         trace_extraction,
         number_of_rois,
         number_of_cells,
-        iscell_updated_after_stat,
+        iscell_updated_after_db,
         detection_model,
     )
 
@@ -345,12 +345,11 @@ def inspect_downstream_outputs(
     alignment_performed = bool(alignment_files) and iscell_path.is_file()
     latest_alignment_mtime: int | None = None
     if alignment_performed:
-        latest_alignment_mtime = max(
+        alignment_mtimes = tuple(
             path.stat().st_mtime_ns for path in alignment_files
         )
-        alignment_performed = (
-            latest_alignment_mtime > iscell_path.stat().st_mtime_ns
-        )
+        latest_alignment_mtime = max(alignment_mtimes)
+        alignment_performed = min(alignment_mtimes) > iscell_path.stat().st_mtime_ns
 
     analysis_session = (
         project_root / "analysis" / "cohort2" / mouse_id / full_session_name
@@ -367,8 +366,14 @@ def inspect_downstream_outputs(
         and max(path.stat().st_mtime_ns for path in overview_outputs)
         > latest_alignment_mtime
     )
-    valid_neurons = count_valid_neurons(
-        aligned_session / "funcimg" / "valid_neurons.npy"
+    valid_neurons_path = aligned_session / "funcimg" / "valid_neurons.npy"
+    valid_neurons = (
+        count_valid_neurons(valid_neurons_path)
+        if session_overview_completed
+        and latest_alignment_mtime is not None
+        and valid_neurons_path.is_file()
+        and valid_neurons_path.stat().st_mtime_ns > latest_alignment_mtime
+        else None
     )
     return DownstreamStatus(
         alignment_performed=alignment_performed,
@@ -441,9 +446,9 @@ def inventory_mouse(
                 ),
                 "iscell_updated": (
                     ""
-                    if status.iscell_updated_after_stat is None
+                    if status.iscell_updated_after_db is None
                     else "yes"
-                    if status.iscell_updated_after_stat
+                    if status.iscell_updated_after_db
                     else "no"
                 ),
                 "alignment_performed": (

@@ -129,8 +129,19 @@ def load_reviewed_detection(
     return stat, status
 
 
-def promote_output_bundle(output_dir: Path, arrays: dict[str, Any]) -> None:
+def promote_output_bundle(
+    output_dir: Path,
+    arrays: dict[str, Any],
+    *,
+    preserved_mtimes_ns: dict[str, int] | None = None,
+) -> None:
     """Stage, validate, and promote one complete Suite2p output bundle."""
+    preserved_mtimes_ns = preserved_mtimes_ns or {}
+    unknown_names = preserved_mtimes_ns.keys() - arrays.keys()
+    if unknown_names:
+        raise ValueError(
+            f"Cannot preserve timestamps for unknown outputs: {sorted(unknown_names)}"
+        )
     output_dir.mkdir(parents=True, exist_ok=True)
     temporary = Path(
         tempfile.mkdtemp(prefix=".trace-output-", dir=output_dir.parent)
@@ -153,6 +164,9 @@ def promote_output_bundle(output_dir: Path, arrays: dict[str, Any]) -> None:
                 os.replace(target, backup)
                 replaced.append((target, backup))
             os.replace(staged / name, target)
+            if name in preserved_mtimes_ns:
+                mtime_ns = preserved_mtimes_ns[name]
+                os.utime(target, ns=(mtime_ns, mtime_ns))
             promoted.append(target)
     except BaseException:
         for target in reversed(promoted):
@@ -441,8 +455,11 @@ def main() -> None:
             roi["std"] = float(standard_deviation[index])
 
         classification_started = time.time()
+        preserved_mtimes_ns: dict[str, int] = {}
         if args.iscell_path is not None:
-            iscell = np.load(args.iscell_path.resolve())
+            iscell_source = args.iscell_path.resolve()
+            preserved_mtimes_ns["iscell.npy"] = iscell_source.stat().st_mtime_ns
+            iscell = np.load(iscell_source)
             if iscell.shape != (len(stat), 2):
                 raise RuntimeError(
                     f"Preserved iscell has shape {iscell.shape}; expected "
@@ -510,6 +527,7 @@ def main() -> None:
                 "stat.npy": stat,
                 "ops.npy": ops,
             },
+            preserved_mtimes_ns=preserved_mtimes_ns,
         )
 
         finished = time.time()

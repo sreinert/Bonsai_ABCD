@@ -32,6 +32,7 @@ def save_complete_suite2p(processed_session: Path) -> None:
     plane = processed_session / "suite2p" / "plane0"
     plane.mkdir(parents=True)
     np.save(plane / "ops.npy", {"nframes": 10})
+    np.save(plane / "db.npy", {"nframes": 10})
     (plane / "data.bin").write_bytes(b"registered")
     np.save(plane / "stat.npy", np.asarray([{"id": 0}, {"id": 1}], dtype=object))
     np.save(plane / "F.npy", np.ones((2, 4)))
@@ -39,6 +40,10 @@ def save_complete_suite2p(processed_session: Path) -> None:
     np.save(plane / "spks.npy", np.ones((2, 4)))
     np.save(plane / "iscell.npy", np.asarray([[1, 0.9], [0, 0.1]]))
     base_time = 1_700_000_000_000_000_000
+    os.utime(
+        plane / "db.npy",
+        ns=(base_time - 1_000_000_000, base_time - 1_000_000_000),
+    )
     os.utime(plane / "stat.npy", ns=(base_time, base_time))
     os.utime(
         plane / "iscell.npy",
@@ -181,7 +186,7 @@ def test_funcimg_reports_direct_visible_h5_file(tmp_path: Path) -> None:
     assert row["h5_files_present"] == "yes"
 
 
-def test_iscell_update_status_compares_stat_mtime(
+def test_iscell_update_status_compares_db_mtime(
     tmp_path: Path,
 ) -> None:
     raw_root = tmp_path / "rawdata" / "cohort2"
@@ -192,11 +197,12 @@ def test_iscell_update_status_compares_stat_mtime(
     plane.mkdir(parents=True)
     np.save(plane / "iscell.npy", np.asarray([[1, 0.9]]))
     np.save(plane / "stat.npy", np.asarray([{"id": 0}], dtype=object))
+    np.save(plane / "db.npy", {"nframes": 10})
 
     base_time = 1_700_000_000_000_000_000
     os.utime(plane / "iscell.npy", ns=(base_time, base_time))
     os.utime(
-        plane / "stat.npy",
+        plane / "db.npy",
         ns=(base_time + 2_000, base_time + 2_000),
     )
 
@@ -284,12 +290,53 @@ def test_alignment_overview_and_valid_neuron_status_use_timestamps(
         overview,
         ns=(base_time + 2_000_000_000, base_time + 2_000_000_000),
     )
+    os.utime(
+        aligned_funcimg / "valid_neurons.npy",
+        ns=(base_time + 2_000_000_000, base_time + 2_000_000_000),
+    )
 
     [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-11")
 
     assert row["alignment_performed"] == "yes"
     assert row["session_overview_completed"] == "yes"
     assert row["number_of_valid_neurons"] == 3
+
+
+def test_one_stale_alignment_product_makes_alignment_incomplete(
+    tmp_path: Path,
+) -> None:
+    raw_root = tmp_path / "rawdata" / "cohort2"
+    processed_root = tmp_path / "processed" / "cohort2"
+    session_name = "ses-mixed_date-20261012"
+    make_session(raw_root, "sub-13", session_name)
+    processed_session = processed_root / "sub-13" / session_name
+    save_complete_suite2p(processed_session)
+
+    aligned = (
+        tmp_path / "BehaviourAligned_robust" / "cohort2" / "sub-13" / session_name
+    )
+    aligned.mkdir(parents=True)
+    alignment_files = (
+        aligned / "vrabcd_2p_preprocessed_test.nwb",
+        aligned / "behaviour_data.npz",
+        aligned / "valid_frames.npz",
+    )
+    for path in alignment_files:
+        path.touch()
+
+    base_time = 1_700_000_000_000_000_000
+    os.utime(
+        processed_session / "suite2p" / "plane0" / "iscell.npy",
+        ns=(base_time, base_time),
+    )
+    os.utime(alignment_files[0], ns=(base_time - 1_000, base_time - 1_000))
+    for path in alignment_files[1:]:
+        os.utime(path, ns=(base_time + 1_000, base_time + 1_000))
+
+    [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-13")
+
+    assert row["alignment_performed"] == "no"
+    assert row["session_overview_completed"] == "no"
 
 
 def test_stale_alignment_and_overview_report_no(tmp_path: Path) -> None:

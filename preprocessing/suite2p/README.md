@@ -146,9 +146,10 @@ non-hidden `.tif` or `.tiff` file and `no` when the `funcimg` directory is empty
 or contains no TIFF files. Sessions without TIFF files remain in the inventory.
 `h5_files_present` similarly reports whether `funcimg` contains at least one
 direct, non-hidden `.h5` file (case-insensitive).
-`iscell_updated` compares the modification times of `iscell.npy` and `stat.npy`.
+`iscell_updated` compares the modification times of `iscell.npy` and the
+registration database `db.npy`.
 It reports `yes` only when `iscell.npy` is
-strictly newer than `stat.npy`, `no` when both exist but it is not newer, and is
+strictly newer than `db.npy`, `no` when both exist but it is not newer, and is
 blank when either file is missing.
 `automatic_roi_detection_model` reads the recorded automatic detection
 provenance and reports `cpsam` or `cpsam_v2`. It is blank when no supported
@@ -156,12 +157,13 @@ automatic model can be identified; manual GUI segmentation alone does not set
 this field.
 `alignment_performed` is `yes` when the full session under
 `BehaviourAligned_robust/cohort2` contains one merged NWB plus
-`behaviour_data.npz` and `valid_frames.npz`, and the newest of those alignment
+`behaviour_data.npz` and `valid_frames.npz`, and every one of those alignment
 files is newer than `suite2p/plane0/iscell.npy`. `session_overview_completed` is
 `yes` when the full-session folder under `analysis/cohort2` contains a PNG newer
 than the newest alignment file. `number_of_valid_neurons` is the length of
-`BehaviourAligned_robust/.../funcimg/valid_neurons.npy`, or blank if that file is
-missing or invalid.
+`BehaviourAligned_robust/.../funcimg/valid_neurons.npy` when the overview is
+current and that file is newer than every alignment product; otherwise it is
+blank.
 
 ## Import a reviewed Cellpose segmentation
 
