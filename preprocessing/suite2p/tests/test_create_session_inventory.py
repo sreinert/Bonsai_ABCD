@@ -32,7 +32,6 @@ def save_complete_suite2p(processed_session: Path) -> None:
     plane = processed_session / "suite2p" / "plane0"
     plane.mkdir(parents=True)
     np.save(plane / "ops.npy", {"nframes": 10})
-    np.save(plane / "db.npy", {"nframes": 10})
     (plane / "data.bin").write_bytes(b"registered")
     np.save(plane / "stat.npy", np.asarray([{"id": 0}, {"id": 1}], dtype=object))
     np.save(plane / "F.npy", np.ones((2, 4)))
@@ -40,10 +39,6 @@ def save_complete_suite2p(processed_session: Path) -> None:
     np.save(plane / "spks.npy", np.ones((2, 4)))
     np.save(plane / "iscell.npy", np.asarray([[1, 0.9], [0, 0.1]]))
     base_time = 1_700_000_000_000_000_000
-    os.utime(
-        plane / "db.npy",
-        ns=(base_time - 1_000_000_000, base_time - 1_000_000_000),
-    )
     os.utime(plane / "stat.npy", ns=(base_time, base_time))
     os.utime(
         plane / "iscell.npy",
@@ -186,7 +181,7 @@ def test_funcimg_reports_direct_visible_h5_file(tmp_path: Path) -> None:
     assert row["h5_files_present"] == "yes"
 
 
-def test_iscell_update_status_compares_db_mtime(
+def test_iscell_update_status_compares_stat_mtime(
     tmp_path: Path,
 ) -> None:
     raw_root = tmp_path / "rawdata" / "cohort2"
@@ -197,12 +192,11 @@ def test_iscell_update_status_compares_db_mtime(
     plane.mkdir(parents=True)
     np.save(plane / "iscell.npy", np.asarray([[1, 0.9]]))
     np.save(plane / "stat.npy", np.asarray([{"id": 0}], dtype=object))
-    np.save(plane / "db.npy", {"nframes": 10})
 
     base_time = 1_700_000_000_000_000_000
     os.utime(plane / "iscell.npy", ns=(base_time, base_time))
     os.utime(
-        plane / "db.npy",
+        plane / "stat.npy",
         ns=(base_time + 2_000, base_time + 2_000),
     )
 

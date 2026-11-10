@@ -146,10 +146,10 @@ non-hidden `.tif` or `.tiff` file and `no` when the `funcimg` directory is empty
 or contains no TIFF files. Sessions without TIFF files remain in the inventory.
 `h5_files_present` similarly reports whether `funcimg` contains at least one
 direct, non-hidden `.h5` file (case-insensitive).
-`iscell_updated` compares the modification times of `iscell.npy` and the
-registration database `db.npy`.
+`iscell_updated` compares the modification times of `iscell.npy` and
+`stat.npy`.
 It reports `yes` only when `iscell.npy` is
-strictly newer than `db.npy`, `no` when both exist but it is not newer, and is
+strictly newer than `stat.npy`, `no` when both exist but it is not newer, and is
 blank when either file is missing.
 `automatic_roi_detection_model` reads the recorded automatic detection
 provenance and reports `cpsam` or `cpsam_v2`. It is blank when no supported

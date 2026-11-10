@@ -62,7 +62,7 @@ class Suite2pStatus:
     trace_extraction: bool
     number_of_rois: int | None
     number_of_cells: int | None
-    iscell_updated_after_db: bool | None
+    iscell_updated_after_stat: bool | None
     automatic_roi_detection_model: str | None
 
 
@@ -127,13 +127,13 @@ def all_nonempty_files(directory: Path, names: Iterable[str]) -> bool:
     )
 
 
-def iscell_newer_than_db(plane: Path) -> bool | None:
-    """Compare iscell.npy with the immutable registration database timestamp."""
+def iscell_newer_than_stat(plane: Path) -> bool | None:
+    """Compare iscell.npy with the most recent stat.npy update."""
     iscell_path = plane / "iscell.npy"
-    db_path = plane / "db.npy"
-    if not iscell_path.is_file() or not db_path.is_file():
+    stat_path = plane / "stat.npy"
+    if not iscell_path.is_file() or not stat_path.is_file():
         return None
-    return iscell_path.stat().st_mtime_ns > db_path.stat().st_mtime_ns
+    return iscell_path.stat().st_mtime_ns > stat_path.stat().st_mtime_ns
 
 
 def model_name_from_metadata(value: object) -> str | None:
@@ -219,7 +219,7 @@ def inspect_suite2p(
 
     plane = suite2p_path / "plane0"
     detection_model = automatic_detection_model(suite2p_path, processed_session_path)
-    iscell_updated_after_db = iscell_newer_than_db(plane)
+    iscell_updated_after_stat = iscell_newer_than_stat(plane)
     if not plane.is_dir():
         return Suite2pStatus(
             True,
@@ -228,7 +228,7 @@ def inspect_suite2p(
             False,
             None,
             None,
-            iscell_updated_after_db,
+            iscell_updated_after_stat,
             detection_model,
         )
 
@@ -270,7 +270,7 @@ def inspect_suite2p(
         trace_extraction,
         number_of_rois,
         number_of_cells,
-        iscell_updated_after_db,
+        iscell_updated_after_stat,
         detection_model,
     )
 
@@ -446,9 +446,9 @@ def inventory_mouse(
                 ),
                 "iscell_updated": (
                     ""
-                    if status.iscell_updated_after_db is None
+                    if status.iscell_updated_after_stat is None
                     else "yes"
-                    if status.iscell_updated_after_db
+                    if status.iscell_updated_after_stat
                     else "no"
                 ),
                 "alignment_performed": (
