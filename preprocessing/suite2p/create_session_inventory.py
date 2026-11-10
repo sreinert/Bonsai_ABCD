@@ -366,13 +366,18 @@ def inspect_downstream_outputs(
         and max(path.stat().st_mtime_ns for path in overview_outputs)
         > latest_alignment_mtime
     )
-    valid_neurons_path = aligned_session / "funcimg" / "valid_neurons.npy"
+    aligned_funcimg = aligned_session / "funcimg"
+    valid_neurons_path = aligned_funcimg / "valid_neurons.npy"
+    green_delta_path = aligned_funcimg / "celltv_green_delta_v5.npy"
     valid_neurons = (
         count_valid_neurons(valid_neurons_path)
-        if session_overview_completed
-        and latest_alignment_mtime is not None
-        and valid_neurons_path.is_file()
-        and valid_neurons_path.stat().st_mtime_ns > latest_alignment_mtime
+        if valid_neurons_path.is_file()
+        and green_delta_path.is_file()
+        and valid_neurons_path.stat().st_mtime_ns
+        >= max(
+            green_delta_path.stat().st_mtime_ns,
+            iscell_path.stat().st_mtime_ns,
+        )
         else None
     )
     return DownstreamStatus(

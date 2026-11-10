@@ -263,6 +263,7 @@ def test_alignment_overview_and_valid_neuron_status_use_timestamps(
         path.touch()
     aligned_funcimg = aligned / "funcimg"
     aligned_funcimg.mkdir()
+    np.save(aligned_funcimg / "celltv_green_delta_v5.npy", np.ones((2, 4)))
     np.save(aligned_funcimg / "valid_neurons.npy", np.asarray([1, 4, 7]))
 
     analysis = tmp_path / "analysis" / "cohort2" / "sub-11" / session_name
@@ -285,6 +286,10 @@ def test_alignment_overview_and_valid_neuron_status_use_timestamps(
         ns=(base_time + 2_000_000_000, base_time + 2_000_000_000),
     )
     os.utime(
+        aligned_funcimg / "celltv_green_delta_v5.npy",
+        ns=(base_time + 1_500_000_000, base_time + 1_500_000_000),
+    )
+    os.utime(
         aligned_funcimg / "valid_neurons.npy",
         ns=(base_time + 2_000_000_000, base_time + 2_000_000_000),
     )
@@ -294,6 +299,49 @@ def test_alignment_overview_and_valid_neuron_status_use_timestamps(
     assert row["alignment_performed"] == "yes"
     assert row["session_overview_completed"] == "yes"
     assert row["number_of_valid_neurons"] == 3
+
+
+def test_current_valid_neurons_are_reported_when_alignment_is_stale(
+    tmp_path: Path,
+) -> None:
+    raw_root = tmp_path / "rawdata" / "cohort2"
+    processed_root = tmp_path / "processed" / "cohort2"
+    session_name = "ses-valid_date-20261013"
+    make_session(raw_root, "sub-14", session_name)
+    processed_session = processed_root / "sub-14" / session_name
+    save_complete_suite2p(processed_session)
+
+    aligned_funcimg = (
+        tmp_path
+        / "BehaviourAligned_robust"
+        / "cohort2"
+        / "sub-14"
+        / session_name
+        / "funcimg"
+    )
+    aligned_funcimg.mkdir(parents=True)
+    np.save(aligned_funcimg / "celltv_green_delta_v5.npy", np.ones((2, 4)))
+    np.save(aligned_funcimg / "valid_neurons.npy", np.asarray([0, 1]))
+
+    base_time = 1_700_000_000_000_000_000
+    os.utime(
+        processed_session / "suite2p" / "plane0" / "iscell.npy",
+        ns=(base_time, base_time),
+    )
+    os.utime(
+        aligned_funcimg / "celltv_green_delta_v5.npy",
+        ns=(base_time + 1_000, base_time + 1_000),
+    )
+    os.utime(
+        aligned_funcimg / "valid_neurons.npy",
+        ns=(base_time + 2_000, base_time + 2_000),
+    )
+
+    [row] = inventory.inventory_mouse(raw_root, processed_root, "sub-14")
+
+    assert row["alignment_performed"] == "no"
+    assert row["session_overview_completed"] == "no"
+    assert row["number_of_valid_neurons"] == 2
 
 
 def test_one_stale_alignment_product_makes_alignment_incomplete(
