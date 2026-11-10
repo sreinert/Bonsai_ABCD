@@ -162,8 +162,10 @@ files is newer than `suite2p/plane0/iscell.npy`. `session_overview_completed` is
 `yes` when the full-session folder under `analysis/cohort2` contains a PNG newer
 than the newest alignment file. `number_of_valid_neurons` is the length of
 `BehaviourAligned_robust/.../funcimg/valid_neurons.npy` when that file is at
-least as new as both `iscell.npy` and the CellTV green-signal cache; otherwise
-it is blank. This count is independent of NWB and overview freshness.
+least as new as both `iscell.npy` and the CellTV green-signal cache. The current
+`dff.npy` cache is preferred, with fallback to the newest legacy
+`celltv_green_delta_v*.npy`; otherwise the count is blank. This count is
+independent of NWB and overview freshness.
 
 ## Import a reviewed Cellpose segmentation
 

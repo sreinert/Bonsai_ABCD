@@ -327,6 +327,19 @@ def count_valid_neurons(path: Path) -> int | None:
     return int(values.size)
 
 
+def green_delta_cache(aligned_funcimg: Path) -> Path | None:
+    """Return the current green dF cache, with support for legacy versioned files."""
+    current = aligned_funcimg / "dff.npy"
+    if current.is_file():
+        return current
+    legacy = tuple(
+        path
+        for path in aligned_funcimg.glob("celltv_green_delta_v*.npy")
+        if path.is_file()
+    )
+    return max(legacy, key=lambda path: path.stat().st_mtime_ns, default=None)
+
+
 def inspect_downstream_outputs(
     project_root: Path,
     mouse_id: str,
@@ -368,11 +381,11 @@ def inspect_downstream_outputs(
     )
     aligned_funcimg = aligned_session / "funcimg"
     valid_neurons_path = aligned_funcimg / "valid_neurons.npy"
-    green_delta_path = aligned_funcimg / "celltv_green_delta_v5.npy"
+    green_delta_path = green_delta_cache(aligned_funcimg)
     valid_neurons = (
         count_valid_neurons(valid_neurons_path)
         if valid_neurons_path.is_file()
-        and green_delta_path.is_file()
+        and green_delta_path is not None
         and valid_neurons_path.stat().st_mtime_ns
         >= max(
             green_delta_path.stat().st_mtime_ns,

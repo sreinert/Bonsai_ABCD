@@ -129,15 +129,13 @@ It saves its caches under
 `BehaviourAligned_robust/cohort2/<subject>/<full-session>/funcimg/`:
 
 ```text
-celltv_green_delta_v5.npy
-celltv_red_delta_v5.npy
-celltv_green_red_ratio_delta_v5.npy
-celltv_green_red_ratio_diagnostics_v5.npz
+dff.npy
+dff2.npy
 valid_neurons.npy
 ```
 
-The three `v5` signal arrays contain every Suite2p frame: baseline preprocessing and
-G/R are calculated before any behaviour-frame selection. The overview applies
+The two signal arrays contain every Suite2p frame: baseline preprocessing is
+calculated before any behaviour-frame selection. The overview applies
 `valid_frames.npz` only after loading these caches.
 
 `valid_neurons.npy` contains original Suite2p ROI indices returned by CellTV's
