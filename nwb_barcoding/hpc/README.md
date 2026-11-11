@@ -7,6 +7,8 @@ These scripts run `python -m nwb_barcoding.build_session_nwb` as a SLURM array j
 | `sync_to_cluster.sh` | laptop | copies `Aimbot_barcoding/preprocess_alignment/` to `hpc_files/code/` on the share and writes `CODE_VERSION.txt` (also `nwb_barcoding/`, but only while `hpc_files/code/Bonsai_ABCD` isn't a git clone yet) |
 | `build_nwb_array.sh` | HPC | SLURM array job; task N builds the N-th session in the sessions file |
 | `sessions_holography.txt` | HPC | one `mouse tag` per line |
+| `build_nwb_paths_array.sh` | HPC | same, but runs `build_session_nwb_paths` with explicit raw/suite2p/output paths (e.g. split concatenated suite2p runs) |
+| `sessions_concat007009.txt` | HPC | one `<raw session> <suite2p folder> <output root>` per line, relative to `cohort1/` |
 
 ## On the laptop
 
@@ -84,6 +86,15 @@ tail -f logs/nwb_<jobid>_2.out   # follow a log; Ctrl+C stops watching, the job 
 sbatch --array=3-16%4 build_nwb_array.sh sessions_holography.txt
 ```
 `%4` means at most 4 sessions run at the same time. Steps that already have output are skipped. So if a session fails, fix the problem and resubmit just that task with `--array=<N>`. Outputs only go to `<cohort>/BehaviourAligned_robust/` and never into `rawdata/`.
+
+## Concatenated suite2p runs (explicit paths)
+
+When suite2p was run on several sessions together and split back per session (`preprocessing/suite2p/split_concat_suite2p.py`), the split suite2p folders don't sit in a `<root>/sub-XXX/<session>` tree. `build_nwb_paths_array.sh` builds them from paths listed in the sessions file instead:
+```bash
+cd /ceph/mrsic_flogel/public/projects/SaRe_20240219_hfs/hpc_files/code/Bonsai_ABCD/nwb_barcoding/hpc
+sbatch --array=1-2 build_nwb_paths_array.sh sessions_concat007009.txt
+```
+Output goes to the output root given on each line (here `cohort1/BehaviourAligned_concat007009/sub-001/...`), kept apart from `BehaviourAligned_robust`. dFF.npy is written next to each split suite2p folder.
 
 ## Later, when things change
 

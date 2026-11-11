@@ -1,0 +1,7 @@
+# SaReSuKuMaRa_20260911_holography/cohort1 -- sub-001 seq3-007 + seq3-009, suite2p run on both
+# sessions concatenated (preprocessed/sub-001/ses-seq3-test_concat007009) and split back per session
+# with preprocessing/suite2p/split_concat_suite2p.py into concatenated_runs/sub-001/concat007009/.
+# One session per line: <raw session> <suite2p folder> <output root>, relative to cohort1/ (BASE).
+# Blank lines and lines starting with # are ignored; array task N = N-th remaining line.
+rawdata/sub-001/ses-seq3-007_date-20261107T151431 concatenated_runs/sub-001/concat007009/ses-seq3-007_date-20261107T151431-t9/funcimg/suite2p BehaviourAligned_concat007009
+rawdata/sub-001/ses-seq3-009_date-20261109T143558 concatenated_runs/sub-001/concat007009/ses-seq3-009_date-20261109T143558-t10/funcimg/suite2p BehaviourAligned_concat007009
