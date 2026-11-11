@@ -96,6 +96,15 @@ New here
     accepted ROIs, frame count), every argument, the actual segment frames, and the source code of
     the tuning function and the helpers it calls, so a changed segment definition or tuning code
     recomputes instead of reusing stale results.
+  - gp_tuning's default method is now the von Mises fit (method='vm', gp_circular_fit.vm_tuning): phase is
+    the centre of a circular Gaussian fitted to every frame's phase and dF, instead of the peak bin
+    (method='binned', still available). See gp_circular_fit and compare_gp_methods.py for why. 'mat',
+    split_r and the shuffle are unchanged, so binned heatmaps and field metrics still work; only the
+    phases, p-values and 'tuning' (fit R^2 instead of (max-min)/mean) change.
+  - A third GP clock, 'correct' (correct_segments): reward -> reward segments after which the mouse's next
+    lick landed on the next goal, i.e. session_overview's "correct transitions"
+    (cellTV_functions_goalprogress.get_goal_progress_transitions(correct_only=True)). Use
+    gp_tuning(loaded, clock='correct').
 """
 
 import io
@@ -119,6 +128,8 @@ from sklearn.model_selection import GroupKFold
 import era_brewer
 import parse_nwb_functions
 from ceph_paths import ceph_path
+import cellTV.cellTV_functions_goalprogress as cellTV_gp
+import musicboxes.goalprogress.gp_circular_fit as gp_circular_fit
 import musicboxes.session_overview as session_overview
 import preprocessing.parse_session_functions_cohort3_summary as pfs
 import preprocessing.quality_control.tracking_overview as tracking_overview
@@ -255,6 +266,20 @@ def session_exists(mouse, tag, behav_root=BEHAV_ROOT):
             parse_nwb_functions.find_base_path(mouse, tag, behav_root) is not None
 
 
+class _CompatUnpickler(pickle.Unpickler):
+    """Python >= 3.13 pickles Path objects as pathlib._local.*, which 3.12 cannot import. Map them
+    back to pathlib so caches written by the 3.13 conda env load in the 3.12 uv env (and vice versa)."""
+    def find_class(self, module, name):
+        if module == 'pathlib._local':
+            module = 'pathlib'
+        return super().find_class(module, name)
+
+
+def _load_pickle(path):
+    with open(path, 'rb') as f:
+        return _CompatUnpickler(f).load()
+
+
 def load_session(mouse, tag, behav_root=BEHAV_ROOT, cache_dir=None):
     """session_overview.load_session_data plus goal slots, a common frame count for dF and
     behaviour (they can differ by a frame), and the 'dFz' / 'dFn' normalisations. ~1.5 min per
@@ -263,10 +288,9 @@ def load_session(mouse, tag, behav_root=BEHAV_ROOT, cache_dir=None):
     apply to cached sessions."""
     cache = os.path.join(cache_dir, f'sub-{mouse}_{tag}.pkl') if cache_dir else None
     if cache and os.path.exists(cache):
-        with open(cache, 'rb') as f:
-            out = pickle.load(f)
+        out = _load_pickle(cache)
         out['visits'] = visit_table(out)
-        out['segments'] = {'reward': reward_segments(out), 'task': task_segments(out)}
+        out['segments'] = {'reward': reward_segments(out), 'task': task_segments(out), 'correct': correct_segments(out)}
         return out
     with contextlib.redirect_stdout(io.StringIO()):
         loaded = session_overview.load_session_data(mouse, tag, tag, behav_root=behav_root, cohort='3',
@@ -281,7 +305,7 @@ def load_session(mouse, tag, behav_root=BEHAV_ROOT, cache_dir=None):
                neurons=np.asarray(loaded['neurons']), session=session, frame_rate=loaded['frame_rate'],
                n_frames=n)
     out['visits'] = visit_table(out)
-    out['segments'] = {'reward': reward_segments(out), 'task': task_segments(out)}
+    out['segments'] = {'reward': reward_segments(out), 'task': task_segments(out), 'correct': correct_segments(out)}
     if cache:
         os.makedirs(cache_dir, exist_ok=True)
         with open(cache, 'wb') as f:
@@ -449,6 +473,26 @@ def reward_segments(loaded, dedupe=True):
     return np.stack([rewards[:-1], rewards[1:]], axis=1) if len(rewards) > 1 else np.empty((0, 2), int)
 
 
+def correct_segments(loaded):
+    """(start_frame, end_frame) reward -> reward segments that were 'correct' (the 'correct' clock), as
+    cellTV_functions_goalprogress.get_goal_progress_transitions(correct_only=True) defines it and
+    session_overview's *_correct plots use: in sequence sessions the mouse's next lick after the reward
+    lands on the next goal of the cycle; in shaping (one goal in session['goal_ids']) the two rewarded
+    visits are consecutive. Run on a shallow copy, so session['correct_transitions'] is left alone.
+    Empty (with a warning) if the session has no goal identity or the transitions cannot be built."""
+    session = dict(loaded['session'])
+    try:
+        cellTV_gp.get_goal_progress_transitions(session, correct_only=True)
+    except (KeyError, TypeError, ValueError, IndexError) as e:
+        warnings.warn(f"sub-{loaded.get('mouse')} {loaded.get('tag')}: no 'correct' GP segments ({e})")
+        return np.empty((0, 2), int)
+    trans = np.asarray(session['correct_transitions'])
+    if len(trans) == 0:
+        return np.empty((0, 2), int)
+    seg = np.unique(trans[:, 2:4].astype(int), axis=0)
+    return seg[(seg[:, 1] > seg[:, 0]) & (seg[:, 1] <= loaded['n_frames'])]
+
+
 def task_segments(loaded):
     """(start_frame, end_frame) between consecutive ACTIVE goal-landmark ENTRIES, rewarded or not
     (the 'task' clock). In ABC, goal landmarks visited while another goal is active do not end a
@@ -539,18 +583,35 @@ def shuffled_groups(layout, rng):
     return new_group
 
 
-def gp_tuning(loaded, clock='reward', bins=30, n_shuffles=500, alpha=0.05, seed=0, signal='dF', segments=None):
-    """Per-cell GP tuning on one clock (or on an explicit `segments` subset). Tuning index
-    ((max-min)/mean of the curve) is computed on raw dF as in the earlier notebooks (scale-free,
-    but needs a positive mean); the returned 'mat' is in noise units (dFn) for plotting and field
-    metrics. Significance: circular-shift shuffle within segments (n_shuffles=0 skips it). Also
-    returns split-half (even/odd segment) curve reliability."""
+def gp_tuning(loaded, clock='reward', bins=30, n_shuffles=500, alpha=0.05, seed=0, signal='dF', segments=None,
+              method='vm'):
+    """Per-cell GP tuning on one clock (or on an explicit `segments` subset).
+
+    method='vm' (default): von Mises fit to every frame's phase and dF (gp_circular_fit.vm_tuning).
+    phase / phase_even / phase_odd are the fitted centres mu, 'tuning' is the fit's R^2 (best grid R^2,
+    the shuffle test statistic), and kappa / fwhm / amp / baseline / r2 are added.
+    method='binned': the earlier method. Tuning index ((max-min)/mean of the curve) on raw dF (scale-free,
+    but needs a positive mean), phase = peak bin of the smoothed mean dFn curve.
+
+    Both: fits / indices use `signal` (raw dF); significance is a circular-shift shuffle within segments
+    (n_shuffles=0 skips it), with identical shuffles for both methods at the same seed. 'mat' is always the
+    binned (cells, segments, bins) matrix in noise units (dFn) for plotting and field metrics, and split_r
+    the even/odd correlation of its mean curves."""
     segments = loaded['segments'][clock] if segments is None else np.asarray(segments)
     if len(segments) < 4:
         return None
-    rng = np.random.default_rng(seed)
+    if method not in ('vm', 'binned'):
+        raise ValueError(f"method must be 'vm' or 'binned', got {method!r}")
     layout = segment_layout(segments, bins)
     frames = layout['frames']
+    mat = binned_from_groups(loaded['dFn'][:, frames], layout['group'], layout)
+    out = dict(method=method, clock=clock, bins=bins, segments=segments, mat=mat,
+               split_r=rowwise_corr(mean_curve(mat[:, 0::2]), mean_curve(mat[:, 1::2])))
+    if method == 'vm':
+        fit = gp_circular_fit.vm_tuning(loaded[signal], segments, n_shuffles=n_shuffles, alpha=alpha, seed=seed)
+        out.update(fit, tuning=fit['stat'])
+        return out
+    rng = np.random.default_rng(seed)
     raw = binned_from_groups(loaded[signal][:, frames], layout['group'], layout)
     observed = tuning_index(raw)
     if n_shuffles:
@@ -560,13 +621,11 @@ def gp_tuning(loaded, clock='reward', bins=30, n_shuffles=500, alpha=0.05, seed=
         shuffle_z = (observed - np.nanmean(shuf, 1)) / np.nanstd(shuf, 1)
     else:
         p, shuffle_z = np.full(len(observed), np.nan), np.full(len(observed), np.nan)
-    mat = binned_from_groups(loaded['dFn'][:, frames], layout['group'], layout)
-    return dict(clock=clock, bins=bins, segments=segments, mat=mat, tuning=observed, p=p, significant=p < alpha,
-                shuffle_z=shuffle_z,
-                phase=preferred_phase(mean_curve(mat)),
-                phase_even=preferred_phase(mean_curve(mat[:, 0::2])),
-                phase_odd=preferred_phase(mean_curve(mat[:, 1::2])),
-                split_r=rowwise_corr(mean_curve(mat[:, 0::2]), mean_curve(mat[:, 1::2])))
+    out.update(tuning=observed, p=p, significant=p < alpha, shuffle_z=shuffle_z,
+               phase=preferred_phase(mean_curve(mat)),
+               phase_even=preferred_phase(mean_curve(mat[:, 0::2])),
+               phase_odd=preferred_phase(mean_curve(mat[:, 1::2])))
+    return out
 
 
 def lap_segments(loaded, bins):
@@ -631,7 +690,8 @@ def cached_tuning(fn, loaded, cache_dir=None, **kwargs):
     if _TUNING_CODE is None:
         _TUNING_CODE = ''.join(inspect.getsource(f) for f in
                                [gp_tuning, position_tuning, lap_segments, segment_layout, binned_from_groups,
-                                shuffled_groups, tuning_index, mean_curve, preferred_phase, rowwise_corr])
+                                shuffled_groups, tuning_index, mean_curve, preferred_phase, rowwise_corr]) + \
+            inspect.getsource(gp_circular_fit)
     key = dict(kwargs)
     if fn is gp_tuning:
         seg = kwargs.get('segments')
@@ -641,8 +701,7 @@ def cached_tuning(fn, loaded, cache_dir=None, **kwargs):
                                 _TUNING_CODE)).encode()).hexdigest()[:16]
     path = os.path.join(cache_dir, f"{fn.__name__}_sub-{loaded['mouse']}_{loaded['tag']}_{digest}.pkl")
     if os.path.exists(path):
-        with open(path, 'rb') as f:
-            return pickle.load(f)
+        return _load_pickle(path)
     out = fn(loaded, **kwargs)
     os.makedirs(cache_dir, exist_ok=True)
     with open(path, 'wb') as f:

@@ -14,6 +14,9 @@ Produces:
      consecutive-rewarded-visit segments) sessions from ses_settings, via
      cellTV/cellTV_functions_goalprogress.py. Sequence sessions additionally get a
      per-segment-type breakdown (one heatmap panel per A->B, B->C, ..., all sorted on the first).
+     Preferred phases and tuning strength come from a von Mises fit to every frame's phase
+     and dF by default (gp_method='vm', musicboxes/goalprogress/gp_circular_fit.py);
+     --gp-method binned gives the earlier peak-bin / (max-min)/mean version.
   7. Behavioural-performance summary (cohort='3' and '2nwb') -- see
      musicboxes/behaviour_performance_summary.py: two combined figures (processed
      frame-aligned vs raw) covering lick/reward maps, transition matrices, and (for shaping
@@ -94,6 +97,7 @@ import cellTV.cellTV_functions_goalprogress as cellTV_gp
 import era_brewer
 from ceph_paths import ceph_path
 import musicboxes.behaviour_performance_summary as behaviour_performance_summary
+import musicboxes.goalprogress.gp_circular_fit as gp_circular_fit
 
 # Continuous colormap for the z-scored heatmaps (plots 3/4/5), built from
 # era_brewer's 'NineteenEightyNine' palette. Reversed so high values are red/warm and
@@ -424,7 +428,7 @@ def position_tuning_matrix(dF, session, bins=200, quiet=True):
 
 
 def _zscore_sort_plot(mat_for_sort, mat_for_display, x_values, xlabel, title,
-                       event_x=None, save_path=None, drop_axis='cells'):
+                       event_x=None, save_path=None, drop_axis='cells', sort_key=None):
     """Average each (n_cells, n_trials, n_window) array over its trial axis, z-score per
     cell, sort rows by the argmax of `mat_for_sort`'s per-cell curve, and display
     `mat_for_display` (same order) as a heatmap. Pass the same array for both to get a
@@ -438,7 +442,10 @@ def _zscore_sort_plot(mat_for_sort, mat_for_display, x_values, xlabel, title,
         bins are chronically empty (e.g. right at a lap-position wraparound) rather than
         genuinely reflecting bad cells -- matches recording_overview_cohort3.ipynb's own
         `zsc_av_first_half[:, ~np.isnan(...).any(axis=0)]` approach for position tuning.
+    :param sort_key: optional (n_cells,) values to sort rows by instead of the argmax of
+        `mat_for_sort` (e.g. von Mises preferred phases, see goal_progress_vm_phase).
     """
+    sort_key = None if sort_key is None else np.asarray(sort_key, float)
     sort_curve = stats.zscore(np.nanmean(mat_for_sort, axis=1), axis=1, nan_policy='omit')
     display_curve = stats.zscore(np.nanmean(mat_for_display, axis=1), axis=1, nan_policy='omit')
 
@@ -448,6 +455,7 @@ def _zscore_sort_plot(mat_for_sort, mat_for_display, x_values, xlabel, title,
         if n_dropped:
             print(f"  dropping {n_dropped} cell(s) with all-NaN tuning (e.g. too few valid trials)")
         sort_curve, display_curve = sort_curve[valid], display_curve[valid]
+        sort_key = None if sort_key is None else sort_key[valid]
     elif drop_axis == 'bins':
         good_bins = ~np.isnan(sort_curve).any(axis=0) & ~np.isnan(display_curve).any(axis=0)
         n_dropped = (~good_bins).sum()
@@ -458,7 +466,7 @@ def _zscore_sort_plot(mat_for_sort, mat_for_display, x_values, xlabel, title,
     else:
         raise ValueError(f"Unknown drop_axis {drop_axis!r}, expected 'cells' or 'bins'")
 
-    order = np.argsort(np.nanargmax(sort_curve, axis=1))
+    order = np.argsort(np.nanargmax(sort_curve, axis=1) if sort_key is None else sort_key)
 
     fig = plt.figure(figsize=(8, 6))
     extent = [x_values[0], x_values[-1], sort_curve.shape[0], 0]
@@ -537,6 +545,26 @@ def plot_position_heatmap(dF, session, bins=200, cross_validated=False, save_pat
 # sequence sessions only, split by individual segment (A->B, B->C, ...)
 # ---------------------------------------------------------------------------
 
+GP_METHODS = ('vm', 'binned')
+
+
+def _check_gp_method(gp_method):
+    if gp_method not in GP_METHODS:
+        raise ValueError(f"gp_method must be one of {GP_METHODS}, got {gp_method!r}")
+
+
+def goal_progress_segments(session):
+    """(start, end) frames of the transitions in session['correct_transitions']."""
+    return np.asarray(session['correct_transitions'])[:, 2:4].astype(int)
+
+
+def goal_progress_vm_phase(dF, segments, bins=90):
+    """Per-cell preferred phase from the von Mises fit (gp_circular_fit.vm_tuning, no shuffles), in bin
+    units (0..bins) so it lines up with the binned heatmaps' x axis. Used to sort cells when
+    gp_method='vm'."""
+    return gp_circular_fit.vm_tuning(dF, segments, n_shuffles=0, halves=False)['phase'] * bins
+
+
 def goal_progress_tuning_matrix(dF, session, bins=90, quiet=True):
     """(n_cells, n_transitions, bins) array via
     cellTV_functions_goalprogress.extract_goal_progress_pooled, called once per cell.
@@ -553,7 +581,7 @@ def goal_progress_tuning_matrix(dF, session, bins=90, quiet=True):
     return mat
 
 
-def plot_goal_progress_heatmap(dF, session, bins=90, cross_validated=False, save_path=None):
+def plot_goal_progress_heatmap(dF, session, bins=90, cross_validated=False, save_path=None, gp_method='vm'):
     """All cells' goal-progress tuning, pooled across every segment type/goal-transition
     together, z-scored per cell and sorted by peak phase. Works for both sequence sessions
     (correct-transitions-verified segments) and shaping sessions (consecutive-rewarded-visit
@@ -561,7 +589,12 @@ def plot_goal_progress_heatmap(dF, session, bins=90, cross_validated=False, save
 
     Cross-validated version: sort order computed from even-numbered transitions, applied to
     a heatmap built from odd-numbered transitions.
+
+    gp_method='vm' (default) sorts by the von Mises preferred phase (goal_progress_vm_phase) of
+    the sorting transitions; 'binned' by the peak bin of their mean curve. The heatmap itself is
+    the binned curve either way.
     """
+    _check_gp_method(gp_method)
     mat = goal_progress_tuning_matrix(dF, session, bins=bins)
     x_values = np.arange(bins)
 
@@ -571,21 +604,27 @@ def plot_goal_progress_heatmap(dF, session, bins=90, cross_validated=False, save
                 f"Cannot cross-validate goal-progress tuning: only {mat.shape[1]} valid "
                 "segment(s) found (need >= 2 to split into even/odd halves).")
         sort_mat, display_mat = mat[:, 0::2, :], mat[:, 1::2, :]
+        sort_segments = goal_progress_segments(session)[0::2]
         title = 'Goal-progress tuning (sorted on even transitions, shown on odd transitions)'
     else:
         sort_mat = display_mat = mat
+        sort_segments = goal_progress_segments(session)
         title = f'Goal-progress tuning (all cells, pooled across {mat.shape[1]} segments)'
 
-    return _zscore_sort_plot(sort_mat, display_mat, x_values, 'Goal-progress phase (bin)', title,
-                              save_path=save_path, drop_axis='bins')
+    sort_key = goal_progress_vm_phase(dF, sort_segments, bins) if gp_method == 'vm' else None
+    return _zscore_sort_plot(sort_mat, display_mat, x_values, 'Goal-progress phase (bin)',
+                              f'{title}\nsorted by {gp_method} phase', save_path=save_path, drop_axis='bins',
+                              sort_key=sort_key)
 
 
-def plot_goal_progress_by_segment(dF, session, bins=90, save_path=None, quiet=True):
+def plot_goal_progress_by_segment(dF, session, bins=90, save_path=None, quiet=True, gp_method='vm'):
     """Sequence sessions only: one heatmap panel per segment type (starting-goal identity,
     e.g. A->B, B->C, ...), each z-scored per cell. Cells are sorted by their peak phase in
     the FIRST segment type and that same order is applied to every other panel, so the
     panels can be compared row-by-row (does a cell keep its preferred phase across segments?).
+    The peak phase is the von Mises fit's (gp_method='vm', default) or the peak bin ('binned').
     """
+    _check_gp_method(gp_method)
     transitions = np.asarray(session['correct_transitions'])
     goals = np.unique(transitions[:, 0].astype(int))
     n_cells = dF.shape[0]
@@ -607,7 +646,11 @@ def plot_goal_progress_by_segment(dF, session, bins=90, save_path=None, quiet=Tr
     for goal in goals:
         curve = stats.zscore(np.nanmean(per_goal_mats[int(goal)], axis=1), axis=1, nan_policy='omit')
         curves[int(goal)] = curve[:, ~np.isnan(curve).any(axis=0)]
-    order = np.argsort(np.nanargmax(curves[int(goals[0])], axis=1))  # shared order from first segment
+    if gp_method == 'vm':   # shared order from first segment
+        first = transitions[transitions[:, 0].astype(int) == goals[0]][:, 2:4].astype(int)
+        order = np.argsort(goal_progress_vm_phase(dF, first, bins))
+    else:
+        order = np.argsort(np.nanargmax(curves[int(goals[0])], axis=1))
 
     im = None
     for ax, goal in zip(axes, goals):
@@ -622,14 +665,22 @@ def plot_goal_progress_by_segment(dF, session, bins=90, save_path=None, quiet=Tr
     return fig
 
 
-def compute_goal_progress_tuning_indices(dF, session, bins=90, quiet=True):
-    """Per-cell goal-progress tuning index and preferred phase for every cell (see
-    cellTV_functions_goalprogress.calc_goal_progress_tuning). Used to select "high-tuning"
-    cells for plot_goal_progress_heatmap_high_tuning/plot_goal_progress_polar_high_tuning.
+def compute_goal_progress_tuning_indices(dF, session, bins=90, quiet=True, gp_method='vm'):
+    """Per-cell goal-progress tuning strength and preferred phase (in bin units, 0..bins) for
+    every cell. Used to select "high-tuning" cells for
+    plot_goal_progress_heatmap_high_tuning/plot_goal_progress_polar_high_tuning.
+
+    gp_method='vm' (default): R^2 of the von Mises fit and its centre mu (gp_circular_fit).
+    gp_method='binned': tuning index (max-min)/mean and peak bin
+    (cellTV_functions_goalprogress.calc_goal_progress_tuning).
     """
+    _check_gp_method(gp_method)
+    if gp_method == 'vm':
+        fit = gp_circular_fit.vm_tuning(dF, goal_progress_segments(session), n_shuffles=0, halves=False)
+        return fit['r2'], fit['phase'] * bins
     n_cells = dF.shape[0]
     tuning = np.zeros(n_cells)
-    phase_pref = np.zeros(n_cells, dtype=int)
+    phase_pref = np.zeros(n_cells)
     ctx = _quiet() if quiet else contextlib.nullcontext()
     with ctx:
         for c in range(n_cells):
@@ -653,7 +704,8 @@ def _select_high_tuning_cells(tuning, top_percentile=80, tuning_index_threshold=
     return high_idx, threshold
 
 
-def plot_goal_progress_tuning_index_histogram(tuning, hist_bins=30, save_path=None):
+def plot_goal_progress_tuning_index_histogram(tuning, hist_bins=30, save_path=None,
+                                               label='Goal-progress tuning index'):
     """Bar histogram of the goal-progress tuning index across ALL cells (not just
     high-tuning ones) -- gives a sense of the full distribution the high-tuning threshold
     in the other plots is being drawn from.
@@ -661,9 +713,9 @@ def plot_goal_progress_tuning_index_histogram(tuning, hist_bins=30, save_path=No
     valid = tuning[~np.isnan(tuning)]
     fig = plt.figure(figsize=(6, 4))
     plt.hist(valid, bins=hist_bins, color='C0', edgecolor='white')
-    plt.xlabel('Goal-progress tuning index')
+    plt.xlabel(label)
     plt.ylabel('Cell count')
-    plt.title(f'Goal-progress tuning index distribution (n={len(valid)} cells)')
+    plt.title(f'{label} distribution (n={len(valid)} cells)')
     plt.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=150)
@@ -690,17 +742,20 @@ def plot_goal_progress_phase_pref_histogram(phase_pref, high_idx, bins=90, hist_
 
 def plot_goal_progress_heatmap_high_tuning(dF, session, bins=90, top_percentile=80,
                                             tuning_index_threshold=None, save_path=None,
-                                            tuning=None):
+                                            tuning=None, gp_method='vm'):
     """Same cross-validated pooled goal-progress heatmap as plot_goal_progress_heatmap
     (sort on even transitions, display odd transitions), but restricted to cells with a
     high goal-progress tuning index (see _select_high_tuning_cells).
 
     :param tuning: precomputed tuning indices (see compute_goal_progress_tuning_indices),
         to avoid recomputing them if the caller already has them. Computed internally if
-        not given.
+        not given (with the same gp_method).
+    :param gp_method: 'vm' (default) sorts by the von Mises phase of the even transitions,
+        'binned' by their peak bin.
     """
+    _check_gp_method(gp_method)
     if tuning is None:
-        tuning, _ = compute_goal_progress_tuning_indices(dF, session, bins=bins)
+        tuning, _ = compute_goal_progress_tuning_indices(dF, session, bins=bins, gp_method=gp_method)
     high_idx, _ = _select_high_tuning_cells(tuning, top_percentile, tuning_index_threshold)
 
     mat = goal_progress_tuning_matrix(dF[high_idx], session, bins=bins)
@@ -710,14 +765,17 @@ def plot_goal_progress_heatmap_high_tuning(dF, session, bins=90, top_percentile=
             f"Cannot cross-validate goal-progress tuning: only {mat.shape[1]} valid "
             "segment(s) found (need >= 2 to split into even/odd halves).")
     sort_mat, display_mat = mat[:, 0::2, :], mat[:, 1::2, :]
-    title = f'Goal-progress tuning, high-tuning cells only (n={len(high_idx)}), even/odd CV'
+    title = (f'Goal-progress tuning, high-tuning cells only (n={len(high_idx)}), even/odd CV\n'
+             f'sorted by {gp_method} phase')
+    sort_key = (goal_progress_vm_phase(dF[high_idx], goal_progress_segments(session)[0::2], bins)
+                if gp_method == 'vm' else None)
     return _zscore_sort_plot(sort_mat, display_mat, x_values, 'Goal-progress phase (bin)', title,
-                              save_path=save_path, drop_axis='bins')
+                              save_path=save_path, drop_axis='bins', sort_key=sort_key)
 
 
 def plot_goal_progress_polar_high_tuning(dF, session, bins=90, top_percentile=80,
                                           tuning_index_threshold=None, save_path=None, quiet=True,
-                                          tuning=None):
+                                          tuning=None, gp_method='vm'):
     """Sequence sessions only: one polar-plot subplot per high-tuning cell, showing its
     goal-progress tuning curve concatenated across the full goal cycle (A->B->C->...->A).
 
@@ -734,7 +792,7 @@ def plot_goal_progress_polar_high_tuning(dF, session, bins=90, top_percentile=80
                           "sessions (session['goal_ids'] has > 1 entry) -- this is a shaping session.")
 
     if tuning is None:
-        tuning, _ = compute_goal_progress_tuning_indices(dF, session, bins=bins)
+        tuning, _ = compute_goal_progress_tuning_indices(dF, session, bins=bins, gp_method=gp_method)
     high_idx, _ = _select_high_tuning_cells(tuning, top_percentile, tuning_index_threshold)
 
     n_goals = len(session['goal_ids'])
@@ -773,14 +831,15 @@ def plot_goal_progress_polar_high_tuning(dF, session, bins=90, top_percentile=80
 # ---------------------------------------------------------------------------
 
 def _run_goal_progress_section(dF, session, is_sequence, bins, tuning_top_percentile, save_dir,
-                                label, filename_suffix):
+                                label, filename_suffix, gp_method='vm'):
     """Runs the goal-progress tuning plots (7-13) against whatever transitions are currently
     in session['correct_transitions'] -- caller sets these via
     cellTV_gp.get_goal_progress_transitions first. `label` is a short human-readable tag used
     in print statements (e.g. 'all transitions' / 'correct transitions only'); `filename_suffix`
     tags the saved PNGs (e.g. '_all' / '_correct') so the two runs don't overwrite each other.
     Returns a figs dict with the same keys run_overview's other plots use, each suffixed with
-    filename_suffix.
+    filename_suffix. gp_method ('vm' default, or 'binned') sets how preferred phases and tuning
+    strength are computed (see compute_goal_progress_tuning_indices).
     """
     def _p(name):
         return str(save_dir / f"{name}{filename_suffix}.png") if save_dir else None
@@ -789,23 +848,26 @@ def _run_goal_progress_section(dF, session, is_sequence, bins, tuning_top_percen
     n_transitions = len(session['correct_transitions'])
     print(f"Plot 7 [{label}]: goal-progress tuning (pooled across {n_transitions} segments)...")
     figs[f'goal_progress{filename_suffix}'] = plot_goal_progress_heatmap(
-        dF, session, bins=bins, cross_validated=False, save_path=_p('7_goal_progress'))
+        dF, session, bins=bins, cross_validated=False, save_path=_p('7_goal_progress'),
+            gp_method=gp_method)
 
     print(f"Plot 8 [{label}]: goal-progress tuning (even/odd cross-validated)...")
     try:
         figs[f'goal_progress_cv{filename_suffix}'] = plot_goal_progress_heatmap(
-            dF, session, bins=bins, cross_validated=True, save_path=_p('8_goal_progress_cv'))
+            dF, session, bins=bins, cross_validated=True, save_path=_p('8_goal_progress_cv'),
+            gp_method=gp_method)
     except ValueError as e:
         print(f"  skipping: {e}")
         figs[f'goal_progress_cv{filename_suffix}'] = None
 
     # computed once and reused by every plot below, instead of each one recomputing the
     # same per-cell tuning index/preferred phase from scratch
-    tuning, phase_pref = compute_goal_progress_tuning_indices(dF, session, bins=bins)
+    tuning, phase_pref = compute_goal_progress_tuning_indices(dF, session, bins=bins, gp_method=gp_method)
 
     print(f"Plot 9 [{label}]: goal-progress tuning index histogram (all cells)...")
     figs[f'goal_progress_tuning_hist{filename_suffix}'] = plot_goal_progress_tuning_index_histogram(
-        tuning, save_path=_p('9_goal_progress_tuning_hist'))
+        tuning, save_path=_p('9_goal_progress_tuning_hist'),
+        label='Goal-progress von Mises fit R^2' if gp_method == 'vm' else 'Goal-progress tuning index')
 
     high_idx, _ = _select_high_tuning_cells(tuning, tuning_top_percentile)
 
@@ -817,7 +879,7 @@ def _run_goal_progress_section(dF, session, is_sequence, bins, tuning_top_percen
     try:
         figs[f'goal_progress_cv_high_tuning{filename_suffix}'] = plot_goal_progress_heatmap_high_tuning(
             dF, session, bins=bins, top_percentile=tuning_top_percentile,
-            tuning=tuning, save_path=_p('11_goal_progress_cv_high_tuning'))
+            tuning=tuning, save_path=_p('11_goal_progress_cv_high_tuning'), gp_method=gp_method)
     except ValueError as e:
         print(f"  skipping: {e}")
         figs[f'goal_progress_cv_high_tuning{filename_suffix}'] = None
@@ -825,12 +887,12 @@ def _run_goal_progress_section(dF, session, is_sequence, bins, tuning_top_percen
     if is_sequence:
         print(f"Plot 12 [{label}]: goal-progress tuning, split by segment (sequence session)...")
         figs[f'goal_progress_by_segment{filename_suffix}'] = plot_goal_progress_by_segment(
-            dF, session, bins=bins, save_path=_p('12_goal_progress_by_segment'))
+            dF, session, bins=bins, save_path=_p('12_goal_progress_by_segment'), gp_method=gp_method)
 
         print(f"Plot 13 [{label}]: goal-progress tuning (polar), high-tuning cells (sequence session)...")
         figs[f'goal_progress_polar_high_tuning{filename_suffix}'] = plot_goal_progress_polar_high_tuning(
             dF, session, bins=bins, top_percentile=tuning_top_percentile,
-            tuning=tuning, save_path=_p('13_goal_progress_polar_high_tuning'))
+            tuning=tuning, save_path=_p('13_goal_progress_polar_high_tuning'), gp_method=gp_method)
 
     return figs
 
@@ -843,7 +905,7 @@ def run_overview(mouse, session_id, stage, behav_root=None, cohort='3', world='s
                   stage_type='sequences', n_trace_cells=20, trace_start_frame=0,
                   trace_n_frames=20000, reward_window=(-5, 5), position_bins=200,
                   goal_progress_bins=90, min_correct_transitions=10,
-                  tuning_top_percentile=80, root_path=None, save_dir=None, show=True):
+                  tuning_top_percentile=80, root_path=None, save_dir=None, show=True, gp_method='vm'):
     """Load one session and produce all overview plots. Returns the loaded session dict
     (in case you want to keep working with dF/session/etc afterward) plus the list of
     created figures.
@@ -870,7 +932,11 @@ def run_overview(mouse, session_id, stage, behav_root=None, cohort='3', world='s
         run that block at all (default 10); below this, only the 'all transitions' block is
         produced.
     :param tuning_top_percentile: for the two "high-tuning cells" plots, keep cells at/above
-        this percentile of goal-progress tuning index (default 80 = top 20%).
+        this percentile of goal-progress tuning strength (default 80 = top 20%).
+    :param gp_method: 'vm' (default): preferred phases (sorting, plot 10) and tuning strength
+        (plot 9, high-tuning selection) from a von Mises fit to every frame's phase and dF
+        (musicboxes/goalprogress/gp_circular_fit.py); 'binned': peak bin and (max-min)/mean
+        tuning index, as before. Heatmaps show binned curves either way.
     :param root_path: the project's own root folder (e.g. .../SuKuSaRe_20250923_HFScohort3),
         used only to build the default save_dir below -- NOT behav_root, which for
         cohort3-style dual-tree projects is already a deep subpath
@@ -956,7 +1022,7 @@ def run_overview(mouse, session_id, stage, behav_root=None, cohort='3', world='s
     print(f"  found {n_all} segment(s)")
     figs.update(_run_goal_progress_section(
         dF, session, is_sequence, goal_progress_bins, tuning_top_percentile, save_dir,
-        label='all transitions', filename_suffix='_all'))
+        label='all transitions', filename_suffix='_all', gp_method=gp_method))
 
     print("Goal-progress tuning, CORRECT transitions only:")
     cellTV_gp.get_goal_progress_transitions(session, correct_only=True)
@@ -967,7 +1033,7 @@ def run_overview(mouse, session_id, stage, behav_root=None, cohort='3', world='s
     else:
         figs.update(_run_goal_progress_section(
             dF, session, is_sequence, goal_progress_bins, tuning_top_percentile, save_dir,
-            label='correct transitions only', filename_suffix='_correct'))
+            label='correct transitions only', filename_suffix='_correct', gp_method=gp_method))
 
     _run_behaviour_summary_if_supported(mouse, session_id, stage, behav_root, cohort, world,
                                         save_dir, show, n_steps)
@@ -1029,13 +1095,16 @@ def _cli():
                          'rebuilt into BehaviourAligned_robust by build_session_nwb_cohort2.py) or '
                          '"2" (older, pre-NWB)')
     parser.add_argument('--world', default='stable', choices=['stable', 'random'])
+    parser.add_argument('--gp-method', default='vm', choices=['vm', 'binned'],
+                         help='goal-progress phase / tuning: von Mises fit (default) or peak bin')
     parser.add_argument('--show', action='store_true',
                          help='display each figure interactively as it\'s built '
                          '(default off, for unattended/batch terminal use)')
     args = parser.parse_args()
     run_overview(args.mouse, args.session_id, args.stage, behav_root=ceph_path(args.behav_root),
                  cohort=args.cohort, world=args.world,
-                 root_path=ceph_path(args.root_path) if args.root_path else None, show=args.show)
+                 root_path=ceph_path(args.root_path) if args.root_path else None, show=args.show,
+                 gp_method=args.gp_method)
 
 
 if __name__ == '__main__':
