@@ -9,9 +9,14 @@ Contents
 --------
 - Display helpers: mask outlines as an RGBA overlay, era_brewer colours.
 - load_holo_session: dF/F (suite2p ROIs + projected source masks), stim table and alignment in one dict.
-- psth / response_amplitude: trial-aligned dF/F with the stimulation frames masked out (the spiral
-  scans leave a light artefact in the frames they overlap, so those frames are NaN by default).
-- stim_triggered_movie (task item 5): crop-out movie of one stimulated cell, averaged over its trials.
+- ensure_dfof: true dF/F (divided by F0), cached next to the other outputs; see its docstring for why
+  F0 comes from raw F and not from the neuropil-corrected trace.
+- psth / response_amplitude: trial-aligned dF/F (stimulation frames can be masked out, off by default:
+  holo-001 shows no light artefact during the spiral train).
+- target_responses: per-cell significance against a far-target null with Benjamini-Hochberg FDR across
+  cells, and per-trial reliability (how many of a cell's trials exceed the null's 95th percentile).
+- stim_triggered_movie (task item 5): crop-out movie of one stimulated cell: one example trial of the
+  registered frames (grey) next to the trial-averaged dF/F.
 - stim_cells_by_phase (task item 6): stimulated cells joined with the source session's gp_cell_table
   and sorted by preferred goal-progress phase.
 
@@ -53,7 +58,9 @@ def display_range(img, lo=1, hi=99.7):
     return np.percentile(img, lo), np.percentile(img, hi)
 
 
-def colormap(name='NineteenEightyNine', reverse=False):
+def colormap(name='NineteenEightyNine', reverse=True):
+    """era_brewer colormap; reversed by default so that red = high (active) and blue = low, the
+    convention of the other analyses in this repo."""
     from matplotlib.colors import LinearSegmentedColormap
     cols = era_brewer.era_brew(name, n=256, brew_type='continuous')
     return LinearSegmentedColormap.from_list(name, cols[::-1] if reverse else cols)
@@ -61,12 +68,58 @@ def colormap(name='NineteenEightyNine', reverse=False):
 
 # ---------------------------------------------------------------- loading
 
-def load_holo_session(mouse, holo_tag, source_tag, project_root=None, holo_suffix='SR'):
+UNITS = {'dfof': 'dF/F', 'df': 'dF'}
+
+
+def _raw_baseline(F, ops):
+    """Slow baseline of raw fluorescence: the same suite2p dcnv.preprocess (maximin) baseline that
+    compute_dff removes from F - 0.7*Fneu, here applied to F itself (preprocess returns F - baseline)."""
+    from suite2p.extraction import dcnv
+    from nwb_barcoding.compute_dff import _get_baseline_params
+    baseline, win, sig, prctile = _get_baseline_params(ops)
+    F = np.asarray(F, np.float32)
+    return F - dcnv.preprocess(F.copy(), baseline, win, sig, ops['fs'], prctile)
+
+
+def ensure_dfof(paths, force=False, f0_floor=1.0):
+    """dF/F for the holo ROIs and the projected masks, cached as <output>/funcimg/dFoF.npy and
+    <output>/funcimg/projected/dFoF_projected.npy (n_rois, n_frames, float32). Returns the paths.
+
+    dF/F = dF / F0, with
+      dF = the lab's dFF.npy (nwb_barcoding.compute_dff: F - 0.7*Fneu minus its maximin baseline),
+           which is baseline-subtracted but NOT divided, so it is in raw fluorescence units;
+      F0 = the same maximin baseline computed on raw F (not neuropil-subtracted), floored at f0_floor.
+    F0 is not taken from F - 0.7*Fneu because that baseline sits near or below zero for many ROIs
+    (holo-001: median 17 across ROIs, negative for ~5%, while raw F has median ~94), so dividing by
+    it blows up. With this F0 the amplitudes are an underestimate of dF/F relative to a
+    neuropil-free F0, but they are stable and comparable across cells.
+    """
+    import musicboxes.holography.holo_io as hio
+    ops = hio.load_ops(paths['plane'])
+    out = paths['output'] / 'funcimg'
+    proj = out / 'projected'
+    jobs = [(paths['plane'] / 'F.npy', paths['dff'], out / 'dFoF.npy')]
+    if (proj / 'F_projected.npy').exists():
+        jobs.append((proj / 'F_projected.npy', proj / 'dFF_projected.npy', proj / 'dFoF_projected.npy'))
+    for f_path, df_path, dst in jobs:
+        if dst.exists() and not force:
+            continue
+        print(f'Computing {dst} (dF / raw-F baseline) ...')
+        f0 = _raw_baseline(np.load(f_path), ops)
+        print(f'  F0 median {np.median(f0):.1f}, {(f0 < f0_floor).mean() * 100:.2f}% of samples floored at {f0_floor}')
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        np.save(dst, (np.load(df_path) / np.maximum(f0, f0_floor)).astype(np.float32))
+    return [j[2] for j in jobs]
+
+
+def load_holo_session(mouse, holo_tag, source_tag, project_root=None, holo_suffix='SR', units='dfof'):
     """Everything the holo analyses need, in one dict:
 
-    dff (n_holo_rois, n_frames), dff_projected (n_projected, n_frames) or None, trials (stim_trials.csv),
-    matrix (stim_matrix.npz), frame_times, fs (measured frame rate), stat, iscell, stat_projected,
-    mean_img, mean_img2, match (roi_match_<source>.csv), wheel_speed (deg/s at frames), paths.
+    dff (n_holo_rois, n_frames), dff_projected (n_projected, n_frames) or None, units, trials
+    (stim_trials.csv), matrix (stim_matrix.npz), frame_times, fs (measured frame rate), stat, iscell,
+    stat_projected, mean_img, mean_img2, match (roi_match_<source>.csv), wheel_speed (deg/s at frames),
+    paths. units: 'dfof' (default; dF/F from ensure_dfof, computed on first use) or 'df' (the
+    baseline-subtracted, undivided dFF.npy).
     """
     import musicboxes.holography.holo_io as hio
     from musicboxes.holography.stim_table import load_stim_table
@@ -76,12 +129,16 @@ def load_holo_session(mouse, holo_tag, source_tag, project_root=None, holo_suffi
     a = np.load(out / 'holo_alignment.npz', allow_pickle=True)
     trials, matrix = load_stim_table(mouse, holo_tag, project_root, holo_suffix)
     rois = hio.load_rois(paths['plane'])
-    proj = out / 'funcimg' / 'projected' / 'dFF_projected.npy'
+    if units == 'dfof':
+        ensure_dfof(paths)
+        dff_path, proj = out / 'funcimg' / 'dFoF.npy', out / 'funcimg' / 'projected' / 'dFoF_projected.npy'
+    else:
+        dff_path, proj = paths['dff'], out / 'funcimg' / 'projected' / 'dFF_projected.npy'
     stat_proj_path = out / 'stat_projected.npy'
     mean_img, mean_img2 = hio.load_mean_images(paths['plane'])
     return {
         'mouse': str(mouse), 'holo_tag': holo_tag, 'source_tag': source_tag, 'paths': paths,
-        'dff': np.load(paths['dff'], mmap_mode='r'),
+        'dff': np.load(dff_path, mmap_mode='r'), 'units': UNITS[units],
         'dff_projected': np.load(proj) if proj.exists() else None,
         'trials': trials, 'matrix': matrix, 'frame_times': a['frame_times'], 'fs': 1 / float(a['frame_period']),
         'stat': rois['stat'], 'iscell': rois['iscell'],
@@ -149,32 +206,101 @@ def response_amplitude(t, mat, baseline=(-2, 0), response=(0.5, 2)):
     return np.nanmean(mat[..., r], -1) - np.nanmean(mat[..., b], -1)
 
 
-def target_responses(session, window=(-2, 6), baseline=(-2, 0), response=(0.5, 2), alpha=0.05):
-    """Per stimulated cell: its response to its own stimulation vs to blank trials.
+def bh_fdr(p):
+    """Benjamini-Hochberg q-values; NaNs stay NaN and do not count towards the number of tests."""
+    p = np.asarray(p, float)
+    q = np.full_like(p, np.nan)
+    ok = ~np.isnan(p)
+    pv = p[ok]
+    order = np.argsort(pv)
+    ranked = pv[order] * len(pv) / np.arange(1, len(pv) + 1)
+    ranked = np.minimum.accumulate(ranked[::-1])[::-1]
+    qv = np.empty(len(pv))
+    qv[order] = np.minimum(ranked, 1)
+    q[ok] = qv
+    return q
 
-    Columns: source_roi, holo_roi, status, n_trials, amp_mean, amp_sem, blank_mean, p_vs_blank
-    (one-sided Mann-Whitney, own trials > blank trials), responsive (p < alpha), z_vs_other (own
-    mean amplitude as a z-score of its responses to all other cells' trials, a null with ~1000 trials).
+
+def cell_centroid(session, source_roi):
+    """(x, y) in the holo FOV of a stimulated cell: its holo ROI, or its projected source mask."""
+    import musicboxes.holography.holo_io as hio
+    c = stimulated_cells(session).set_index('source_roi').loc[source_roi]
+    if c.status == 'matched':
+        return hio.roi_centroids([session['stat'][c.holo_roi]])[0]
+    s = [p for p in session['stat_projected'] if int(p['source_roi']) == source_roi]
+    return hio.roi_centroids(s)[0] if s else np.array([np.nan, np.nan])
+
+
+def target_responses(session, window=(-2, 6), baseline=(-2, 0), response=(0.5, 2), alpha=0.05,
+                     trial_alpha=0.05, null_dist_px=50, null_exclude_s=8, return_trials=False):
+    """Per stimulated cell: response to its own stimulation, its significance and its reliability.
+
+    Amplitude per trial = mean(response window) - mean(baseline window) of the cell's trace.
+
+    Null distribution (per cell): its amplitudes on all trials that stimulated a target at least
+    null_dist_px from the cell (off-target responses vanish by ~25 px in holo-001) plus the blank
+    trials, leaving out trials starting within null_exclude_s after one of the cell's own trials
+    (their baseline window still holds the decay of its own response). ~900 trials per cell.
+
+    Cell-level tests, each Benjamini-Hochberg corrected across the cells with a trace (q_*):
+      p_vs_null   one-sided Mann-Whitney, own trials > null trials (primary test)
+      p_vs_blank  one-sided Mann-Whitney, own trials > blank trials (10 vs 10, low power)
+      p_binom     binomial test of n_success against trial_alpha (is the cell reliable beyond chance)
+    responsive = q_vs_null < alpha and amp_mean > 0.
+
+    Reliability: a trial is a success if its amplitude exceeds the (1 - trial_alpha) quantile of the
+    cell's null; n_success of n_trials (by chance ~trial_alpha * n_trials, i.e. 0.5 of 10).
+
+    Returns a DataFrame with one row per cell (source_roi, holo_roi, status, n_trials, n_null,
+    amp_mean, amp_sem, blank_mean, null_mean, null_thr, z_vs_other, n_success, frac_success, the p and
+    q columns, responsive); with return_trials=True also a long DataFrame of the own trials (source_roi,
+    trial, rep, amp, success).
     """
-    from scipy.stats import mannwhitneyu
+    from scipy.stats import mannwhitneyu, binomtest
     fs = session['fs']
     t_all = session['trials']
-    rows = []
+    onset_all = t_all.onset_frame.values
+    tx, ty = t_all.target_x_holo.values, t_all.target_y_holo.values
+    rows, trial_rows = [], []
     for c in stimulated_cells(session).itertuples():
         tr = trace_for(session, c.source_roi)
         if tr is None:
             rows.append({'source_roi': c.source_roi, 'holo_roi': c.holo_roi, 'status': c.status, 'n_trials': 0})
             continue
-        t, own = psth(tr, onsets(session, c.source_roi)[0], fs, window)
-        _, blank = psth(tr, onsets(session, blank=True)[0], fs, window)
-        _, other = psth(tr, t_all.onset_frame[~t_all.is_blank & (t_all.source_roi != c.source_roi)].values, fs, window)
-        a_own, a_blank, a_other = (response_amplitude(t, m, baseline, response) for m in (own, blank, other))
-        p = mannwhitneyu(a_own, a_blank, alternative='greater').pvalue
-        rows.append({'source_roi': c.source_roi, 'holo_roi': c.holo_roi, 'status': c.status, 'n_trials': len(a_own),
-                     'amp_mean': np.nanmean(a_own), 'amp_sem': np.nanstd(a_own) / np.sqrt(len(a_own)),
-                     'blank_mean': np.nanmean(a_blank), 'p_vs_blank': p, 'responsive': p < alpha,
-                     'z_vs_other': (np.nanmean(a_own) - np.nanmean(a_other)) / np.nanstd(a_other)})
-    return pd.DataFrame(rows)
+        t, m = psth(tr, onset_all, fs, window)
+        amp = response_amplitude(t, m, baseline, response)
+        own = (t_all.source_roi == c.source_roi).values
+        blank = t_all.is_blank.values
+        x, y = cell_centroid(session, c.source_roi)
+        far = np.hypot(tx - x, ty - y) >= null_dist_px
+        own_times = t_all.onset_time.values[own]
+        dt = t_all.onset_time.values[:, None] - own_times[None, :]
+        after_own = ((dt > 0) & (dt <= null_exclude_s)).any(1)
+        null = (blank | far) & ~own & ~after_own
+        a_own, a_blank, a_null = amp[own], amp[blank], amp[null]
+        a_null = a_null[~np.isnan(a_null)]
+        thr = np.quantile(a_null, 1 - trial_alpha)
+        success = a_own > thr
+        valid = ~np.isnan(a_own)
+        rows.append({'source_roi': c.source_roi, 'holo_roi': c.holo_roi, 'status': c.status,
+                     'n_trials': int(valid.sum()), 'n_null': len(a_null),
+                     'amp_mean': np.nanmean(a_own), 'amp_sem': np.nanstd(a_own) / np.sqrt(valid.sum()),
+                     'blank_mean': np.nanmean(a_blank), 'null_mean': a_null.mean(), 'null_thr': thr,
+                     'z_vs_other': (np.nanmean(a_own) - a_null.mean()) / a_null.std(),
+                     'n_success': int(success.sum()), 'frac_success': success.sum() / valid.sum(),
+                     'p_vs_null': mannwhitneyu(a_own[valid], a_null, alternative='greater').pvalue,
+                     'p_vs_blank': mannwhitneyu(a_own[valid], a_blank[~np.isnan(a_blank)], alternative='greater').pvalue,
+                     'p_binom': binomtest(int(success.sum()), int(valid.sum()), trial_alpha, alternative='greater').pvalue})
+        tc = t_all[own]
+        trial_rows.append(pd.DataFrame({'source_roi': c.source_roi, 'trial': tc.trial.values,
+                                        'rep': tc.rep.values, 'amp': a_own, 'success': success}))
+    df = pd.DataFrame(rows)
+    for col in ('p_vs_null', 'p_vs_blank', 'p_binom'):
+        df['q' + col[1:]] = bh_fdr(df[col])
+    df['responsive'] = (df.q_vs_null < alpha) & (df.amp_mean > 0)
+    if return_trials:
+        return df, pd.concat(trial_rows, ignore_index=True)
+    return df
 
 
 def response_matrix(session, window=(-2, 6), baseline=(-2, 0), response=(0.5, 2)):
@@ -182,7 +308,7 @@ def response_matrix(session, window=(-2, 6), baseline=(-2, 0), response=(0.5, 2)
     plus the condition labels and each ROI's distance (px) to each condition's target (holo FOV)."""
     import musicboxes.holography.holo_io as hio
     t_all = session['trials']
-    conds = session['matrix']['conditions']
+    conds = session['matrix']['condition']
     amp = np.full((len(session['stat']), len(conds)), np.nan)
     dff = np.asarray(session['dff'])
     for j, c in enumerate(conds):
@@ -196,19 +322,49 @@ def response_matrix(session, window=(-2, 6), baseline=(-2, 0), response=(0.5, 2)
 
 # ---------------------------------------------------------------- item 5: crop-out movie
 
+def _example_trial(session, cell, window, baseline=(-2, 0), response=(0.5, 2)):
+    """rep of the cell's successful trial with the largest amplitude (target_trial_responses.csv from
+    the overview); without that file, or without a successful trial, the trial with the largest amplitude."""
+    path = session['paths']['output'] / 'target_trial_responses.csv'
+    if path.exists():
+        tr = pd.read_csv(path)
+        tr = tr[tr.source_roi == cell]
+        if len(tr):
+            pool = tr[tr.success] if tr.success.any() else tr
+            return int(pool.sort_values('amp').rep.iloc[-1]), bool(tr.success.any())
+    t, m = psth(trace_for(session, cell), onsets(session, cell)[0], session['fs'], window)
+    return int(np.nanargmax(response_amplitude(t, m, baseline, response))), False
+
+
 def stim_triggered_movie(cell, mouse, holo_tag, source_tag, crop_px=40, window=(-2, 6), bin_frames=2,
-                         project_root=None, holo_suffix='SR', out_dir=None, fps=15, session=None):
-    """Trial-averaged crop-out movie of one stimulated cell around its own stimulations.
+                         project_root=None, holo_suffix='SR', out_dir=None, fps=15, session=None,
+                         example_rep=None, smooth_px=1.0, smooth_bins=3, raw_smooth_px=0, raw_avg_frames=20):
+    """Crop-out movie of one stimulated cell around its own stimulations: one example trial of the
+    registered frames next to the trial-averaged dF/F.
 
     cell: source ROI id (= ensemble number). Reads its trials' frames from the registered movie
-    (suite2p plane0 data.bin, int16; ~1.6 GB per cell over the share for an 8 s window), crops a
-    (2*crop_px)^2 square around the cell (holo ROI centroid, or the projected mask's), averages over
-    trials, bins bin_frames frames, and normalises each pixel by its pre-stimulus mean:
-    (F - F0) / F0 with F0 the mean over window[0]..0 s.
+    (suite2p plane0 data.bin = functional channel, green; int16; ~1.6 GB per cell over the share for an
+    8 s window) and crops a (2*crop_px)^2 square around the cell (holo ROI centroid, or the projected
+    mask's). Frames are binned by bin_frames.
+      left:  registered frames of a single trial, grey scale, as a raw_avg_frames trailing sliding
+             average at full frame rate (frame k = mean of frames k-raw_avg_frames+1..k, so nothing from
+             after the train onset leaks before it; 20 frames = 0.45 s), shown at the binned time points;
+             raw_avg_frames=1 gives single frames. raw_smooth_px > 0 adds a spatial Gaussian. Grey range = 1st-99.5th percentile of
+             all the trial's pixels, since single frames are shot-noise dominated (cell 57: median 3,
+             99th percentile ~1460, so a mean-image range saturates everything). example_rep picks the trial (0-based rep); default is the cell's successful
+             trial with the largest amplitude (target_trial_responses.csv, written by the overview).
+      right: trial average, normalised per pixel by its pre-stimulus mean, (F - F0) / F0 with F0 the
+             mean over window[0]..0 s; red = high colormap, smoothed for display (Gaussian smooth_px
+             in space, smooth_bins running mean in time) since a trial-averaged bin holds only
+             n_trials * bin_frames frames.
+    Both panels show the mask outline and the target (+); the title gives time and 'STIM' during the train.
 
-    Saves <out_dir>/stim_movie_<source>-<cell>.mp4 (with mask outline, target, time and a
-    'stim' marker during the spiral train) and .tif (float32 stack of the dF/F crop), out_dir
-    defaulting to <analysis_dir>/stim_movies. Returns (t, movie, raw_mean) with movie (n_t, y, x).
+    Saves to <out_dir> (default <analysis_dir>/stim_movies):
+      stim_movie_<source>-<cell>.mp4
+      stim_movie_<source>-<cell>.tif                 float32 dF/F stack (trial average, unsmoothed)
+      stim_movie_<source>-<cell>_trial<rep>_raw.tif  float32 registered stack of the example trial
+                                                     (sliding average, at the binned time points)
+    Returns (t, dff, raw_mean, raw_trial), each (n_t, y, x).
     """
     import matplotlib.pyplot as plt
     from matplotlib import animation
@@ -231,16 +387,28 @@ def stim_triggered_movie(cell, mouse, holo_tag, source_tag, crop_px=40, window=(
     fs = session['fs']
     lags = np.arange(int(np.floor(window[0] * fs)), int(np.ceil(window[1] * fs)) + 1)
     on, off = onsets(session, cell)
+    if example_rep is None:
+        example_rep, from_success = _example_trial(session, cell, window)
+    else:
+        from_success = False
     movie = np.memmap(paths['plane'] / 'data.bin', mode='r', dtype=np.int16, shape=(n_frames, Ly, Lx))
-    acc, n = np.zeros((len(lags), y1 - y0, x1 - x0)), 0
-    for o in on:
+    acc, n, trial = np.zeros((len(lags), y1 - y0, x1 - x0)), 0, None
+    for k, o in enumerate(on):
         if o + lags[0] < 0 or o + lags[-1] >= n_frames:
             continue
-        acc += movie[o + lags[0]:o + lags[-1] + 1, y0:y1, x0:x1].astype(float)
+        chunk = movie[o + lags[0]:o + lags[-1] + 1, y0:y1, x0:x1].astype(float)
+        acc += chunk
         n += 1
-    raw = acc / n
+        if k == example_rep:
+            trial = chunk
     nb = len(lags) // bin_frames
-    raw_b = raw[:nb * bin_frames].reshape(nb, bin_frames, *raw.shape[1:]).mean(1)
+    binned = lambda x: x[:nb * bin_frames].reshape(nb, bin_frames, *x.shape[1:]).mean(1)
+    raw_b = binned(acc / n)
+    cs = np.concatenate([np.zeros((1,) + trial.shape[1:]), np.cumsum(trial, 0)])
+    k = np.arange(1, len(trial) + 1)
+    lo = np.maximum(k - raw_avg_frames, 0)
+    trailing = (cs[k] - cs[lo]) / (k - lo)[:, None, None]
+    trial_b = trailing[np.arange(nb) * bin_frames + bin_frames - 1]      # trailing mean ending at each bin's last frame
     t = lags[:nb * bin_frames].reshape(nb, bin_frames).mean(1) / fs
     f0 = raw_b[t < 0].mean(0)
     f0 = np.maximum(f0, np.percentile(f0, 5))
@@ -249,30 +417,41 @@ def stim_triggered_movie(cell, mouse, holo_tag, source_tag, crop_px=40, window=(
     out_dir = Path(out_dir) if out_dir else paths['analysis'] / 'stim_movies'
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = out_dir / f'stim_movie_{source_tag}-{cell}'
-    tifffile.imwrite(f'{stem}.tif', dff.astype(np.float32), imagej=True, metadata={'axes': 'TYX', 'finterval': 1 / fs * bin_frames})
+    meta = {'axes': 'TYX', 'finterval': 1 / fs * bin_frames}
+    tifffile.imwrite(f'{stem}.tif', dff.astype(np.float32), imagej=True, metadata=meta)
+    tifffile.imwrite(f'{stem}_trial{example_rep}_raw.tif', trial_b.astype(np.float32), imagej=True, metadata=meta)
 
     train_end = np.median(off - on + 1) / fs
     outline = outline_overlay([{'ypix': np.asarray(s['ypix']) - y0, 'xpix': np.asarray(s['xpix']) - x0}],
-                              (y1 - y0, x1 - x0), ROLE_COLOURS['other'])
-    lim = np.percentile(np.abs(dff[t > 0]), 99.5)
-    fig, ax = plt.subplots(figsize=(4.5, 4.8))
-    im = ax.imshow(dff[0], cmap=colormap(), vmin=-lim / 3, vmax=lim)
-    ax.imshow(outline)
+                              (y1 - y0, x1 - x0), ROLE_COLOURS['other'], alpha=0.6)
+    dff_s = ndimage.uniform_filter1d(ndimage.gaussian_filter(dff, (0, smooth_px, smooth_px)), smooth_bins, axis=0)
+    lim = np.percentile(np.abs(dff_s[t > 0]), 99.5)
     tg = session['trials'].set_index('source_roi').loc[cell].iloc[0]
-    ax.plot(tg.target_x_holo - x0, tg.target_y_holo - y0, '+', color='w', ms=8)
-    fig.colorbar(im, ax=ax, fraction=0.046, label='dF/F (trial average)')
-    ax.set_axis_off()
-    title = ax.set_title('')
+    trial_show = ndimage.gaussian_filter(trial_b, (0, raw_smooth_px, raw_smooth_px)) if raw_smooth_px else trial_b
+    trial_lab = f"trial {example_rep}, {raw_avg_frames}-frame sliding avg" + (' (successful)' if from_success else '')
+    fig, axes = plt.subplots(1, 2, figsize=(9, 4.8))
+    ims = []
+    for ax, data, cmap, clim, label in (
+            (axes[0], trial_show, 'gray', display_range(trial_show, 1, 99.5), f'registered F, {trial_lab}'),
+            (axes[1], dff_s, colormap(), (-lim / 3, lim), f'dF/F, average of {n} trials')):
+        ims.append(ax.imshow(data[0], cmap=cmap, vmin=clim[0], vmax=clim[1]))
+        ax.imshow(outline)
+        ax.plot(tg.target_x_holo - x0, tg.target_y_holo - y0, '+', color='w', ms=8)
+        fig.colorbar(ims[-1], ax=ax, fraction=0.046, label=label)
+        ax.set_axis_off()
+    title = fig.suptitle('')
     def draw(i):
-        im.set_data(dff[i])
+        ims[0].set_data(trial_show[i])
+        ims[1].set_data(dff_s[i])
         stim = '  STIM' if 0 <= t[i] <= train_end else ''
-        title.set_text(f'{source_tag} cell {cell} ({c.status}), n={n} trials\nt = {t[i]:+.2f} s{stim}')
-        return im, title
+        title.set_text(f'{source_tag} cell {cell} ({c.status}), t = {t[i]:+.2f} s{stim}')
+        return ims + [title]
     anim = animation.FuncAnimation(fig, draw, frames=len(t), blit=False)
     anim.save(f'{stem}.mp4', writer=animation.FFMpegWriter(fps=fps), dpi=150)
     plt.close(fig)
-    print(f'Saved {stem}.mp4 and .tif ({n} trials, {len(t)} binned frames, crop {y1 - y0}x{x1 - x0} px)')
-    return t, dff, raw_b
+    print(f'Saved {stem}.mp4 and .tifs ({n} trials, example {trial_lab}, {len(t)} binned frames, '
+          f'crop {y1 - y0}x{x1 - x0} px)')
+    return t, dff, raw_b, trial_b
 
 
 # ---------------------------------------------------------------- item 6: goal-progress phase

@@ -210,6 +210,17 @@ def load_stim_protocol(raw_funcimg):
     return trials, conditions
 
 
+def um_per_pixel(raw_funcimg):
+    """Pixel size (um) of the imaging FOV from the first ScanImage tif's header: imagingFovUm (corner
+    coordinates) / pixelsPerLine. holo-001: 427 um over 512 px at zoom 1 -> 0.834 um/px."""
+    import tifffile
+    tif = sorted(Path(raw_funcimg).rglob('*.tif'))[0]
+    with tifffile.TiffFile(tif) as t:
+        fd = t.scanimage_metadata['FrameData']
+    corners = np.asarray(fd['SI.hRoiManager.imagingFovUm'], float)
+    return float((corners[:, 0].max() - corners[:, 0].min()) / fd['SI.hRoiManager.pixelsPerLine'])
+
+
 def vdaq_h5_path(raw_funcimg):
     """The ScanImage vDAQ recorder file next to the (single) tif in raw funcimg/."""
     return _one(Path(raw_funcimg) / '*.tif').with_suffix('.h5')
