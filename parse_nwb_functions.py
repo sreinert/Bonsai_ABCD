@@ -8,13 +8,10 @@ import pynapple as nap
 import parse_bonsai_functions as parse_bonsai_functions
 
 def find_base_path(mouse,session,root):
-    base_path = None
-    mouse_path = Path(root) / f"sub-{mouse}" 
-
-    for folder in mouse_path.iterdir():
-        if folder.is_dir() and session in folder.name:
-            print(f"Found folder: {folder}")
-            base_path = folder
+    # whole-token match first, so 't1' does not pick up '-t10' / '-t11' (see match_session_folder)
+    base_path = parse_bonsai_functions.match_session_folder(Path(root) / f"sub-{mouse}", session)
+    if base_path is not None:
+        print(f"Found folder: {base_path}")
     return base_path
 
 def find_roicat_path(mouse,root):

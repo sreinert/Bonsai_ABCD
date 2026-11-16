@@ -91,6 +91,14 @@ New here
     should point under each hypothesis (landmark-anchored, or relative fraction of the lap from the lap
     origin or from landmark 0). One decoder, several
     readouts, so all hypotheses are scored in the same units on the same bins.
+  - Single FA events (P3b): the P3 FA rows are means over events, so a posterior showing two phases at
+    once could come from two kinds of FA trial (a mixture) or from every FA carrying both (a conflict).
+    event_stack keeps the single events (event_aligned_posterior is now its mean). fa_blend_analysis
+    places each FA between a goal template (hits) and a not-a-goal template (CRs at the same slot and
+    entry phase, matched_cr_rows), in a window that stops at the first lick. Hits and matched CRs scored
+    the same way give the nulls for trials of known type. mixture_vs_blend_test compares "mixture of the
+    two nulls" with "one intermediate state", and recovery_check runs the same test on surrogate FA sets
+    of the real size built both ways, to show whether the test can separate them at all.
   - cached_tuning: pickles gp_tuning / position_tuning results (the 500-shuffle significance test is
     the slow part of the GP tuning cell, P6d and P7). The cache key covers the session (mouse, tag,
     accepted ROIs, frame count), every argument, the actual segment frames, and the source code of
@@ -138,9 +146,9 @@ PROJECT_ROOT = ceph_path('/Volumes/mrsic_flogel/public/projects/SaReSuKuMaRa_202
 BEHAV_ROOT = f'{PROJECT_ROOT}/BehaviourAligned_robust'
 TRACKING_ROOT = f'{PROJECT_ROOT}/analysis'
 
-STAGES = ['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8']   # t7, t8: extra ABC sessions (so far sub-001 only)
-GOOD, POOR = ['t3', 't5', 't7'], ['t0', 't4', 't6']
-SHAPING, ABC = ['t0', 't1', 't2', 't3'], ['t4', 't5', 't6', 't7', 't8']
+STAGES = ['t0', 't1', 't2', 't3', 't4', 't5', 't6', 't7', 't8','t9','t10','t11']   # t7, t8: extra ABC sessions (so far sub-001 only)
+GOOD, POOR = ['t3', 't5', 't7','t9','t10'], ['t0', 't4', 't6','t8','t11']   # t7, t8: extra ABC sessions (so far sub-001 only)
+SHAPING, ABC = ['t0', 't1', 't2', 't3'], ['t4', 't5', 't6', 't7', 't8','t9','t10','t11']   # t7, t8: extra ABC sessions (so far sub-001 only)
 OUTCOMES = ['hit', 'miss', 'FA', 'CR', 'anticipatory', 'post-goal']
 PHASE_CLASSES = {'post-reward': (0.0, 1 / 3), 'middle': (1 / 3, 2 / 3), 'pre-reward': (2 / 3, 1.0)}
 
@@ -977,15 +985,23 @@ def cross_session_decoding(dd_train, dd_test, target='phase'):
     return post, np.nanmedian(decode_error(post[test_mask], truth[test_mask], n_bins))
 
 
-def event_aligned_posterior(post, dd, event_frames, window=(-2, 4)):
-    """Mean posterior (n_t, n_bins) around event frames, in downsampled bins."""
+def event_stack(arr, dd, event_frames, window=(-2, 4)):
+    """Per-event windows of a per-bin array (a decoder posterior (n, n_phase_bins) or the population
+    dd['X'] (n, n_cells)) around event frames, in downsampled bins. Returns (stack (n_kept, n_lags,
+    n_cols), lags (s), keep: indices into event_frames of the events whose window fits in the session)."""
     step = dd['factor'] / dd['frame_rate']
     lags = np.arange(int(np.floor(window[0] / step)), int(np.ceil(window[1] / step)))
     idx = np.asarray(event_frames, int) // dd['factor']
-    idx = idx[(idx + lags[0] >= 0) & (idx + lags[-1] < post.shape[0])]
-    if not len(idx):
-        return None, lags * step, 0
-    return np.nanmean(post[idx[:, None] + lags[None]], axis=0), lags * step, len(idx)
+    keep = np.where((idx + lags[0] >= 0) & (idx + lags[-1] < arr.shape[0]))[0]
+    return arr[idx[keep][:, None] + lags[None]], lags * step, keep
+
+
+def event_aligned_posterior(post, dd, event_frames, window=(-2, 4)):
+    """Mean posterior (n_t, n_bins) around event frames, in downsampled bins."""
+    stack, lags, keep = event_stack(post, dd, event_frames, window)
+    if not len(keep):
+        return None, lags, 0
+    return np.nanmean(stack, axis=0), lags, len(keep)
 
 
 def inter_landmark_lick_bouts(loaded, min_gap_s=2.0):
@@ -996,6 +1012,171 @@ def inter_landmark_lick_bouts(loaded, min_gap_s=2.0):
     keep = np.r_[True, np.diff(onsets) >= min_gap_s * loaded['frame_rate']]
     onsets = onsets[keep]
     return onsets[np.asarray(session['lm_idx'])[onsets] == 0]
+
+
+# ---------------------------------------------------------------------------
+# P3b: single FA events -- a mixture of trial types or a conflict within trials?
+# ---------------------------------------------------------------------------
+
+def entry_phase(loaded, clock='reward'):
+    """GP phase (0-1; NaN outside segments) at every visit's landmark entry."""
+    phase, _ = frame_phase(loaded['n_frames'], loaded['segments'][clock])
+    entry = loaded['visits'].entry.to_numpy()
+    out = np.full(len(entry), np.nan)
+    ok = (entry >= 0) & (entry < len(phase))
+    out[ok] = phase[entry[ok]]
+    return out
+
+
+def visit_lick_features(loaded):
+    """Per visit: latency (s) from entry to the first lick sample inside the visit (NaN if none) and
+    the number of lick onsets inside it (entry -> exit)."""
+    session, fr, n = loaded['session'], loaded['frame_rate'], loaded['n_frames']
+    licks = np.asarray(session['licks'][:n]) > 0
+    onset = lick_onset_mask(session['licks'][:n])
+    vt = loaded['visits']
+    latency, n_onsets = np.full(len(vt), np.nan), np.zeros(len(vt), int)
+    for i, (e, x) in enumerate(zip(vt.entry, vt.exit)):
+        e, x = max(int(e), 0), min(int(x), n)
+        if x <= e:
+            continue
+        first = np.flatnonzero(licks[e:x])
+        if len(first):
+            latency[i] = first[0] / fr
+        n_onsets[i] = onset[e:x].sum()
+    return latency, n_onsets
+
+
+def matched_cr_rows(vt, phase_at_entry, row, phase_tol=0.1, min_n=5):
+    """CR visits to compare FA visit `row` (position in vt) with: CRs at the same slot whose entry
+    phase is within phase_tol of the FA's (same landmark, same place in the goal cycle; in ABC a slot
+    falls at different phases depending on which goal is active). With fewer than min_n of those, CRs
+    at any slot within phase_tol. Returns (rows, 'slot' | 'phase' | None if still < min_n)."""
+    cr = np.flatnonzero((vt.outcome == 'CR').to_numpy() & np.isfinite(phase_at_entry))
+    close = cr[circular_distance(phase_at_entry[cr], phase_at_entry[row]) <= phase_tol]
+    same = close[vt.slot.to_numpy()[close] == vt.slot.iloc[row]]
+    if len(same) >= min_n:
+        return same, 'slot'
+    return close, ('phase' if len(close) >= min_n else None)
+
+
+def _blend_w(F, H, C, per_bin=False):
+    # least-squares w of F ~ C + w (H - C) over the last two axes (or the last axis per time bin);
+    # arrays broadcast, so leading axes give many trials / templates at once
+    d, f = H - C, F - C
+    axis = -1 if per_bin else (-2, -1)
+    den = np.sum(d * d, axis=axis)
+    return np.where(den > 0, np.sum(f * d, axis=axis) / np.where(den > 0, den, 1), np.nan)
+
+
+def _two_template_ab(F, H, C):
+    # unconstrained least squares F ~ a H + b C over the last two axes (normal equations, broadcast)
+    hh, cc, hc = (np.sum(x * y, axis=(-2, -1)) for x, y in [(H, H), (C, C), (H, C)])
+    fh, fc = np.sum(F * H, axis=(-2, -1)), np.sum(F * C, axis=(-2, -1))
+    det = hh * cc - hc ** 2
+    det = np.where(det > 0, det, np.nan)
+    return np.stack([(fh * cc - fc * hc) / det, (fc * hh - fh * hc) / det], axis=-1)
+
+
+def fa_blend_analysis(fa, hit, cr, cr_sets, lags, fit_end, fit_start=-1.0, blend_m=0.5, n_surrogate=50, seed=0):
+    """Place single FA events between a goal template (mean of all hits) and a not-a-goal template
+    (mean of the CRs matched to that FA, matched_cr_rows), with nulls from trials whose type is known.
+
+    fa, hit, cr: event stacks (n, n_lags, n_cols) on the same lags (event_stack of the posterior or of
+    dd['X']); cr_sets[k]: rows of `cr` matched to FA k (>= 2); fit_end[k]: end of FA k's fit window in s
+    from entry. The window is [fit_start, fit_end[k]) and should stop at the FA's first lick, so that
+    lick-related activity does not enter the comparison. Every quantity for FA k uses FA k's window and
+    templates:
+      w         : blend weight of FA k, F ~ C + w (H - C) (0 = like the matched CRs, 1 = like hits). Not
+                  clipped to [0, 1], so the distributions stay continuous.
+      null_goal : w of every hit j against (mean of the other hits, C_k) -> known goal trials
+      null_cr   : w of every matched CR i against (H, mean of the other matched CRs) -> known non-goal trials
+      u         : w rescaled so the null means sit at 0 (CR) and 1 (hit); nulls are rescaled the same way
+                  (u_goal, u_cr), so values from different FAs share one axis.
+      sep       : (mean null_goal - mean null_cr) / pooled SD. A small sep means hits and matched CRs
+                  are not distinguishable in this window, so this FA's u says little.
+      u_blend   : conflict surrogates, blend_m * a random hit + (1 - blend_m) * a random matched CR, each
+                  left out of its template. This is what a trial carrying both states at once would give.
+                  Averaging two trials also averages their noise, so these are somewhat tighter than a
+                  real single conflict trial would be.
+      ab, ab_goal, ab_cr : unconstrained (a, b) of F ~ a H + b C for the FA, the hits and the matched CRs.
+                  For population activity a and b can both be high (both states present), which one blend
+                  weight cannot show.
+      u_bins, win_lags : per-bin u of the FA over the window, and the window's lags (s).
+      sd_bins, sd_bins_goal, sd_bins_cr, sd_bins_blend : within-trial SD over the window's time bins of
+                  the per-bin u. Flickering between the two states inside a trial raises it above the
+                  nulls and the blend surrogates.
+    Returns a list of per-FA dicts (None where cr_sets[k] has < 2 rows or the window is empty)."""
+    rng = np.random.default_rng(seed)
+    H_all, hit_sum, n_hit = hit.mean(0), hit.sum(0), len(hit)
+    out = []
+    for k in range(len(fa)):
+        rows = np.asarray(cr_sets[k])
+        win = (lags >= fit_start) & (lags < fit_end[k])
+        if len(rows) < 2 or n_hit < 2 or win.sum() < 2:
+            out.append(None)
+            continue
+        F, Hk, crs = fa[k][win], H_all[win], cr[rows][:, win]
+        Ck = crs.mean(0)
+        H_loo = (hit_sum[win][None] - hit[:, win]) / (n_hit - 1)
+        C_loo = (crs.sum(0)[None] - crs) / (len(crs) - 1)
+        w = _blend_w(F, Hk, Ck)
+        null_goal, null_cr = _blend_w(hit[:, win], H_loo, Ck[None]), _blend_w(crs, Hk[None], C_loo)
+        mg, mc = np.nanmean(null_goal), np.nanmean(null_cr)
+        scale = (mg - mc) if mg != mc else np.nan
+        to_u = lambda x: (x - mc) / scale
+        sd = np.sqrt((np.nanvar(null_goal) + np.nanvar(null_cr)) / 2)
+        # conflict surrogates: blend of one hit and one matched CR, both left out of their templates
+        j, i = rng.integers(n_hit, size=n_surrogate), rng.integers(len(crs), size=n_surrogate)
+        Fb = blend_m * hit[j][:, win] + (1 - blend_m) * crs[i]
+        u_blend = to_u(_blend_w(Fb, H_loo[j], C_loo[i]))
+        bins = lambda F_, H_, C_: np.nanstd(to_u(_blend_w(F_, H_, C_, per_bin=True)), axis=-1)
+        out.append(dict(w=w, u=to_u(w), u_bins=to_u(_blend_w(F, Hk, Ck, per_bin=True)), win_lags=lags[win], u_goal=to_u(null_goal), u_cr=to_u(null_cr), sep=scale / sd if sd > 0 else np.nan,
+                        u_blend=u_blend, ab=_two_template_ab(F, Hk, Ck), ab_goal=_two_template_ab(hit[:, win], H_loo, Ck[None]),
+                        ab_cr=_two_template_ab(crs, Hk[None], C_loo),
+                        sd_bins=bins(F, Hk, Ck), sd_bins_goal=bins(hit[:, win], H_loo, Ck[None]),
+                        sd_bins_cr=bins(crs, Hk[None], C_loo), sd_bins_blend=bins(Fb, H_loo[j], C_loo[i]),
+                        n_cr=len(crs), n_bins=int(win.sum())))
+    return out
+
+
+def mixture_vs_blend_test(u, u_goal, u_cr):
+    """Are the FA values u a mixture of goal-like and not-a-goal-like trials (H1) or one intermediate
+    state (H2)? u: FA values; u_goal, u_cr: pooled null values on the same axis (near 1 and 0).
+      H1 (mixture): u ~ p KDE(u_goal) + (1 - p) KDE(u_cr), 1 free parameter (p, the goal-like fraction).
+      H2 (blend):   u ~ Normal(m, s), 2 free parameters. s is free, so H2 can also widen to cover a
+                    spread-out distribution, which is generous to H2.
+    H1 keeps the nulls' widths, so FA trials that are noisier than hits and CRs count against it. The
+    shape-free check is gmm_delta_bic: 2 vs 1 Gaussian components on u alone (> 0 favours 2).
+    delta_aic = AIC(H2) - AIC(H1): > 0 favours the mixture, < 0 the blend."""
+    from scipy.stats import gaussian_kde, norm
+    from sklearn.mixture import GaussianMixture
+    u = np.asarray(u, float)
+    u = u[np.isfinite(u)]
+    fg, fc = gaussian_kde(u_goal[np.isfinite(u_goal)])(u), gaussian_kde(u_cr[np.isfinite(u_cr)])(u)
+    ps = np.linspace(0, 1, 201)
+    ll = np.array([np.sum(np.log(p * fg + (1 - p) * fc + 1e-300)) for p in ps])
+    m, s = u.mean(), u.std()
+    ll_blend = norm.logpdf(u, m, s).sum()
+    bic = [GaussianMixture(c, n_init=5, random_state=0).fit(u[:, None]).bic(u[:, None]) for c in (1, 2)]
+    return dict(n=len(u), p=ps[np.argmax(ll)], m=m, s=s, ll_mix=ll.max(), ll_blend=ll_blend,
+                delta_aic=(4 - 2 * ll_blend) - (2 - 2 * ll.max()), gmm_delta_bic=bic[0] - bic[1])
+
+
+def recovery_check(res, p, n_rep=200, seed=0):
+    """Can mixture_vs_blend_test tell H1 from H2 with this many FAs? res: fa_blend_analysis output
+    (None entries dropped). Each surrogate set has one value per real FA k: 'mixture' sets draw from FA k's
+    goal null with probability p and from its CR null otherwise; 'blend' sets draw from FA k's conflict
+    surrogates (u_blend). The test uses the pooled nulls, as for the real FAs. Returns {kind: delta_aic
+    array} and the fraction of sets with the right sign (mixture > 0, blend < 0)."""
+    rng = np.random.default_rng(seed)
+    res = [r for r in res if r is not None]
+    ug, uc = np.concatenate([r['u_goal'] for r in res]), np.concatenate([r['u_cr'] for r in res])
+    draws = {'mixture': lambda r: rng.choice(r['u_goal'] if rng.random() < p else r['u_cr']),
+             'blend': lambda r: rng.choice(r['u_blend'])}
+    daic = {kind: np.array([mixture_vs_blend_test(np.array([f(r) for r in res]), ug, uc)['delta_aic']
+                            for _ in range(n_rep)]) for kind, f in draws.items()}
+    return daic, {'mixture': np.mean(daic['mixture'] > 0), 'blend': np.mean(daic['blend'] < 0)}
 
 
 # ---------------------------------------------------------------------------
@@ -1233,6 +1414,160 @@ def alias_score(conf, template, exclude=1, circular=True):
     r = np.corrcoef(conf[off], template[off])[0, 1] if off.sum() > 2 and np.std(template[off]) > 0 else np.nan
     return dict(diag_mass=np.mean(np.where(band, np.nan_to_num(conf), 0).sum(1)), diag_chance=band.sum(1).mean() / n,
                 alias_r=r)
+
+
+# ---------------------------------------------------------------------------
+# P9: predicting licks from GP cells of different phases
+# ---------------------------------------------------------------------------
+
+def gp_cell_sets(g, near=1 / 6, middle=(1 / 3, 2 / 3)):
+    """Cell indices by preferred GP phase (gp_tuning result g, significant cells only), plus untuned cells.
+    'near reward' is within `near` of phase 0 on either side, and 'middle' is the band `middle`. With the
+    defaults both cover a third of the cycle. 'pre-reward' / 'post-reward' are the two halves of 'near reward'."""
+    sig, ph = g['significant'], np.asarray(g['phase']) % 1
+    d0 = circular_distance(ph, 0)
+    return {'near reward': np.flatnonzero(sig & (d0 <= near)),
+            'pre-reward': np.flatnonzero(sig & (d0 <= near) & (ph >= 0.5)),
+            'post-reward': np.flatnonzero(sig & (d0 <= near) & (ph < 0.5)),
+            'middle': np.flatnonzero(sig & (ph >= middle[0]) & (ph <= middle[1])),
+            'untuned': np.flatnonzero(~sig)}
+
+
+def visit_lick_data(loaded, window=(-1.0, 0.0)):
+    """One row per landmark visit with a lick outcome (hit / miss / FA / CR; 'anticipatory' and 'post-goal'
+    visits are dropped): X = mean dFz of every cell over `window` (s from entry), licked = hit or FA, the
+    outcome, the visit's row in loaded['visits'], the lap (CV groups) and the reward-clock phase at entry. The default window ends at entry, so
+    it comes before nearly every lick (anticipatory licks before entry are rare) and before the visit's own
+    reward."""
+    vt, fr, n = loaded['visits'], loaded['frame_rate'], loaded['n_frames']
+    lo, hi = (int(round(w * fr)) for w in window)
+    keep = vt.outcome.isin(['hit', 'miss', 'FA', 'CR']).to_numpy() & (vt.entry + lo >= 0).to_numpy() & (vt.entry + hi <= n).to_numpy()
+    entry = vt.entry.to_numpy()[keep]
+    X = np.stack([loaded['dFz'][:, e + lo:e + hi].mean(1) for e in entry]) if len(entry) else np.empty((0, loaded['dFz'].shape[0]))
+    outcome = vt.outcome.to_numpy()[keep]
+    return dict(X=np.nan_to_num(X), licked=np.isin(outcome, ['hit', 'FA']), outcome=outcome, entry=entry, rows=np.flatnonzero(keep),
+                lap=np.asarray(loaded['session']['lap_idx'])[entry], phase=entry_phase(loaded)[keep])
+
+
+def task_features(loaded, frames, visit_rows=None):
+    """Lick predictors without neurons, using only what is known at `frames`: lap position (cos, sin), log
+    time and distance since the last reward. With `visit_rows` (positions in loaded['visits'] whose entries
+    are `frames`, e.g. visit_lick_data's 'rows'), also the landmark (slot one-hot) and whether it is the active goal. The reward-clock GP phase is NOT used:
+    it is defined by the NEXT reward, so at a hit's entry it is ~1 by construction (future information)."""
+    session, fr = loaded['session'], loaded['frame_rate']
+    frames = np.asarray(frames, int)
+    tl = session['tunnel_length']
+    pos = np.asarray(session['position'])[frames] % tl
+    cum = np.asarray(session['lap_idx'])[:loaded['n_frames']] * tl + np.asarray(session['position'])[:loaded['n_frames']] % tl
+    rewards = np.asarray(session['rewards'])
+    k = np.searchsorted(rewards, frames, side='right') - 1
+    last = np.where(k >= 0, rewards[np.maximum(k, 0)], 0)
+    since_t = np.where(k >= 0, (frames - last) / fr, np.nan)
+    since_d = np.where(k >= 0, cum[frames] - cum[last], np.nan)
+    X = np.c_[np.cos(2 * np.pi * pos / tl), np.sin(2 * np.pi * pos / tl), np.log1p(np.nan_to_num(since_t)),
+              np.log1p(np.clip(np.nan_to_num(since_d), 0, None)), k < 0]
+    if visit_rows is not None:
+        vt = loaded['visits']
+        slots = vt.slot.to_numpy()[visit_rows]
+        X = np.c_[X, slots[:, None] == np.unique(vt.slot)[None], vt.active.to_numpy()[visit_rows]]
+    return X.astype(float)
+
+
+def lick_bouts(loaded, min_gap_s=1.0, lead_s=1.0):
+    """Lick-bout onsets (first lick after >= min_gap_s without licking) and what each bout is: the outcome
+    of the visit it falls in ('hit' / 'FA' / 'miss' / 'CR' / 'anticipatory' / 'post-goal'), counting a
+    bout that starts up to lead_s before a landmark entry as part of that visit, else 'between' (no
+    landmark). Returns (onset frames, labels)."""
+    session, fr, n = loaded['session'], loaded['frame_rate'], loaded['n_frames']
+    lick_frames = np.flatnonzero(np.asarray(session['licks'][:n]) > 0)
+    if not len(lick_frames):
+        return np.empty(0, int), np.empty(0, object)
+    onsets = lick_frames[np.r_[True, np.diff(lick_frames) > min_gap_s * fr]]
+    vt, lead = loaded['visits'], int(round(lead_s * fr))
+    start, stop = vt.entry.to_numpy() - lead, vt.exit.to_numpy()
+    labels = np.full(len(onsets), 'between', dtype=object)
+    for i, f in enumerate(onsets):
+        inside = np.flatnonzero((start <= f) & (f < stop))
+        if len(inside):
+            labels[i] = vt.outcome.iloc[inside[-1]]
+    return onsets, labels
+
+
+def time_to_next_bout(loaded, dd, onsets, refractory_s=1.0):
+    """Per downsampled bin of `dd`: time (s) to the next lick-bout onset, the index of that bout, and a mask
+    of usable bins: a later bout exists and there was no lick in the last refractory_s (so the bin is not
+    inside a bout, where the next lick is trivially close)."""
+    fr, n = loaded['frame_rate'], loaded['n_frames']
+    licks = np.asarray(loaded['session']['licks'][:n]) > 0
+    frame = dd['frame']
+    nxt = np.searchsorted(onsets, frame, side='right')
+    has = nxt < len(onsets)
+    t = np.where(has, (onsets[np.minimum(nxt, len(onsets) - 1)] - frame) / fr, np.nan)
+    recent = np.r_[0, np.cumsum(licks)]
+    r = int(round(refractory_s * fr))
+    quiet = recent[np.clip(frame + 1, 0, n)] - recent[np.clip(frame + 1 - r, 0, n)] == 0
+    return t, nxt, has & quiet
+
+
+def active_bins(X, cells, quantile=0.75):
+    """Bins in which the mean z-scored activity of `cells` is at or above its session `quantile`: the
+    times a cell set is active, chosen from the cells themselves rather than from GP phase (reward-clock
+    phase is defined by the next reward, so selecting bins by phase would leak when the next reward,
+    and so the next lick, comes)."""
+    a = X[:, cells].mean(1)
+    return a >= np.quantile(a, quantile)
+
+
+def ridge_cv(X, y, groups, n_splits=5, alphas=np.logspace(-1, 4, 11)):
+    """Out-of-fold predictions of a ridge regression (standardised features, alpha chosen within each
+    training fold by RidgeCV), grouped CV (laps)."""
+    from sklearn.linear_model import RidgeCV
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    pred = np.full(len(y), np.nan)
+    for train, test in GroupKFold(n_splits=min(n_splits, len(np.unique(groups)))).split(X, y, groups):
+        pred[test] = make_pipeline(StandardScaler(), RidgeCV(alphas=alphas)).fit(X[train], y[train]).predict(X[test])
+    return pred
+
+
+def bin_lick_target(loaded, dd):
+    """Per downsampled bin of decoding_data `dd`: True if any lick sample falls in the bin."""
+    licks = np.asarray(loaded['session']['licks'][:loaded['n_frames']]) > 0
+    n_bins, f = dd['X'].shape[0], dd['factor']
+    return licks[:n_bins * f].reshape(n_bins, f).any(1)
+
+
+def lick_encoder_cv(X, y, groups, n_splits=5, C=0.1):
+    """Out-of-fold P(lick) from an L2 logistic regression (standardised features, balanced classes),
+    grouped CV (laps), so a lap's visits or bins never sit in both training and test sets."""
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+    prob = np.full(len(y), np.nan)
+    n_splits = min(n_splits, len(np.unique(groups)))
+    for train, test in GroupKFold(n_splits=n_splits).split(X, y, groups):
+        if len(np.unique(y[train])) < 2:
+            continue
+        model = make_pipeline(StandardScaler(), LogisticRegression(C=C, class_weight='balanced', max_iter=2000))
+        prob[test] = model.fit(X[train], y[train]).predict_proba(X[test])[:, 1]
+    return prob
+
+
+def lick_outcome_scores(prob, licked, outcome, thresh=0.5):
+    """How well out-of-fold P(lick) separates licked from unlicked visits, overall and within landmark type:
+    auc (all visits), auc_goal (hit vs miss: licking at goals beyond 'this is a goal'), auc_nongoal (FA vs
+    CR: licking where the task says not to). pred_<outcome> is the fraction of that outcome's visits
+    predicted as licked (P > thresh): correct for hits and FAs, wrong for misses and CRs."""
+    from sklearn.metrics import roc_auc_score
+    ok = np.isfinite(prob)
+    p, y, o = prob[ok], licked[ok], outcome[ok]
+    auc = lambda m: roc_auc_score(y[m], p[m]) if m.sum() and len(np.unique(y[m])) == 2 else np.nan
+    out = dict(auc=auc(np.ones(len(y), bool)), auc_goal=auc(np.isin(o, ['hit', 'miss'])),
+               auc_nongoal=auc(np.isin(o, ['FA', 'CR'])), balanced_acc=np.mean([np.mean(p[y] > thresh), np.mean(p[~y] <= thresh)]))
+    for ev in ['hit', 'FA', 'miss', 'CR']:
+        out[f'pred_{ev}'] = np.mean(p[o == ev] > thresh) if (o == ev).any() else np.nan
+        out[f'n_{ev}'] = int((o == ev).sum())
+    return out
 
 
 # ---------------------------------------------------------------------------

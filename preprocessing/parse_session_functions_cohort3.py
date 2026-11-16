@@ -34,13 +34,7 @@ class AnalogData(Reader):
         return pd.DataFrame(data, columns=self.columns)
 
 def find_base_path(mouse, date, root):
-    mouse_path = Path(root) / f"sub-{mouse}" 
-
-    for folder in mouse_path.iterdir():
-        if folder.is_dir() and date in folder.name:
-            print(f"Found folder: {folder}")
-            base_path = folder
-    return base_path
+    return parse_nwb_functions.find_base_path(mouse, date, root)
 
 def load_settings(base_path):
     settings_path = Path(base_path) / "behav/session-settings/"

@@ -27,14 +27,27 @@ def get_trial_settings(ses_settings):
         return trial[0]['trial']
     return trial
 
-def find_base_path(mouse,date,root):
-    mouse_path = Path(root) / f"sub-{mouse}" 
+def match_session_folder(mouse_path, key):
+    """The session folder in mouse_path whose name contains `key` (a date, session tag or id), or None.
 
-    for folder in mouse_path.iterdir():
-        if folder.is_dir() and date in folder.name:
-            # print(f"Found folder: {folder}")
-            base_path = folder
-    return base_path
+    A plain substring match is ambiguous for short tags: 't1' is also in '...-t10' and '...-t11'.
+    Folders where `key` stands as a whole token (not preceded or followed by a letter or digit, e.g.
+    '-t1' at the end of the name or 'full030_') therefore win. Only when there is none does it fall
+    back to the substring match (so a date such as '20261007' still finds '..._date-20261007T145727').
+    If several folders still match (cohort3's funcimg tree has one folder per suite2p rerun of the same
+    recording), it keeps the old behaviour of returning the last one listed, but prints a warning."""
+    folders = [f for f in Path(mouse_path).iterdir() if f.is_dir() and key in f.name]
+    token = re.compile(rf'(?<![0-9A-Za-z]){re.escape(key)}(?![0-9A-Za-z])')
+    exact = [f for f in folders if token.search(f.name)]
+    matches = exact or folders
+    if len(matches) > 1:
+        print(f"WARNING: '{key}' matches several session folders in {mouse_path}: "
+              + ', '.join(sorted(f.name for f in matches)) + f"; using {matches[-1].name}")
+    return matches[-1] if matches else None
+
+
+def find_base_path(mouse,date,root):
+    return match_session_folder(Path(root) / f"sub-{mouse}", date)
 
 def get_available_session_dates(root, mouse_id, start_date=None, end_date=None):
     """
