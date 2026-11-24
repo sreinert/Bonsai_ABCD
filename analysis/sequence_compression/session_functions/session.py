@@ -176,10 +176,15 @@ class Session():
             release_df = release_df[1:]
 
         elif self.sequence == 'AAB':
-            # Without a corridor offset, VR can log a faulty initial landmark
-            # near position zero. Cohort-2 sessions with an initial offset have
-            # a genuine first landmark, which starts the cycle at A1.
-            if not self.has_initial_corridor_offset and release_positions[0] < 2:
+            # estimate_lm_events can prepend a synthetic landmark when the
+            # recorded stream begins after position zero. Its NaT timestamp is
+            # the reliable marker; the associated dataframe index can point to
+            # an unrelated early position even in cohort-2 offset sessions.
+            if len(release_df) and pd.isna(release_df.index[0]):
+                release_df = release_df.iloc[1:]
+            # Preserve the legacy cohort-1 fallback for old recordings that
+            # do not carry the NaT marker.
+            elif not self.has_initial_corridor_offset and release_positions[0] < 2:
                 release_df = release_df[1:]
         
         return lick_position, lick_times, reward_times, reward_positions, release_df
@@ -532,11 +537,13 @@ class Session():
             if np.any((reward_positions > pos) & (reward_positions <= pos + self.lm_size)):
                 rewarded_A1_positions.append(pos)
             
-        # Find distances between A1 and the following As and Bs 
-        A_A_diff = np.zeros((len(rewarded_A1_positions) - 1, num_As))
-        A_B_diff = np.zeros((len(rewarded_A1_positions) - 1, num_Bs))
-        A_positions = np.zeros((len(rewarded_A1_positions) - 1, num_As))
-        B_positions = np.zeros((len(rewarded_A1_positions) - 1, num_Bs))
+        # A distance interval requires two rewarded A1 anchors. Sessions with
+        # fewer anchors still contribute lick counts, but no distances.
+        num_intervals = max(len(rewarded_A1_positions) - 1, 0)
+        A_A_diff = np.zeros((num_intervals, num_As))
+        A_B_diff = np.zeros((num_intervals, num_Bs))
+        A_positions = np.zeros((num_intervals, num_As))
+        B_positions = np.zeros((num_intervals, num_Bs))
         
         for i, pos in enumerate(rewarded_A1_positions[:-1]):
             # Keep As from current A1 (or reward) up to the next A1
@@ -1419,7 +1426,6 @@ class ABCD_Session():
                 lm_entry = np.unique(session['position'][correct_entry_indices])
                 lm_exit = np.unique(session['position'][correct_exit_indices])
 
-            print(lm_entry)
             assert len(lm_entry) == num_releases, (
                 'Something is wrong with the landmark entries: '
                 f'found {len(lm_entry)} PD entries for {num_releases} odour releases'

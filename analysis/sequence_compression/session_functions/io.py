@@ -328,7 +328,8 @@ def load_data(base_path):
             lm_data["RewardDelivered"] = np.nan
         lm_data = lm_data[lm_data['Visited'] == False]
         sess_lm_data = lm_data.drop_duplicates(subset=['Position'], keep='first')
-
+        sess_lm_data = sess_lm_data[~sess_lm_data.index.duplicated(keep="first")]
+        
     sess_events_data = events_data[~events_data.index.duplicated(keep='first')]
     sess_lick_data = lick_data[~lick_data.index.duplicated(keep='first')]
     sess_treadmill_data = treadmill_data[~treadmill_data.index.duplicated(keep='first')]

@@ -30,6 +30,29 @@ def test_valid_frames_are_checked_before_selection():
         overview._select_valid_frames(dff, [])
 
 
+def test_compute_snr_handles_single_and_multiple_traces():
+    rng = np.random.default_rng(8)
+    trace = rng.normal(size=1000)
+    trace[400:430] += 8.0
+
+    single = overview.compute_snr(trace)
+    multiple = overview.compute_snr(np.vstack([trace, trace * 5.0 + 20.0]))
+
+    assert isinstance(single, float)
+    assert single > 0
+    np.testing.assert_allclose(multiple, [single, single])
+    assert np.isnan(overview.compute_snr(np.zeros(100)))
+
+
+def test_compute_snr_validates_trace_shape_and_frame_count():
+    with pytest.raises(ValueError, match="shape"):
+        overview.compute_snr(np.zeros((2, 3, 4)))
+    with pytest.raises(ValueError, match="at least two frames"):
+        overview.compute_snr(np.zeros((2, 1)))
+    with pytest.raises(ValueError, match="between 0 and 100"):
+        overview.compute_snr(np.zeros(10), signal_percentile=101)
+
+
 def test_trace_selection_ranks_all_finite_snr_and_respects_eligibility():
     rng = np.random.default_rng(4)
     traces = rng.normal(scale=1.0, size=(3, 1000))

@@ -328,7 +328,7 @@ def get_p_lick_per_stim(Performances, condition='abbb', remove_disengagement=Fal
             all_lm_lick_counts, all_distance_bin_counts, all_avail_distance_bin_counts, 
             None, None, None, None, None)
 
-def get_lick_counts_sessions(sessions, data, settings, misses=False, omissions=False, condition='abbb', subcondition=None, require_other_a_reward=False, calculate_distances=None, *, mouse_id=None, save_root=None, parse_functions=None, save_plot=True):
+def get_lick_counts_sessions(sessions, data, settings, misses=False, omissions=False, condition='abbb', subcondition=None, require_other_a_reward=False, calculate_distances=None, exclude_b_after_invalid_a=None, excluded_b_as_zero=False, *, mouse_id=None, save_root=None, parse_functions=None, save_plot=True):
     '''Calculate and plot lick counts for AAB and periodic conditions (e.g. ABAB and ABB).
 
     Distance-from-rewarded-A plots are optional and disabled by default for
@@ -347,6 +347,9 @@ def get_lick_counts_sessions(sessions, data, settings, misses=False, omissions=F
     if calculate_distances is None:
         calculate_distances = not omissions
 
+    if exclude_b_after_invalid_a is None:
+        exclude_b_after_invalid_a = not omissions
+
     # Collect data
     all_data = defaultdict(lambda: {"dist": [], "lick": [], "counts": []})
     count_rows = []
@@ -355,13 +358,19 @@ def get_lick_counts_sessions(sessions, data, settings, misses=False, omissions=F
         session_id = utils.extract_session_id(sess)  
 
         if misses:
-            lick_counter, licked_As, licked_Bs, A_A_diff, A_B_diff, _ = parse_functions.get_lick_counts(data[session_id], settings[session_id], plot=False, threshold='above', misses=misses, omissions=omissions, require_other_a_reward=require_other_a_reward, calculate_distances=calculate_distances, exclude_b_after_invalid_a=not omissions)
+            lick_counter, licked_As, licked_Bs, A_A_diff, A_B_diff, _ = parse_functions.get_lick_counts(data[session_id], settings[session_id], plot=False, threshold='above', misses=misses, omissions=omissions, require_other_a_reward=require_other_a_reward, calculate_distances=calculate_distances, exclude_b_after_invalid_a=exclude_b_after_invalid_a)
         else:
-            lick_counter, licked_As, licked_Bs, A_A_diff, A_B_diff, _ = parse_functions.get_lick_counts(data[session_id], settings[session_id], plot=False, threshold='below', misses=misses, omissions=omissions, require_other_a_reward=require_other_a_reward, calculate_distances=calculate_distances, exclude_b_after_invalid_a=not omissions)
+            lick_counter, licked_As, licked_Bs, A_A_diff, A_B_diff, _ = parse_functions.get_lick_counts(data[session_id], settings[session_id], plot=False, threshold='below', misses=misses, omissions=omissions, require_other_a_reward=require_other_a_reward, calculate_distances=calculate_distances, exclude_b_after_invalid_a=exclude_b_after_invalid_a)
    
         # Collect data across sessions
         for landmark_type, counts in lick_counter.items():
             counts = np.asarray(counts, dtype=float)
+            if excluded_b_as_zero and landmark_type.startswith("B"):
+                # Legacy plots initialized the count array with zeros, so a B
+                # skipped after an invalid A remained in the distribution as
+                # zero rather than being excluded. Keep this opt-in because it
+                # reproduces old figures but is not the preferred analysis.
+                counts = np.nan_to_num(counts, nan=0.0)
             all_data[landmark_type]["counts"].append(counts)
             for lick_count in counts[np.isfinite(counts)]:
                 count_rows.append({
